@@ -267,6 +267,55 @@ ORDER BY distance ASC;`
 FROM ATLASGLOSSARY_ENTITY;`
     },
     {
+      title: 'Terms with Categories (Full Detail)',
+      description: 'List glossary terms with their parent glossaries and categories resolved to names',
+      query: `-- Comprehensive query to resolve term relationships
+WITH glossary_lookup AS (
+    SELECT GUID AS glossary_guid, NAME AS glossary_name
+    FROM GLOSSARY_ENTITY
+),
+category_lookup AS (
+    SELECT GUID AS category_guid, NAME AS category_name
+    FROM GLOSSARYCATEGORY_ENTITY
+),
+term_anchors AS (
+    SELECT TERM.GUID AS term_guid,
+           anchor_elem.value::STRING AS glossary_guid
+    FROM GLOSSARYTERM_ENTITY TERM,
+         LATERAL FLATTEN(input => TERM.ANCHOR) AS anchor_elem
+),
+term_categories AS (
+    SELECT TERM.GUID AS term_guid,
+           category_elem.value::STRING AS category_guid
+    FROM GLOSSARYTERM_ENTITY TERM,
+         LATERAL FLATTEN(input => TERM.CATEGORIES) AS category_elem
+),
+term_glossary_names AS (
+    SELECT TA.term_guid,
+           LISTAGG(GL.glossary_name, ', ') WITHIN GROUP (ORDER BY GL.glossary_name) AS glossaries
+    FROM term_anchors TA
+    LEFT JOIN glossary_lookup GL ON TA.glossary_guid = GL.glossary_guid
+    GROUP BY TA.term_guid
+),
+term_category_names AS (
+    SELECT TC.term_guid,
+           LISTAGG(CL.category_name, ', ') WITHIN GROUP (ORDER BY CL.category_name) AS categories
+    FROM term_categories TC
+    LEFT JOIN category_lookup CL ON TC.category_guid = CL.category_guid
+    GROUP BY TC.term_guid
+)
+SELECT
+    T.NAME,
+    T.USERDESCRIPTION,
+    TG.glossaries AS GLOSSARIES,
+    TC.categories AS CATEGORIES,
+    T.GUID
+FROM GLOSSARYTERM_ENTITY T
+LEFT JOIN term_glossary_names TG ON T.GUID = TG.term_guid
+LEFT JOIN term_category_names TC ON T.GUID = TC.term_guid
+LIMIT 100;`
+    },
+    {
       title: 'Terms by Glossary GUID',
       description: 'Get all terms belonging to a specific glossary',
       query: `SELECT GUID, NAME, USERDESCRIPTION
@@ -374,6 +423,70 @@ ORDER BY DATACONTRACTVERSION DESC;`
 FROM TABLE_ENTITY
 WHERE SIZEBYTES IS NOT NULL
 ORDER BY SIZEBYTES DESC
+LIMIT 100;`
+    },
+    {
+      title: 'Full Column Metadata Export',
+      description: 'Comprehensive column-level metadata with tags and custom metadata as JSON arrays',
+      query: `-- Column-Level Metadata Query with Aggregated Custom Metadata and Tags
+WITH FILTERED_COLUMNS AS (
+    SELECT GUID
+    FROM COLUMN_ENTITY
+    WHERE CONNECTORNAME IN ('glue', 'snowflake')
+),
+-- Aggregate Custom Metadata for each column as JSON
+CM_AGG AS (
+    SELECT
+        CM.ENTITYGUID,
+        ARRAY_AGG(
+            DISTINCT OBJECT_CONSTRUCT(
+                'set_name', SETDISPLAYNAME,
+                'field_name', ATTRIBUTEDISPLAYNAME,
+                'field_value', ATTRIBUTEVALUE
+            )
+        ) AS CUSTOM_METADATA_JSON
+    FROM CUSTOMMETADATA_RELATIONSHIP CM
+    JOIN FILTERED_COLUMNS FC ON CM.ENTITYGUID = FC.GUID
+    GROUP BY CM.ENTITYGUID
+),
+-- Aggregate Tags for each column as JSON
+TR_AGG AS (
+    SELECT
+        TR.ENTITYGUID,
+        '[' || LISTAGG(
+            OBJECT_CONSTRUCT('name', TR.TAGNAME, 'value', TR.TAGVALUE)::STRING, ','
+        ) WITHIN GROUP (ORDER BY TR.TAGNAME) || ']' AS TAG_JSON
+    FROM TAG_RELATIONSHIP TR
+    JOIN FILTERED_COLUMNS FC ON TR.ENTITYGUID = FC.GUID
+    GROUP BY TR.ENTITYGUID
+)
+SELECT
+    -- Asset Identifiers
+    COL.NAME AS COL_NAME,
+    COL.QUALIFIEDNAME AS COL_QUALIFIEDNAME,
+    COL.GUID AS COL_GUID,
+    COL.DESCRIPTION AS COL_DESCRIPTION,
+    COL.USERDESCRIPTION AS COL_USERDESCRIPTION,
+    COL.CONNECTORNAME, COL.CONNECTIONNAME,
+    COL.DATABASENAME, COL.SCHEMANAME, COL.TABLENAME,
+    -- Source Attributes
+    COL.DATATYPE, COL.SUBDATATYPE,
+    COL."ORDER" AS COL_ORDER,
+    COL.ISPARTITION, COL.ISPRIMARY, COL.ISNULLABLE,
+    COL.PRECISION, COL.MAXLENGTH,
+    -- Atlan Metrics
+    COL.STATUS, COL.HASLINEAGE, COL.POPULARITYSCORE,
+    COL.QUERYCOUNT, COL.QUERYUSERCOUNT,
+    -- Tags & Custom Metadata
+    TR_AGG.TAG_JSON AS COL_TAGS,
+    CM_AGG.CUSTOM_METADATA_JSON AS COL_CUSTOM_METADATA,
+    -- Enrichment
+    COL.CERTIFICATESTATUS, COL.MEANINGS,
+    COL.OWNERUSERS, COL.OWNERGROUPS
+FROM COLUMN_ENTITY COL
+LEFT JOIN CM_AGG ON COL.GUID = CM_AGG.ENTITYGUID
+LEFT JOIN TR_AGG ON COL.GUID = TR_AGG.ENTITYGUID
+WHERE COL.CONNECTORNAME IN ('glue', 'snowflake')
 LIMIT 100;`
     },
     {
@@ -628,6 +741,21 @@ WHERE attributedisplayname = 'Cost Center Attribution'
 FROM CUSTOMMETADATA_RELATIONSHIP
 GROUP BY attributedisplayname, attributevalue
 ORDER BY COUNT(*) DESC;`
+    },
+    {
+      title: 'Assets with Tags (Join Pattern)',
+      description: 'List assets with their tags using JOIN pattern',
+      query: `-- Pattern for listing any asset type with tags
+SELECT
+  TB.GUID,
+  TB.NAME AS TABLENAME,
+  TG.TAGNAME
+FROM TABLE_ENTITY TB
+JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
+WHERE TB.NAME IS NOT NULL;
+
+-- Same pattern works for columns, views, etc.
+-- Just replace TABLE_ENTITY with the entity type you need`
     },
   ],
   ai: [
