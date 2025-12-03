@@ -163,108 +163,169 @@ FROM TABLE(INFORMATION_SCHEMA.ICEBERG_TABLE_SNAPSHOT_REFRESH_HISTORY(
 ));`
     },
     {
-      title: 'Downstream Lineage (Recursive)',
-      description: 'Find all downstream assets from a source GUID',
-      query: `WITH RECURSIVE lineage_cte (guid, level) AS (
-  -- Anchor: Start with source GUID
-  SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid, 0 AS level
-  
-  UNION ALL
-  
-  -- Recursive: Find downstream assets
-  SELECT outputs_flat.value::VARCHAR, L.level + 1
-  FROM lineage_cte AS L
-  JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
-  , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
-  WHERE L.level < 5  -- Recursion limit
+      title: 'Downstream Lineage (No Limit)',
+      description: 'Find ALL downstream assets from a source - no recursion limit',
+      query: `-- GET DOWNSTREAM ASSETS - NO DISTANCE, NO RECURSION LIMIT
+-- Warning: May be slow for assets with extensive lineage
+WITH RECURSIVE lineage_cte (guid) AS (
+    -- Anchor: Start with your source GUID
+    SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid
+
+    UNION ALL
+    
+    -- Recursive: Find all downstream dependencies
+    SELECT outputs_flat.value::VARCHAR
+    FROM lineage_cte AS L
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
 )
 SELECT DISTINCT
-  COALESCE(T.name, V.name) AS entity_name,
-  L.guid AS entity_guid,
-  CASE WHEN T.name IS NOT NULL THEN 'TABLE'
-       WHEN V.name IS NOT NULL THEN 'VIEW'
-       ELSE 'UNKNOWN' END AS entity_type,
-  L.level AS distance
+    COALESCE(T.name, V.name, SGELEM.name) AS entity_name,
+    L.guid AS entity_guid,
+    CASE
+        WHEN T.name IS NOT NULL THEN 'TABLE'
+        WHEN V.name IS NOT NULL THEN 'VIEW'
+        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
+        ELSE 'UNKNOWN'
+    END AS entity_type
 FROM lineage_cte AS L
 LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
 LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
-WHERE L.level > 0
+LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
+ORDER BY entity_name ASC;`
+    },
+    {
+      title: 'Downstream Lineage (With Limit)',
+      description: 'Find downstream assets with recursion depth limit and distance tracking',
+      query: `-- GET DOWNSTREAM ASSETS - WITH DISTANCE AND RECURSION LIMIT
+WITH RECURSIVE lineage_cte (guid, level) AS (
+    -- Anchor: Start with your source GUID
+    SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid, 0 AS level
+
+    UNION ALL
+    
+    -- Recursive: Find downstream, increment level each step
+    SELECT outputs_flat.value::VARCHAR, L.level + 1
+    FROM lineage_cte AS L
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
+    WHERE L.level < 5  -- Stop at 5 hops
+)
+SELECT DISTINCT
+    COALESCE(T.name, V.name, SF.name, SGELEM.name) AS entity_name,
+    L.guid AS entity_guid,
+    CASE
+        WHEN T.name IS NOT NULL THEN 'TABLE'
+        WHEN V.name IS NOT NULL THEN 'VIEW'
+        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
+        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
+        ELSE 'UNKNOWN'
+    END AS entity_type,
+    L.level AS distance
+FROM lineage_cte AS L
+LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
+LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
+LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
+LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
+WHERE L.level > 0  -- Exclude the starting asset
 ORDER BY distance ASC;`
     },
     {
-      title: 'Upstream Lineage (Recursive)',
-      description: 'Find all upstream sources for an asset',
-      query: `WITH RECURSIVE lineage_cte (guid, level) AS (
-  -- Anchor: Start with target GUID
-  SELECT '<YOUR_TARGET_GUID>'::VARCHAR AS guid, 0 AS level
-  
-  UNION ALL
-  
-  -- Recursive: Find upstream assets
-  SELECT inputs_flat.value::VARCHAR, L.level + 1
-  FROM lineage_cte AS L
-  JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR
-  , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat
-  WHERE L.level < 5  -- Recursion limit
+      title: 'Upstream Lineage (With Distance)',
+      description: 'Find all upstream sources with distance tracking',
+      query: `-- GET UPSTREAM ASSETS - WITH DISTANCE AND RECURSION LIMIT
+WITH RECURSIVE lineage_cte (guid, level) AS (
+    -- Anchor: Start with your target GUID
+    SELECT '<YOUR_TARGET_GUID>'::VARCHAR AS guid, 0 AS level
+
+    UNION ALL
+    
+    -- Recursive: Find upstream by joining on OUTPUTS
+    SELECT inputs_flat.value::VARCHAR, L.level + 1
+    FROM lineage_cte AS L
+    -- Note: Join on OUTPUTS to go upstream
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat
+    WHERE L.level < 5  -- Stop at 5 hops
 )
 SELECT DISTINCT
-  COALESCE(T.name, V.name, SF.name) AS entity_name,
-  L.guid AS entity_guid,
-  CASE WHEN T.name IS NOT NULL THEN 'TABLE'
-       WHEN V.name IS NOT NULL THEN 'VIEW'
-       WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
-       ELSE 'UNKNOWN' END AS entity_type
+    COALESCE(T.name, V.name, SF.name) AS entity_name,
+    L.guid AS entity_guid,
+    CASE
+        WHEN T.name IS NOT NULL THEN 'TABLE'
+        WHEN V.name IS NOT NULL THEN 'VIEW'
+        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
+        ELSE 'UNKNOWN'
+    END AS entity_type,
+    L.level AS distance
 FROM lineage_cte AS L
 LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
 LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
-LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid;`
+LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
+WHERE L.level > 0  -- Exclude starting asset
+ORDER BY distance ASC;`
     },
     {
       title: 'Bidirectional Lineage',
-      description: 'Get both upstream and downstream lineage with distance',
-      query: `WITH RECURSIVE downstream_cte (guid, level) AS (
-  SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level
-  UNION ALL
-  SELECT outputs_flat.value::VARCHAR, L.level + 1
-  FROM downstream_cte AS L
-  JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
-  , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
-  WHERE L.level < 5
+      description: 'Get both upstream and downstream lineage with positive/negative distance',
+      query: `-- BIDIRECTIONAL LINEAGE - Both upstream and downstream
+-- Positive distance = downstream, Negative = upstream
+WITH RECURSIVE downstream_cte (guid, level) AS (
+    SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level
+    UNION ALL
+    SELECT outputs_flat.value::VARCHAR, L.level + 1
+    FROM downstream_cte AS L
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
+    WHERE L.level < 5
 ),
 upstream_cte (guid, level) AS (
-  SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level
-  UNION ALL
-  SELECT inputs_flat.value::VARCHAR, L.level - 1
-  FROM upstream_cte AS L
-  JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR
-  , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat
-  WHERE L.level > -5
+    SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level
+    UNION ALL
+    SELECT inputs_flat.value::VARCHAR, L.level - 1  -- Negative for upstream
+    FROM upstream_cte AS L
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat
+    WHERE L.level > -5
 ),
 combined_lineage AS (
-  SELECT * FROM downstream_cte
-  UNION ALL
-  SELECT * FROM upstream_cte
+    SELECT * FROM downstream_cte
+    UNION ALL
+    SELECT * FROM upstream_cte
 )
 SELECT DISTINCT
-  COALESCE(T.name, V.name) AS entity_name,
-  L.guid AS entity_guid,
-  CASE WHEN T.name IS NOT NULL THEN 'TABLE'
-       WHEN V.name IS NOT NULL THEN 'VIEW'
-       ELSE 'UNKNOWN' END AS entity_type,
-  L.level AS distance
+    COALESCE(T.name, V.name, SF.name, SGELEM.name) AS entity_name,
+    L.guid AS entity_guid,
+    CASE
+        WHEN T.name IS NOT NULL THEN 'TABLE'
+        WHEN V.name IS NOT NULL THEN 'VIEW'
+        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
+        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
+        ELSE 'UNKNOWN'
+    END AS entity_type,
+    L.level AS distance  -- Negative = upstream, Positive = downstream
 FROM combined_lineage AS L
 LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
 LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
-WHERE L.level != 0
+LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
+LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
+WHERE L.level != 0  -- Exclude starting asset
 ORDER BY distance ASC;`
     },
   ],
   glossary: [
     {
       title: 'List All Glossaries',
-      description: 'View all business glossaries in your tenant',
-      query: `SELECT NAME, GUID, CREATEDBY
-FROM ATLASGLOSSARY_ENTITY;`
+      description: 'View all business glossaries in your tenant with creator info',
+      query: `-- First, see all Glossaries in your Atlan tenant
+SELECT
+  NAME,
+  GUID,
+  CREATEDBY
+FROM ATLASGLOSSARY_ENTITY;
+
+-- Note the GUID of the glossary you want to explore
+-- You'll use it in subsequent queries with ARRAY_CONTAINS`
     },
     {
       title: 'Terms with Categories (Full Detail)',
@@ -499,17 +560,24 @@ FROM TABLE_ENTITY;`
     },
     {
       title: 'Storage Reclamation Analysis',
-      description: 'Find large, unpopular tables for potential cleanup',
-      query: `-- Total storage by popularity
-SELECT SUM(SIZEBYTES) as total_bytes
-FROM TABLE_ENTITY
-WHERE POPULARITYSCORE < 0.05;
-
--- Detailed breakdown
-SELECT NAME, SIZEBYTES, POPULARITYSCORE, QUERYCOUNT
+      description: 'Find large tables by size and popularity for storage optimization',
+      query: `-- STORAGE RECLAMATION ANALYSIS
+-- Show the largest tables and their popularity scores
+-- Use this to identify large, unused tables for cleanup
+SELECT
+  NAME,
+  ROWCOUNT,
+  COLUMNCOUNT,
+  SIZEBYTES,
+  POPULARITYSCORE
 FROM TABLE_ENTITY
 WHERE SIZEBYTES IS NOT NULL
-ORDER BY SIZEBYTES DESC;`
+ORDER BY SIZEBYTES DESC;
+
+-- Calculate total storage used by unpopular tables
+SELECT SUM(SIZEBYTES) as bytes_in_unpopular_tables
+FROM TABLE_ENTITY
+WHERE POPULARITYSCORE < 0.05;`
     },
     {
       title: 'Most Popular Tables',
@@ -521,10 +589,14 @@ LIMIT 20;`
     },
     {
       title: 'Frequent Column Updaters',
-      description: 'Find users who update columns most frequently',
-      query: `SELECT UPDATEDBY,
-       TO_TIMESTAMP(MAX(UPDATETIME)/1000) AS LASTUPDATE,
-       COUNT(*) AS UPDATECOUNT
+      description: 'Find users who update columns most frequently - useful for identifying power users',
+      query: `-- POPULARITY ANALYSIS
+-- Shows users who update Columns most frequently in Atlan
+-- Useful for identifying power users and data stewards
+SELECT
+  UPDATEDBY,
+  TO_TIMESTAMP(MAX(UPDATETIME)/1000) AS LASTUPDATE,
+  COUNT(*) AS UPDATECOUNT
 FROM COLUMN_ENTITY
 GROUP BY UPDATEDBY
 ORDER BY UPDATECOUNT DESC;`
@@ -709,20 +781,36 @@ ORDER BY usage_count DESC;`
     },
     {
       title: 'Tagged Tables',
-      description: 'List tables with their assigned tags',
-      query: `SELECT TB.GUID, TB.NAME AS table_name, TG.TAGNAME
+      description: 'List all tables with their assigned tags',
+      query: `-- Get all tables that have tags and their tag names
+-- Useful for auditing tag coverage
+SELECT
+  TB.GUID,
+  TB.NAME AS TABLENAME,
+  TG.TAGNAME
 FROM TABLE_ENTITY TB
 JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
 WHERE TB.NAME IS NOT NULL;`
     },
     {
-      title: 'Untagged Tables (Compliance Check)',
-      description: 'Find tables without tags for compliance reporting',
-      query: `SELECT DISTINCT TB.GUID, TB.NAME AS table_name,
-       TB.CREATEDBY, TB.DATABASEQUALIFIEDNAME
+      title: 'Untagged Tables (Compliance)',
+      description: 'Find tables without tags for compliance - includes creator and database for notification',
+      query: `-- TAG COMPLIANCE USE CASE
+-- Some companies require all tables to have a tag
+-- (e.g., specifying data retention period).
+-- Tables without tags may be flagged for deletion.
+
+-- Find all untagged tables with creator info for follow-up:
+SELECT DISTINCT
+  TB.GUID,
+  TB.NAME AS TABLENAME,
+  TB.CREATEDBY,
+  TB.DATABASEQUALIFIEDNAME
 FROM TABLE_ENTITY TB
 LEFT JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
-WHERE TG.TAGNAME IS NULL;`
+WHERE TG.TAGNAME IS NULL;
+
+-- Use this to notify creators to add required tags`
     },
     {
       title: 'Custom Metadata Query',
