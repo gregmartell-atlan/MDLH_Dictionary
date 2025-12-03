@@ -887,7 +887,8 @@ const colHeaders = {
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
   
-  const handleCopy = async () => {
+  const handleCopy = async (e) => {
+    e.stopPropagation();
     await navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -896,11 +897,24 @@ function CopyButton({ text }) {
   return (
     <button
       onClick={handleCopy}
-      className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+      className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+        copied 
+          ? 'bg-green-600 text-white shadow-md' 
+          : 'bg-gray-700 hover:bg-gray-600 text-gray-200 hover:text-white'
+      }`}
       title="Copy to clipboard"
     >
-      {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
-      {copied ? 'Copied!' : 'Copy'}
+      {copied ? (
+        <>
+          <Check size={12} className="animate-pulse" />
+          <span>Copied!</span>
+        </>
+      ) : (
+        <>
+          <Copy size={12} />
+          <span>Copy</span>
+        </>
+      )}
     </button>
   );
 }
@@ -909,26 +923,32 @@ function QueryCard({ title, description, query }) {
   const [expanded, setExpanded] = useState(false);
   
   return (
-    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+    <div className={`bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden transition-all duration-200 hover:border-gray-600 ${
+      expanded ? 'shadow-lg shadow-black/20' : 'shadow-md shadow-black/10 hover:shadow-lg'
+    }`}>
       <div 
-        className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-750"
+        className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-750/50 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
-        <div className="flex items-center gap-2">
-          <Code2 size={16} className="text-blue-400" />
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-blue-500/10 rounded-lg">
+            <Code2 size={18} className="text-blue-400" />
+          </div>
           <div>
-            <h4 className="font-medium text-white text-sm">{title}</h4>
-            <p className="text-gray-400 text-xs">{description}</p>
+            <h4 className="font-semibold text-white text-sm">{title}</h4>
+            <p className="text-gray-400 text-xs mt-0.5">{description}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <CopyButton text={query} />
-          <span className="text-gray-500 text-xs">{expanded ? '▼' : '▶'}</span>
+          <div className={`w-6 h-6 flex items-center justify-center rounded-md bg-gray-700/50 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}>
+            <span className="text-gray-400 text-xs">▶</span>
+          </div>
         </div>
       </div>
       {expanded && (
-        <div className="border-t border-gray-700 p-3 bg-gray-900">
-          <pre className="text-xs text-green-300 overflow-x-auto whitespace-pre-wrap font-mono">
+        <div className="border-t border-gray-700/50 p-4 bg-gray-900/80 animate-in slide-in-from-top-2 duration-200">
+          <pre className="text-xs text-green-300 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed p-3 bg-gray-950/50 rounded-lg border border-gray-800">
             {query}
           </pre>
         </div>
@@ -987,24 +1007,37 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 p-4">
+    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 text-gray-100 p-6">
       <div className="max-w-full mx-auto">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-white mb-2">Atlan Metadata Lakehouse Entity Dictionary</h1>
-          <p className="text-gray-400 text-sm">Reference guide for MDLH entity types, tables, attributes, and example queries</p>
+        {/* Header */}
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="p-2.5 bg-blue-500/10 rounded-xl">
+              <Database size={28} className="text-blue-400" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-white tracking-tight">
+                Atlan Metadata Lakehouse Entity Dictionary
+              </h1>
+              <p className="text-gray-400 text-sm mt-1">
+                Reference guide for MDLH entity types, tables, attributes, and example queries
+              </p>
+            </div>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-1 mb-4 bg-gray-900 p-2 rounded-lg">
+        {/* Tab Navigation */}
+        <div className="flex flex-wrap gap-1.5 mb-5 bg-gray-900/80 p-2 rounded-xl border border-gray-800/50 shadow-lg shadow-black/10">
           {tabs.map(tab => {
             const Icon = tab.icon;
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all ${
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all duration-200 ${
                   activeTab === tab.id
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20'
+                    : 'bg-gray-800/80 text-gray-300 hover:bg-gray-700 hover:text-white'
                 }`}
               >
                 <Icon size={14} />
@@ -1014,63 +1047,68 @@ export default function App() {
           })}
         </div>
 
-        <div className="flex gap-2 mb-4">
-          <input
-            type="text"
-            placeholder="Search entities and queries..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm focus:outline-none focus:border-blue-500"
-          />
+        {/* Search and Actions Bar */}
+        <div className="flex gap-3 mb-5">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              placeholder="Search entities and queries..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full px-4 py-2.5 bg-gray-800/80 border border-gray-700/50 rounded-lg text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all duration-200 placeholder-gray-500"
+            />
+          </div>
           <button
             onClick={() => setShowQueries(!showQueries)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded text-sm font-medium transition-colors ${
-              showQueries ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 ${
+              showQueries 
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' 
+                : 'bg-gray-800/80 text-gray-300 hover:bg-gray-700 hover:text-white border border-gray-700/50'
             }`}
           >
-            <Code2 size={14} />
+            <Code2 size={16} />
             {showQueries ? 'Show Entities' : 'Show Queries'}
           </button>
           <button
             onClick={downloadCSV}
-            className="flex items-center gap-1.5 px-3 py-2 bg-green-700 hover:bg-green-600 rounded text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-semibold text-white transition-all duration-200 shadow-md shadow-emerald-500/20 hover:shadow-lg"
           >
-            <Download size={14} />
+            <Download size={16} />
             Export Tab
           </button>
           <button
             onClick={downloadAllCSV}
-            className="flex items-center gap-1.5 px-3 py-2 bg-purple-700 hover:bg-purple-600 rounded text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-semibold text-white transition-all duration-200 shadow-md shadow-purple-500/20 hover:shadow-lg"
           >
-            <Download size={14} />
+            <Download size={16} />
             Export All
           </button>
         </div>
 
         {!showQueries ? (
           <>
-            <div className="overflow-x-auto bg-gray-900 rounded-lg border border-gray-800">
+            <div className="overflow-x-auto bg-gray-900/80 rounded-xl border border-gray-800/50 shadow-lg shadow-black/10">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="bg-gray-800">
+                  <tr className="bg-gray-800/80">
                     {columns[activeTab].map(col => (
-                      <th key={col} className="px-3 py-2 text-left font-semibold text-gray-300 border-b border-gray-700">
+                      <th key={col} className="px-4 py-3 text-left font-semibold text-gray-300 border-b border-gray-700/50 uppercase tracking-wider text-[11px]">
                         {colHeaders[col]}
                       </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-gray-800/50">
                   {filteredData.map((row, i) => (
-                    <tr key={i} className="border-b border-gray-800 hover:bg-gray-800/50">
+                    <tr key={i} className="hover:bg-gray-800/30 transition-colors duration-150">
                       {columns[activeTab].map(col => (
-                        <td key={col} className="px-3 py-2 align-top">
+                        <td key={col} className="px-4 py-3 align-top">
                           {col === 'entity' ? (
-                            <span className="font-mono font-semibold text-blue-400">{row[col]}</span>
+                            <span className="font-mono font-semibold text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded">{row[col]}</span>
                           ) : col === 'table' ? (
-                            <span className="font-mono text-green-400">{row[col]}</span>
+                            <span className="font-mono text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded text-[11px]">{row[col]}</span>
                           ) : col === 'exampleQuery' ? (
-                            <code className="text-yellow-300 text-[10px] break-all">{row[col]}</code>
+                            <code className="text-amber-300 bg-amber-400/10 px-2 py-0.5 rounded text-[10px] break-all">{row[col]}</code>
                           ) : (
                             <span className="text-gray-300">{row[col]}</span>
                           )}
@@ -1082,8 +1120,13 @@ export default function App() {
               </table>
             </div>
 
-            <div className="mt-4 text-xs text-gray-500">
-              Showing {filteredData.length} of {data[activeTab].length} entities in {tabs.find(t => t.id === activeTab)?.label}
+            <div className="mt-5 flex items-center justify-between">
+              <p className="text-xs text-gray-500">
+                Showing <span className="text-gray-300 font-medium">{filteredData.length}</span> of <span className="text-gray-300 font-medium">{data[activeTab].length}</span> entities in <span className="text-blue-400 font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
+              </p>
+              <p className="text-xs text-gray-600">
+                💡 Click "Show Queries" to see example SQL queries
+              </p>
             </div>
           </>
         ) : (
@@ -1094,14 +1137,21 @@ export default function App() {
                   <QueryCard key={i} title={q.title} description={q.description} query={q.query} />
                 ))
               ) : (
-                <div className="text-center py-8 text-gray-500">
-                  No example queries available for this category yet.
+                <div className="text-center py-12 bg-gray-900/50 rounded-xl border border-gray-800/50">
+                  <Code2 size={48} className="mx-auto text-gray-600 mb-3" />
+                  <p className="text-gray-400 font-medium">No example queries available</p>
+                  <p className="text-gray-500 text-sm mt-1">Queries for this category are coming soon</p>
                 </div>
               )}
             </div>
 
-            <div className="mt-4 text-xs text-gray-500">
-              Showing {filteredQueries.length} example queries for {tabs.find(t => t.id === activeTab)?.label}
+            <div className="mt-5 flex items-center justify-between">
+              <p className="text-xs text-gray-500">
+                Showing <span className="text-gray-300 font-medium">{filteredQueries.length}</span> example queries for <span className="text-blue-400 font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
+              </p>
+              <p className="text-xs text-gray-600">
+                💡 Click any query to expand and copy
+              </p>
             </div>
           </>
         )}
