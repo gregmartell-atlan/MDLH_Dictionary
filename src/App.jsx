@@ -1019,27 +1019,47 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery 
 
         {/* Panel Content */}
         <div className="overflow-y-auto h-[calc(100%-80px)] p-4 space-y-3 bg-gray-50">
+          {/* Show highlighted inline query at top if it's not in the main queries */}
+          {highlightedQuery && !queries.some(q => q.query === highlightedQuery) && (
+            <div ref={highlightedRef}>
+              <div className="mb-4 pb-4 border-b border-gray-200">
+                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Entity Example Query</p>
+                <QueryCard 
+                  title="Entity Query" 
+                  description="Example query for this entity type" 
+                  query={highlightedQuery} 
+                  defaultExpanded={true}
+                />
+              </div>
+            </div>
+          )}
+          
           {queries.length > 0 ? (
-            queries.map((q, i) => {
-              const isHighlighted = highlightedQuery && q.query === highlightedQuery;
-              return (
-                <div key={i} ref={isHighlighted ? highlightedRef : null}>
-                  <QueryCard 
-                    title={q.title} 
-                    description={q.description} 
-                    query={q.query} 
-                    defaultExpanded={isHighlighted}
-                  />
-                </div>
-              );
-            })
-          ) : (
+            <>
+              {highlightedQuery && !queries.some(q => q.query === highlightedQuery) && (
+                <p className="text-xs text-gray-500 uppercase tracking-wider font-medium">More {categoryLabel} Queries</p>
+              )}
+              {queries.map((q, i) => {
+                const isHighlighted = highlightedQuery && q.query === highlightedQuery;
+                return (
+                  <div key={i} ref={isHighlighted ? highlightedRef : null}>
+                    <QueryCard 
+                      title={q.title} 
+                      description={q.description} 
+                      query={q.query} 
+                      defaultExpanded={isHighlighted}
+                    />
+                  </div>
+                );
+              })}
+            </>
+          ) : !highlightedQuery ? (
             <div className="text-center py-16">
               <Code2 size={48} className="mx-auto text-gray-300 mb-3" />
               <p className="text-gray-600 font-medium">No queries available</p>
               <p className="text-gray-400 text-sm mt-1">Queries for this category are coming soon</p>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </>
@@ -1131,26 +1151,53 @@ export default function App() {
     q.query.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Find a query related to an entity
+  // Find a query related to an entity by searching for table name in query SQL
   const findQueryForEntity = (entityName, tableName) => {
     const allQueries = exampleQueries[activeTab] || [];
-    // First try to find a query that mentions the entity or table name
-    const matchedQuery = allQueries.find(q => 
-      q.title.toLowerCase().includes(entityName.toLowerCase()) ||
-      q.query.toLowerCase().includes(tableName.toLowerCase()) ||
-      q.query.toLowerCase().includes(entityName.toLowerCase())
-    );
-    return matchedQuery?.query || null;
+    
+    if (!tableName || tableName === '(abstract)') return null;
+    
+    const tableNameLower = tableName.toLowerCase();
+    const entityNameLower = entityName.toLowerCase();
+    
+    // Priority 1: Exact table name match in query SQL (e.g., "FROM TABLE_ENTITY" or "TABLE_ENTITY")
+    let matchedQuery = allQueries.find(q => {
+      const queryLower = q.query.toLowerCase();
+      return (
+        queryLower.includes(`from ${tableNameLower}`) ||
+        queryLower.includes(`from\n    ${tableNameLower}`) ||
+        queryLower.includes(`from\n${tableNameLower}`) ||
+        queryLower.includes(`join ${tableNameLower}`) ||
+        // Also check for the table name as a standalone reference
+        new RegExp(`\\b${tableNameLower.replace(/_/g, '_')}\\b`).test(queryLower)
+      );
+    });
+    
+    // Priority 2: Entity name explicitly in title (e.g., "Table" in title for TABLE_ENTITY)
+    if (!matchedQuery) {
+      matchedQuery = allQueries.find(q => {
+        const titleLower = q.title.toLowerCase();
+        // Match singular entity name (e.g., "Column" for Column entity, "Table" for Table)
+        return (
+          titleLower.includes(entityNameLower) ||
+          titleLower.includes(entityNameLower + 's') || // plural
+          titleLower.includes(entityNameLower + ' ')
+        );
+      });
+    }
+    
+    return matchedQuery || null;
   };
 
   // Open panel with highlighted query
   const openQueryForEntity = (entityName, tableName, exampleQuery) => {
-    // If entity has its own exampleQuery field, use that
+    // If entity has its own exampleQuery field (inline query from data), use that
     if (exampleQuery) {
       setHighlightedQuery(exampleQuery);
     } else {
-      const query = findQueryForEntity(entityName, tableName);
-      setHighlightedQuery(query);
+      // Find related query from exampleQueries
+      const matchedQuery = findQueryForEntity(entityName, tableName);
+      setHighlightedQuery(matchedQuery?.query || null);
     }
     setShowQueries(true);
   };
@@ -1158,6 +1205,7 @@ export default function App() {
   // Check if entity has a related query
   const hasQueryForEntity = (entityName, tableName, exampleQuery) => {
     if (exampleQuery) return true;
+    if (!tableName || tableName === '(abstract)') return false;
     return findQueryForEntity(entityName, tableName) !== null;
   };
 
