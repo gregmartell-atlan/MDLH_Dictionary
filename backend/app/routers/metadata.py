@@ -11,6 +11,10 @@ router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 @router.get("/databases", response_model=List[DatabaseInfo])
 async def list_databases(refresh: bool = False):
     """List all accessible databases."""
+    # Check if connected first
+    if not snowflake_service.is_connected():
+        return []  # Return empty list when not connected
+    
     # Check cache first
     if not refresh:
         cached = metadata_cache.get_databases()
@@ -31,6 +35,10 @@ async def list_schemas(
     refresh: bool = False
 ):
     """List all schemas in a database."""
+    # Check if connected first
+    if not snowflake_service.is_connected():
+        return []
+    
     # Check cache first
     if not refresh:
         cached = metadata_cache.get_schemas(database)
@@ -52,6 +60,10 @@ async def list_tables(
     refresh: bool = False
 ):
     """List all tables and views in a schema."""
+    # Check if connected first
+    if not snowflake_service.is_connected():
+        return []
+    
     # Check cache first
     if not refresh:
         cached = metadata_cache.get_tables(database, schema)
@@ -74,6 +86,10 @@ async def list_columns(
     refresh: bool = False
 ):
     """Get column metadata for a table."""
+    # Check if connected first
+    if not snowflake_service.is_connected():
+        return []
+    
     # Check cache first
     if not refresh:
         cached = metadata_cache.get_columns(database, schema, table)

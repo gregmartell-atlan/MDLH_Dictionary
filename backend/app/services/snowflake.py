@@ -78,6 +78,16 @@ class SnowflakeService:
         self._connection = snowflake.connector.connect(**connect_params)
         return self._connection
     
+    def is_connected(self) -> bool:
+        """Check if there's an active connection."""
+        if self._connection is None:
+            return False
+        try:
+            # Try to check if connection is still alive
+            return not self._connection.is_closed()
+        except Exception:
+            return False
+    
     @contextmanager
     def get_cursor(self, dict_cursor: bool = True):
         """Get a database cursor with automatic cleanup."""
