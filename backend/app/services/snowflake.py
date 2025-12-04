@@ -169,36 +169,33 @@ class SnowflakeService:
     ) -> Dict[str, Any]:
         """Connect using a Personal Access Token (PAT) or programmatic token."""
         
+        base_params = {
+            "account": account,
+            "user": user,
+            "warehouse": warehouse or "COMPUTE_WH",
+            "database": database or "ATLAN_MDLH", 
+            "schema": schema or "PUBLIC",
+        }
+        if role:
+            base_params["role"] = role
+        
         # Try different authentication methods for tokens
-        auth_methods = [
-            # Method 1: Use token as password (common for programmatic tokens)
-            {
-                "account": account,
-                "user": user,
-                "password": token,
-                "warehouse": warehouse or "COMPUTE_WH",
-                "database": database or "ATLAN_MDLH", 
-                "schema": schema or "PUBLIC",
-            },
-            # Method 2: OAuth with token
-            {
-                "account": account,
-                "user": user,
-                "token": token,
-                "authenticator": "oauth",
-                "warehouse": warehouse or "COMPUTE_WH",
-                "database": database or "ATLAN_MDLH",
-                "schema": schema or "PUBLIC",
-            },
+        auth_attempts = [
+            # Method 1: Programmatic Access Token (Snowflake's recommended for PAT)
+            {"token": token, "authenticator": "programmatic_access_token"},
+            # Method 2: OAuth 
+            {"token": token, "authenticator": "oauth"},
+            # Method 3: Use token as password
+            {"password": token},
+            # Method 4: External browser OAuth (won't work headless but try)
+            {"authenticator": "externalbrowser"},
         ]
         
-        last_error = None
+        errors = []
         
-        for connect_params in auth_methods:
+        for auth_params in auth_attempts:
             try:
-                if role:
-                    connect_params["role"] = role
-                
+                connect_params = {**base_params, **auth_params}
                 self._connection = snowflake.connector.connect(**connect_params)
                 
                 with self.get_cursor() as cursor:
@@ -214,12 +211,17 @@ class SnowflakeService:
                         "role": row["CURRENT_ROLE()"],
                     }
             except Exception as e:
-                last_error = str(e)
+                error_msg = str(e)
+                # Skip logging duplicate errors
+                if error_msg not in errors:
+                    errors.append(error_msg)
                 continue
         
+        # Provide helpful error message
+        error_summary = errors[0] if errors else "Unknown error"
         return {
             "connected": False,
-            "error": f"Token authentication failed. Try using Password authentication instead. Error: {last_error}"
+            "error": f"Token authentication failed. Your PAT may have expired or lacks permissions. Error: {error_summary}"
         }
     
     def disconnect(self):
