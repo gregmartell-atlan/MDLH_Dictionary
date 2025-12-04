@@ -167,9 +167,21 @@ class SnowflakeService:
         schema: Optional[str] = None,
         role: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Connect using a Personal Access Token (PAT)."""
-        try:
-            connect_params = {
+        """Connect using a Personal Access Token (PAT) or programmatic token."""
+        
+        # Try different authentication methods for tokens
+        auth_methods = [
+            # Method 1: Use token as password (common for programmatic tokens)
+            {
+                "account": account,
+                "user": user,
+                "password": token,
+                "warehouse": warehouse or "COMPUTE_WH",
+                "database": database or "ATLAN_MDLH", 
+                "schema": schema or "PUBLIC",
+            },
+            # Method 2: OAuth with token
+            {
                 "account": account,
                 "user": user,
                 "token": token,
@@ -177,30 +189,38 @@ class SnowflakeService:
                 "warehouse": warehouse or "COMPUTE_WH",
                 "database": database or "ATLAN_MDLH",
                 "schema": schema or "PUBLIC",
-            }
-            
-            if role:
-                connect_params["role"] = role
-            
-            self._connection = snowflake.connector.connect(**connect_params)
-            
-            with self.get_cursor() as cursor:
-                cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE()")
-                row = cursor.fetchone()
-                return {
-                    "connected": True,
-                    "user": row["CURRENT_USER()"],
-                    "account": row["CURRENT_ACCOUNT()"],
-                    "warehouse": row["CURRENT_WAREHOUSE()"],
-                    "database": row["CURRENT_DATABASE()"],
-                    "schema": row["CURRENT_SCHEMA()"],
-                    "role": row["CURRENT_ROLE()"],
-                }
-        except Exception as e:
-            return {
-                "connected": False,
-                "error": str(e)
-            }
+            },
+        ]
+        
+        last_error = None
+        
+        for connect_params in auth_methods:
+            try:
+                if role:
+                    connect_params["role"] = role
+                
+                self._connection = snowflake.connector.connect(**connect_params)
+                
+                with self.get_cursor() as cursor:
+                    cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE()")
+                    row = cursor.fetchone()
+                    return {
+                        "connected": True,
+                        "user": row["CURRENT_USER()"],
+                        "account": row["CURRENT_ACCOUNT()"],
+                        "warehouse": row["CURRENT_WAREHOUSE()"],
+                        "database": row["CURRENT_DATABASE()"],
+                        "schema": row["CURRENT_SCHEMA()"],
+                        "role": row["CURRENT_ROLE()"],
+                    }
+            except Exception as e:
+                last_error = str(e)
+                continue
+        
+        return {
+            "connected": False,
+            "error": f"Token authentication failed. Try using Password authentication instead. Error: {last_error}"
+        }
     
     def disconnect(self):
         """Close the connection."""
