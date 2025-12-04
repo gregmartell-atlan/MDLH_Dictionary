@@ -1,19 +1,42 @@
 """Connection management endpoints."""
 
 from fastapi import APIRouter, HTTPException
-from app.models.schemas import ConnectionStatus, ConnectionRequest
+from pydantic import BaseModel
+from typing import Optional
+from app.models.schemas import ConnectionStatus
 from app.services import snowflake_service
 
 router = APIRouter(prefix="/api", tags=["connection"])
+
+
+class ConnectionRequest(BaseModel):
+    """Connection request with optional credentials."""
+    account: Optional[str] = None
+    user: Optional[str] = None
+    password: Optional[str] = None
+    warehouse: Optional[str] = None
+    database: Optional[str] = None
+    schema: Optional[str] = None
+    role: Optional[str] = None
 
 
 @router.post("/connect", response_model=ConnectionStatus)
 async def test_connection(request: ConnectionRequest = None):
     """Test connection to Snowflake and return connection info."""
     try:
-        if request:
-            result = snowflake_service.test_connection()
+        # If credentials provided in request, use them
+        if request and request.account and request.user and request.password:
+            result = snowflake_service.connect_with_credentials(
+                account=request.account,
+                user=request.user,
+                password=request.password,
+                warehouse=request.warehouse,
+                database=request.database,
+                schema=request.schema,
+                role=request.role
+            )
         else:
+            # Use environment config
             result = snowflake_service.test_connection()
         
         return ConnectionStatus(**result)

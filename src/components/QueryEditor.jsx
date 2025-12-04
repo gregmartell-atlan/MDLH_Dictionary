@@ -11,38 +11,39 @@ import {
 } from 'lucide-react';
 import SchemaExplorer from './SchemaExplorer';
 import ResultsTable from './ResultsTable';
+import ConnectionModal from './ConnectionModal';
 import { useConnection, useQuery, useQueryHistory } from '../hooks/useSnowflake';
 
-function ConnectionBadge({ status, onReconnect }) {
-  if (!status) {
+function ConnectionBadge({ status, onConnect, loading }) {
+  if (loading) {
     return (
-      <button 
-        onClick={onReconnect}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-600 rounded-full text-xs hover:bg-gray-200"
-      >
-        <WifiOff size={12} />
-        Connect
-      </button>
+      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-full text-xs">
+        <Loader2 size={12} className="animate-spin" />
+        Connecting...
+      </div>
     );
   }
   
-  if (status.connected) {
+  if (!status || !status.connected) {
     return (
-      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 rounded-full text-xs">
-        <Wifi size={12} />
-        <span>{status.warehouse || 'Connected'}</span>
-      </div>
+      <button 
+        onClick={onConnect}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-xs hover:bg-amber-100 font-medium"
+      >
+        <Database size={12} />
+        Configure Connection
+      </button>
     );
   }
   
   return (
     <button 
-      onClick={onReconnect}
-      className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 rounded-full text-xs hover:bg-red-100"
-      title={status.error}
+      onClick={onConnect}
+      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 rounded-full text-xs hover:bg-green-100"
+      title="Click to reconfigure"
     >
-      <WifiOff size={12} />
-      Disconnected
+      <Wifi size={12} />
+      <span>{status.warehouse || 'Connected'}</span>
     </button>
   );
 }
@@ -104,16 +105,30 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
   const [sql, setSql] = useState(initialQuery);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
+  const [showConnectionModal, setShowConnectionModal] = useState(false);
   
   const { status: connStatus, testConnection, loading: connLoading } = useConnection();
   const { executeQuery, results, loading: queryLoading, error: queryError, clearResults } = useQuery();
   const { history, fetchHistory, loading: historyLoading } = useQueryHistory();
+  const [connectionStatus, setConnectionStatus] = useState(null);
   
-  // Connect on mount
+  // Try to connect on mount (will fail gracefully if no env config)
   useEffect(() => {
-    testConnection();
+    testConnection().then(status => {
+      setConnectionStatus(status);
+      // If not connected, show modal automatically
+      if (!status?.connected) {
+        setShowConnectionModal(true);
+      }
+    });
     fetchHistory();
   }, []);
+  
+  // Handle successful connection from modal
+  const handleConnectionSuccess = (status) => {
+    setConnectionStatus(status);
+    setShowConnectionModal(false);
+  };
   
   // Update SQL when initialQuery changes
   useEffect(() => {
@@ -241,13 +256,25 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
         </div>
         
         <div className="flex items-center gap-3">
-          <ConnectionBadge status={connStatus} onReconnect={testConnection} />
+          <ConnectionBadge 
+            status={connectionStatus} 
+            onConnect={() => setShowConnectionModal(true)} 
+            loading={connLoading}
+          />
           
           <span className="text-xs text-gray-400">
             ⌘+Enter to run
           </span>
         </div>
       </div>
+      
+      {/* Connection Modal */}
+      <ConnectionModal
+        isOpen={showConnectionModal}
+        onClose={() => setShowConnectionModal(false)}
+        onConnect={handleConnectionSuccess}
+        currentStatus={connectionStatus}
+      />
       
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
