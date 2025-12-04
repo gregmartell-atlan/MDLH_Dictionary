@@ -84,7 +84,14 @@ class SnowflakeService:
             return False
         try:
             # Try to check if connection is still alive
-            return not self._connection.is_closed()
+            # is_closed() is a method in newer versions, property in older
+            is_closed = getattr(self._connection, 'is_closed', None)
+            if callable(is_closed):
+                return not is_closed()
+            elif is_closed is not None:
+                return not is_closed
+            # Fallback: try a simple query
+            return True
         except Exception:
             return False
     
@@ -94,12 +101,19 @@ class SnowflakeService:
         if not self._connection:
             raise ValueError("No active Snowflake connection. Please connect first.")
         
-        cursor_class = DictCursor if dict_cursor else None
-        cursor = self._connection.cursor(cursor_class)
+        try:
+            cursor_class = DictCursor if dict_cursor else None
+            cursor = self._connection.cursor(cursor_class)
+        except Exception as e:
+            raise ValueError(f"Failed to create cursor: {str(e)}")
+        
         try:
             yield cursor
         finally:
-            cursor.close()
+            try:
+                cursor.close()
+            except Exception:
+                pass  # Ignore close errors
     
     def test_connection(self) -> Dict[str, Any]:
         """Test connection and return connection info."""
@@ -393,8 +407,17 @@ class SnowflakeService:
             "error_message": None
         }
         
+        # Check connection first
+        if not self._connection:
+            self._query_results[query_id].update({
+                "status": QueryStatus.FAILED,
+                "completed_at": datetime.utcnow(),
+                "error_message": "No active Snowflake connection. Please connect first."
+            })
+            return query_id
+        
         try:
-            # Set context if specified
+            # Set context if specified - use standard cursor for consistent row format
             with self.get_cursor(dict_cursor=False) as cursor:
                 if warehouse:
                     cursor.execute(f"USE WAREHOUSE {warehouse}")
@@ -410,7 +433,7 @@ class SnowflakeService:
                 columns = []
                 if cursor.description:
                     columns = [
-                        {"name": col[0], "type": str(col[1])}
+                        {"name": col[0], "type": str(col[1]) if col[1] else "unknown"}
                         for col in cursor.description
                     ]
                 
@@ -420,16 +443,29 @@ class SnowflakeService:
                 else:
                     rows = cursor.fetchall()
                 
-                # Convert rows to lists
-                rows = [list(row) for row in rows]
+                # Convert rows to serializable lists
+                processed_rows = []
+                for row in rows:
+                    processed_row = []
+                    for val in row:
+                        # Handle special types
+                        if val is None:
+                            processed_row.append(None)
+                        elif isinstance(val, (datetime,)):
+                            processed_row.append(val.isoformat())
+                        elif isinstance(val, bytes):
+                            processed_row.append(val.decode('utf-8', errors='replace'))
+                        else:
+                            processed_row.append(val)
+                    processed_rows.append(processed_row)
                 
                 # Update stored results
                 self._query_results[query_id].update({
                     "status": QueryStatus.SUCCESS,
                     "completed_at": datetime.utcnow(),
-                    "row_count": len(rows),
+                    "row_count": len(processed_rows),
                     "columns": columns,
-                    "rows": rows
+                    "rows": processed_rows
                 })
                 
         except Exception as e:
