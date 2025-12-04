@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command } from 'lucide-react';
+import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command, Terminal, Play } from 'lucide-react';
+import QueryEditor from './components/QueryEditor';
 
 const tabs = [
   { id: 'core', label: 'Core', icon: Table },
@@ -13,6 +14,7 @@ const tabs = [
   { id: 'orchestration', label: 'Orchestration', icon: Workflow },
   { id: 'governance', label: 'Governance', icon: Shield },
   { id: 'ai', label: 'AI/ML', icon: Bot },
+  { id: 'editor', label: 'Query Editor', icon: Terminal, isEditor: true },
 ];
 
 const data = {
@@ -946,7 +948,7 @@ function CellCopyButton({ text }) {
 }
 
 // Slide-out Query Panel
-function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery }) {
+function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery, onRunInEditor }) {
   const panelRef = useRef(null);
   const highlightedRef = useRef(null);
 
@@ -1029,6 +1031,7 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery 
                   description="Example query for this entity type" 
                   query={highlightedQuery} 
                   defaultExpanded={true}
+                  onRunInEditor={onRunInEditor}
                 />
               </div>
             </div>
@@ -1048,6 +1051,7 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery 
                       description={q.description} 
                       query={q.query} 
                       defaultExpanded={isHighlighted}
+                      onRunInEditor={onRunInEditor}
                     />
                   </div>
                 );
@@ -1066,7 +1070,7 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery 
   );
 }
 
-function QueryCard({ title, description, query, defaultExpanded = false }) {
+function QueryCard({ title, description, query, defaultExpanded = false, onRunInEditor }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   
   return (
@@ -1088,6 +1092,19 @@ function QueryCard({ title, description, query, defaultExpanded = false }) {
         </div>
         <div className="flex items-center gap-3">
           <CopyButton text={query} />
+          {onRunInEditor && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRunInEditor(query);
+              }}
+              className="flex items-center gap-1 px-2 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded text-xs font-medium"
+              title="Open in Query Editor"
+            >
+              <Play size={10} />
+              Run
+            </button>
+          )}
           <div className={`w-6 h-6 flex items-center justify-center rounded-full bg-gray-100 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}>
             <span className="text-gray-500 text-xs">▶</span>
           </div>
@@ -1125,6 +1142,7 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [showQueries, setShowQueries] = useState(false);
   const [highlightedQuery, setHighlightedQuery] = useState(null);
+  const [editorQuery, setEditorQuery] = useState('');
   const searchRef = useRef(null);
 
   // Keyboard shortcut: Cmd/Ctrl + K to focus search
@@ -1139,7 +1157,15 @@ export default function App() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const filteredData = data[activeTab].filter(row =>
+  // Function to open Query Editor with a specific query
+  const openInEditor = (query) => {
+    setEditorQuery(query);
+    setActiveTab('editor');
+    setShowQueries(false);
+  };
+
+  // Skip filtering for editor tab
+  const filteredData = activeTab === 'editor' ? [] : (data[activeTab] || []).filter(row =>
     Object.values(row).some(val => 
       val?.toString().toLowerCase().includes(search.toLowerCase())
     )
@@ -1331,75 +1357,83 @@ export default function App() {
             );
           })}
         </div>
-        <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50">
-                {columns[activeTab].map(col => (
-                  <th key={col} className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider">
-                    {colHeaders[col]}
-                  </th>
-                ))}
-                <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider w-24">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredData.length > 0 ? (
-                filteredData.map((row, i) => (
-                  <tr key={i} className="group hover:bg-blue-50/50 transition-colors duration-150">
-                    {columns[activeTab].map(col => (
-                      <td key={col} className="px-4 py-3 align-top">
-                        {col === 'entity' ? (
-                          <span className="inline-flex items-center">
-                            <span className="font-semibold text-[#3366FF]">{row[col]}</span>
-                            <CellCopyButton text={row[col]} />
-                          </span>
-                        ) : col === 'table' ? (
-                          <span className="inline-flex items-center">
-                            <span className="font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs">{row[col]}</span>
-                            {row[col] !== '(abstract)' && <CellCopyButton text={row[col]} />}
-                          </span>
-                        ) : col === 'exampleQuery' ? (
-                          <span className="inline-flex items-center">
-                            <code className="text-gray-600 bg-gray-100 px-2 py-0.5 rounded text-xs break-all">{row[col]}</code>
-                            {row[col] && <CellCopyButton text={row[col]} />}
-                          </span>
-                        ) : (
-                          <span className="text-gray-600">{row[col]}</span>
-                        )}
-                      </td>
-                    ))}
-                    <td className="px-4 py-3 align-top">
-                      <PlayQueryButton 
-                        hasQuery={hasQueryForEntity(row.entity, row.table, row.exampleQuery)}
-                        onClick={() => openQueryForEntity(row.entity, row.table, row.exampleQuery)}
-                      />
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={columns[activeTab].length + 1} className="px-4 py-12 text-center">
-                    <Search size={32} className="mx-auto text-gray-300 mb-2" />
-                    <p className="text-gray-600 font-medium">No results found</p>
-                    <p className="text-gray-400 text-xs mt-1">Try adjusting your search terms</p>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
 
-        <div className="mt-4 flex items-center justify-between">
-          <p className="text-sm text-gray-500">
-            Showing <span className="text-gray-900 font-medium">{filteredData.length}</span> of <span className="text-gray-900 font-medium">{data[activeTab].length}</span> entities in <span className="text-[#3366FF] font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
-          </p>
-          <p className="text-sm text-gray-400">
-            Press <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600 font-mono text-xs">⌘K</kbd> to search • Click <span className="text-[#3366FF]">Query</span> buttons for SQL examples
-          </p>
-        </div>
+        {/* Conditional Content: Query Editor or Data Table */}
+        {activeTab === 'editor' ? (
+          <QueryEditor initialQuery={editorQuery} />
+        ) : (
+          <>
+            <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50">
+                    {columns[activeTab]?.map(col => (
+                      <th key={col} className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider">
+                        {colHeaders[col]}
+                      </th>
+                    ))}
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider w-24">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredData.length > 0 ? (
+                    filteredData.map((row, i) => (
+                      <tr key={i} className="group hover:bg-blue-50/50 transition-colors duration-150">
+                        {columns[activeTab]?.map(col => (
+                          <td key={col} className="px-4 py-3 align-top">
+                            {col === 'entity' ? (
+                              <span className="inline-flex items-center">
+                                <span className="font-semibold text-[#3366FF]">{row[col]}</span>
+                                <CellCopyButton text={row[col]} />
+                              </span>
+                            ) : col === 'table' ? (
+                              <span className="inline-flex items-center">
+                                <span className="font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs">{row[col]}</span>
+                                {row[col] !== '(abstract)' && <CellCopyButton text={row[col]} />}
+                              </span>
+                            ) : col === 'exampleQuery' ? (
+                              <span className="inline-flex items-center">
+                                <code className="text-gray-600 bg-gray-100 px-2 py-0.5 rounded text-xs break-all">{row[col]}</code>
+                                {row[col] && <CellCopyButton text={row[col]} />}
+                              </span>
+                            ) : (
+                              <span className="text-gray-600">{row[col]}</span>
+                            )}
+                          </td>
+                        ))}
+                        <td className="px-4 py-3 align-top">
+                          <PlayQueryButton 
+                            hasQuery={hasQueryForEntity(row.entity, row.table, row.exampleQuery)}
+                            onClick={() => openQueryForEntity(row.entity, row.table, row.exampleQuery)}
+                          />
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={(columns[activeTab]?.length || 0) + 1} className="px-4 py-12 text-center">
+                        <Search size={32} className="mx-auto text-gray-300 mb-2" />
+                        <p className="text-gray-600 font-medium">No results found</p>
+                        <p className="text-gray-400 text-xs mt-1">Try adjusting your search terms</p>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 flex items-center justify-between">
+              <p className="text-sm text-gray-500">
+                Showing <span className="text-gray-900 font-medium">{filteredData.length}</span> of <span className="text-gray-900 font-medium">{data[activeTab]?.length || 0}</span> entities in <span className="text-[#3366FF] font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
+              </p>
+              <p className="text-sm text-gray-400">
+                Press <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600 font-mono text-xs">⌘K</kbd> to search • Click <span className="text-[#3366FF]">Query</span> buttons for SQL examples
+              </p>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Query Side Panel */}
@@ -1412,6 +1446,7 @@ export default function App() {
         queries={filteredQueries}
         categoryLabel={tabs.find(t => t.id === activeTab)?.label}
         highlightedQuery={highlightedQuery}
+        onRunInEditor={openInEditor}
       />
     </div>
   );

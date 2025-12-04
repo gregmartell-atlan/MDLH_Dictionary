@@ -1,0 +1,111 @@
+"""Query execution endpoints."""
+
+from fastapi import APIRouter, HTTPException, Query as QueryParam
+from typing import Optional
+from app.models.schemas import (
+    QueryRequest, QuerySubmitResponse, QueryStatusResponse,
+    QueryResultsResponse, QueryHistoryResponse, QueryHistoryItem,
+    QueryStatus
+)
+from app.services import snowflake_service
+from app.database import query_history_db
+
+router = APIRouter(prefix="/api/query", tags=["query"])
+
+
+@router.post("/execute", response_model=QuerySubmitResponse)
+async def execute_query(request: QueryRequest):
+    """Submit a SQL query for execution."""
+    if not request.sql or not request.sql.strip():
+        raise HTTPException(status_code=400, detail="SQL query cannot be empty")
+    
+    try:
+        query_id = snowflake_service.execute_query(
+            sql=request.sql,
+            database=request.database,
+            schema=request.schema_name,
+            warehouse=request.warehouse,
+            timeout=request.timeout,
+            limit=request.limit
+        )
+        
+        # Get status to return
+        status_info = snowflake_service.get_query_status(query_id)
+        
+        # Store in history
+        query_history_db.add_query(
+            query_id=query_id,
+            sql=request.sql,
+            database=request.database,
+            schema=request.schema_name,
+            warehouse=request.warehouse,
+            status=status_info["status"],
+            row_count=status_info.get("row_count"),
+            error_message=status_info.get("error_message"),
+            started_at=status_info.get("started_at"),
+            completed_at=status_info.get("completed_at"),
+            duration_ms=status_info.get("execution_time_ms")
+        )
+        
+        return QuerySubmitResponse(
+            query_id=query_id,
+            status=status_info["status"],
+            message="Query executed" if status_info["status"] == QueryStatus.SUCCESS else "Query failed"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{query_id}/status", response_model=QueryStatusResponse)
+async def get_query_status(query_id: str):
+    """Get the status of a query."""
+    status = snowflake_service.get_query_status(query_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Query not found")
+    return QueryStatusResponse(**status)
+
+
+@router.get("/{query_id}/results", response_model=QueryResultsResponse)
+async def get_query_results(
+    query_id: str,
+    page: int = QueryParam(1, ge=1, description="Page number"),
+    page_size: int = QueryParam(100, ge=1, le=1000, description="Results per page")
+):
+    """Get paginated results for a completed query."""
+    results = snowflake_service.get_query_results(query_id, page, page_size)
+    if not results:
+        raise HTTPException(status_code=404, detail="Query results not found or query not completed")
+    return QueryResultsResponse(**results)
+
+
+@router.post("/{query_id}/cancel")
+async def cancel_query(query_id: str):
+    """Cancel a running query."""
+    success = snowflake_service.cancel_query(query_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Query cannot be cancelled (not running or not found)")
+    return {"message": "Query cancelled", "query_id": query_id}
+
+
+@router.get("/history", response_model=QueryHistoryResponse)
+async def get_query_history(
+    limit: int = QueryParam(50, ge=1, le=200, description="Number of queries to return"),
+    offset: int = QueryParam(0, ge=0, description="Offset for pagination"),
+    status: Optional[str] = QueryParam(None, description="Filter by status")
+):
+    """Get query execution history."""
+    items, total = query_history_db.get_history(limit, offset, status)
+    return QueryHistoryResponse(
+        items=[QueryHistoryItem(**item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset
+    )
+
+
+@router.delete("/history")
+async def clear_query_history():
+    """Clear all query history."""
+    query_history_db.clear_history()
+    return {"message": "Query history cleared"}
+
