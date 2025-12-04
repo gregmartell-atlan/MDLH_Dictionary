@@ -92,7 +92,7 @@ class SnowflakeService:
     def get_cursor(self, dict_cursor: bool = True):
         """Get a database cursor with automatic cleanup."""
         if not self._connection:
-            self.connect()
+            raise ValueError("No active Snowflake connection. Please connect first.")
         
         cursor_class = DictCursor if dict_cursor else None
         cursor = self._connection.cursor(cursor_class)

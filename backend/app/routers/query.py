@@ -19,6 +19,13 @@ async def execute_query(request: QueryRequest):
     if not request.sql or not request.sql.strip():
         raise HTTPException(status_code=400, detail="SQL query cannot be empty")
     
+    # Check for active connection first
+    if not snowflake_service.is_connected():
+        raise HTTPException(
+            status_code=400, 
+            detail="Not connected to Snowflake. Please configure your connection first using the 'Configure Connection' button."
+        )
+    
     try:
         query_id = snowflake_service.execute_query(
             sql=request.sql,
