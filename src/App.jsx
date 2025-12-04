@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command } from 'lucide-react';
 
 const tabs = [
   { id: 'core', label: 'Core', icon: Table },
@@ -129,34 +129,23 @@ const data = {
 const exampleQueries = {
   core: [
     {
-      title: 'Connect to MDLH Database',
-      description: 'First step: Select your MDLH database environment',
-      query: `USE <DATABASE>;
-
--- Example environments:
--- USE FIELD_METADATA;      -- For atlan.atlan.com
--- USE MDLH_GOVERNANCE;     -- For demo-governance.atlan.com
--- USE MDLH_ATLAN_HOME;     -- For home tenant`
-    },
-    {
       title: 'List All MDLH Tables',
-      description: 'Discover all available entity tables in the lakehouse',
-      query: `-- List all tables in MDLH
-SHOW TABLES;`
-    },
-    {
-      title: 'Explore TABLE_ENTITY',
-      description: 'View sample metadata about Table entities in your Atlan tenant',
-      query: `-- The TABLE_ENTITY table contains metadata about all Table entities
-SELECT *
-FROM TABLE_ENTITY
-LIMIT 10;`
+      description: 'Discover available entity tables in the lakehouse',
+      query: `SHOW TABLES;`
     },
     {
       title: 'Explore Catalog Integrations',
       description: 'View configured catalog integrations',
       query: `SHOW CATALOG INTEGRATIONS;
 DESCRIBE CATALOG INTEGRATION <integration_name>;`
+    },
+    {
+      title: 'Switch MDLH Environment',
+      description: 'Select which MDLH database to query',
+      query: `-- Choose your MDLH environment
+USE FIELD_METADATA;      -- For atlan.atlan.com
+USE MDLH_GOVERNANCE;     -- For demo-governance.atlan.com
+USE MDLH_ATLAN_HOME;     -- For home tenant`
     },
     {
       title: 'Time Travel Query',
@@ -339,11 +328,9 @@ FROM ATLASGLOSSARY_ENTITY;
 -- You'll use it in subsequent queries with ARRAY_CONTAINS`
     },
     {
-      title: 'List Glossary Terms and Categories',
+      title: 'Terms with Categories (Full Detail)',
       description: 'List glossary terms with their parent glossaries and categories resolved to names',
-      query: `/*
-List Glossary terms and categories 
-*/
+      query: `-- Comprehensive query to resolve term relationships
 WITH glossary_lookup AS (
     SELECT GUID AS glossary_guid, NAME AS glossary_name
     FROM GLOSSARY_ENTITY
@@ -353,52 +340,41 @@ category_lookup AS (
     FROM GLOSSARYCATEGORY_ENTITY
 ),
 term_anchors AS (
-    SELECT
-        TERM.GUID AS term_guid,
-        anchor_elem.value::STRING AS glossary_guid
+    SELECT TERM.GUID AS term_guid,
+           anchor_elem.value::STRING AS glossary_guid
     FROM GLOSSARYTERM_ENTITY TERM,
          LATERAL FLATTEN(input => TERM.ANCHOR) AS anchor_elem
 ),
 term_categories AS (
-    SELECT
-        TERM.GUID AS term_guid,
-        category_elem.value::STRING AS category_guid
+    SELECT TERM.GUID AS term_guid,
+           category_elem.value::STRING AS category_guid
     FROM GLOSSARYTERM_ENTITY TERM,
          LATERAL FLATTEN(input => TERM.CATEGORIES) AS category_elem
 ),
 term_glossary_names AS (
-    SELECT
-        TA.term_guid,
-        LISTAGG(GL.glossary_name, ', ') WITHIN GROUP (ORDER BY GL.glossary_name) AS glossaries
+    SELECT TA.term_guid,
+           LISTAGG(GL.glossary_name, ', ') WITHIN GROUP (ORDER BY GL.glossary_name) AS glossaries
     FROM term_anchors TA
-    LEFT JOIN glossary_lookup GL
-      ON TA.glossary_guid = GL.glossary_guid
+    LEFT JOIN glossary_lookup GL ON TA.glossary_guid = GL.glossary_guid
     GROUP BY TA.term_guid
 ),
 term_category_names AS (
-    SELECT
-        TC.term_guid,
-        LISTAGG(CL.category_name, ', ') WITHIN GROUP (ORDER BY CL.category_name) AS categories
+    SELECT TC.term_guid,
+           LISTAGG(CL.category_name, ', ') WITHIN GROUP (ORDER BY CL.category_name) AS categories
     FROM term_categories TC
-    LEFT JOIN category_lookup CL
-      ON TC.category_guid = CL.category_guid
+    LEFT JOIN category_lookup CL ON TC.category_guid = CL.category_guid
     GROUP BY TC.term_guid
 )
 SELECT
     T.NAME,
-    T.CATEGORIES AS TERM_CATEGORIES_ARRAY,
     T.USERDESCRIPTION,
-    --T.README,
-    --T.ANCHOR,
     TG.glossaries AS GLOSSARIES,
     TC.categories AS CATEGORIES,
-    T.GUID,
+    T.GUID
 FROM GLOSSARYTERM_ENTITY T
-LEFT JOIN term_glossary_names TG
-       ON T.GUID = TG.term_guid
-LEFT JOIN term_category_names TC
-       ON T.GUID = TC.term_guid
-LIMIT 10;`
+LEFT JOIN term_glossary_names TG ON T.GUID = TG.term_guid
+LEFT JOIN term_category_names TC ON T.GUID = TC.term_guid
+LIMIT 100;`
     },
     {
       title: 'Terms by Glossary GUID',
@@ -513,38 +489,11 @@ LIMIT 100;`
     {
       title: 'Full Column Metadata Export',
       description: 'Comprehensive column-level metadata with tags and custom metadata as JSON arrays',
-      query: `/*
-List all Columns with important attributes like description, tags, custom metadata
-
-1. FILTERED_COLUMNS CTE
-- Picks only COLUMN_ENTITY rows for glue or snowflake.
-- Used to filter CM and Tag relationships so only relevant metadata is aggregated.
-
-2. CM_AGG CTE
-- Aggregates all custom metadata for each column into a JSON array as column <> cm is a 1:many relationship
-- Uses OBJECT_CONSTRUCT('name', ..., 'value', ...) for structured key-value objects.
-- LISTAGG combines multiple rows into a single JSON string.
-
-3. TR_AGG CTE
-- Same as CM_AGG but for tags.
-- Produces a JSON array of {name, value} objects per column.
-
-4. Main SELECT
-- Selects all column-level attributes (COL_) and joins CM_AGG and TR_AGG on GUID.
-- Result: Each row is a column, with tags and custom metadata as JSON arrays.
-*/
--- =========================================
--- Column-Level Metadata Query for Snowflake/Glue
--- Includes aggregated Custom Metadata and Tags as JSON
--- =========================================
+      query: `-- Column-Level Metadata Query with Aggregated Custom Metadata and Tags
 WITH FILTERED_COLUMNS AS (
-    -- Filter only relevant columns
-    SELECT
-        GUID
-    FROM
-        COLUMN_ENTITY
-    WHERE
-        CONNECTORNAME IN ('glue', 'snowflake')
+    SELECT GUID
+    FROM COLUMN_ENTITY
+    WHERE CONNECTORNAME IN ('glue', 'snowflake')
 ),
 -- Aggregate Custom Metadata for each column as JSON
 CM_AGG AS (
@@ -552,198 +501,54 @@ CM_AGG AS (
         CM.ENTITYGUID,
         ARRAY_AGG(
             DISTINCT OBJECT_CONSTRUCT(
-                'set_name',
-                SETDISPLAYNAME,
-                'field_name',
-                ATTRIBUTEDISPLAYNAME,
-                'field_value',
-                ATTRIBUTEVALUE
+                'set_name', SETDISPLAYNAME,
+                'field_name', ATTRIBUTEDISPLAYNAME,
+                'field_value', ATTRIBUTEVALUE
             )
         ) AS CUSTOM_METADATA_JSON
-    FROM
-        CUSTOMMETADATA_RELATIONSHIP CM
-        JOIN FILTERED_COLUMNS FC ON CM.ENTITYGUID = FC.GUID
-    GROUP BY
-        CM.ENTITYGUID
+    FROM CUSTOMMETADATA_RELATIONSHIP CM
+    JOIN FILTERED_COLUMNS FC ON CM.ENTITYGUID = FC.GUID
+    GROUP BY CM.ENTITYGUID
 ),
 -- Aggregate Tags for each column as JSON
 TR_AGG AS (
     SELECT
         TR.ENTITYGUID,
         '[' || LISTAGG(
-            OBJECT_CONSTRUCT('name', TR.TAGNAME, 'value', TR.TAGVALUE)::STRING,
-            ','
-        ) WITHIN GROUP (
-            ORDER BY
-                TR.TAGNAME
-        ) || ']' AS TAG_JSON
-    FROM
-        TAG_RELATIONSHIP TR
-        JOIN FILTERED_COLUMNS FC ON TR.ENTITYGUID = FC.GUID
-    GROUP BY
-        TR.ENTITYGUID
+            OBJECT_CONSTRUCT('name', TR.TAGNAME, 'value', TR.TAGVALUE)::STRING, ','
+        ) WITHIN GROUP (ORDER BY TR.TAGNAME) || ']' AS TAG_JSON
+    FROM TAG_RELATIONSHIP TR
+    JOIN FILTERED_COLUMNS FC ON TR.ENTITYGUID = FC.GUID
+    GROUP BY TR.ENTITYGUID
 )
 SELECT
-    -- =========================================
-    -- ASSET IDENTIFIERS
-    -- =========================================
+    -- Asset Identifiers
     COL.NAME AS COL_NAME,
     COL.QUALIFIEDNAME AS COL_QUALIFIEDNAME,
     COL.GUID AS COL_GUID,
-    COL.DISPLAYNAME AS COL_DISPLAYNAME,
     COL.DESCRIPTION AS COL_DESCRIPTION,
     COL.USERDESCRIPTION AS COL_USERDESCRIPTION,
-    COL.CONNECTORNAME AS COL_CONNECTORNAME,
-    COL.CONNECTIONNAME AS COL_CONNECTIONNAME,
-    COL.CONNECTIONQUALIFIEDNAME AS COL_CONNECTIONQUALIFIEDNAME,
-    COL.DATABASENAME AS COL_DATABASENAME,
-    COL.DATABASEQUALIFIEDNAME AS COL_DATABASEQUALIFIEDNAME,
-    COL.SCHEMANAME AS COL_SCHEMANAME,
-    COL.SCHEMAQUALIFIEDNAME AS COL_SCHEMAQUALIFIEDNAME,
-    COL."TABLE" AS COL_TABLE,
-    COL.TABLENAME AS COL_TABLENAME,
-    COL.TABLEQUALIFIEDNAME AS COL_TABLEQUALIFIEDNAME,
-    -- =========================================
-    -- SOURCE SPECIFIC ATTRIBUTES
-    -- =========================================
-    COL.TYPENAME AS COL_TYPENAME,
-    COL.DATATYPE AS COL_DATATYPE,
-    COL.SUBDATATYPE AS COL_SUBDATATYPE,
+    COL.CONNECTORNAME, COL.CONNECTIONNAME,
+    COL.DATABASENAME, COL.SCHEMANAME, COL.TABLENAME,
+    -- Source Attributes
+    COL.DATATYPE, COL.SUBDATATYPE,
     COL."ORDER" AS COL_ORDER,
-    COL.ISPARTITION AS COL_ISPARTITION,
-    COL.PARTITIONORDER AS COL_PARTITIONORDER,
-    COL.ISPRIMARY AS COL_ISPRIMARY,
-    COL.PRECISION AS COL_PRECISION,
-    COL.ISNULLABLE AS COL_ISNULLABLE,
-    COL.MAXLENGTH AS COL_MAXLENGTH,
-    COL.SOURCEOWNERS AS COL_SOURCEOWNERS,
-    COL.SOURCECREATEDBY AS COL_SOURCECREATEDBY,
-    COL.SOURCECREATEDAT AS COL_SOURCECREATEDAT,
-    COL.SOURCEUPDATEDAT AS COL_SOURCEUPDATEDAT,
-    COL.SOURCEUPDATEDBY AS COL_SOURCEUPDATEDBY,
-    COL.SOURCEURL AS COL_SOURCEURL,
-    COL.SOURCEEMBEDURL AS COL_SOURCEEMBEDURL,
-    COL.SOURCEREADCOUNT AS COL_SOURCEREADCOUNT,
-    COL.SOURCEREADUSERCOUNT AS COL_SOURCEREADUSERCOUNT,
-    COL.SOURCELASTREADAT AS COL_SOURCELASTREADAT,
-    COL.LASTROWCHANGEDAT AS COL_LASTROWCHANGEDAT,
-    -- =========================================
-    -- ATLAN SPECIFIC OPERATIONAL METRICS
-    -- =========================================
-    COL.CREATETIME AS COL_CREATETIME,
-    COL.UPDATETIME AS COL_UPDATETIME,
-    COL.CREATEDBY AS COL_CREATEDBY,
-    COL.UPDATEDBY AS COL_UPDATEDBY,
-    COL.STATUS AS COL_STATUS,
-    COL.VIEWNAME AS COL_VIEWNAME,
-    COL.VIEWQUALIFIEDNAME AS COL_VIEWQUALIFIEDNAME,
-    COL.CALCULATIONVIEWNAME AS COL_CALCULATIONVIEWNAME,
-    COL.CALCULATIONVIEWQUALIFIEDNAME AS COL_CALCULATIONVIEWQUALIFIEDNAME,
-    COL.TENANTID AS COL_TENANTID,
-    COL.HASLINEAGE AS COL_HASLINEAGE,
-    COL.ISDISCOVERABLE AS COL_ISDISCOVERABLE,
-    COL.ISEDITABLE AS COL_ISEDITABLE,
-    COL.LASTSYNCWORKFLOWNAME AS COL_LASTSYNCWORKFLOWNAME,
-    COL.LASTSYNCRUNAT AS COL_LASTSYNCRUNAT,
-    COL.LASTSYNCRUN AS COL_LASTSYNCRUN,
-    COL.MATERIALISEDVIEW AS COL_MATERIALISEDVIEW,
-    COL.README AS COL_README,
-    COL."QUERIES" AS COL_QUERIES,
-    COL.METRICTIMESTAMPS AS COL_METRICTIMESTAMPS,
-    COL.MEANINGS AS COL_MEANINGS,
-    COL.FOREIGNKEYTO AS COL_FOREIGNKEYTO,
-    COL.TABLEPARTITION AS COL_TABLEPARTITION,
-    COL.INPUTTOPROCESSES AS COL_INPUTTOPROCESSES,
-    COL.OUTPUTFROMPROCESSES AS COL_OUTPUTFROMPROCESSES,
-    -- =========================================
-    -- TAGS
-    -- =========================================
-    TR_AGG.TAG_JSON AS COL_TAG_JSON,
-    -- =========================================
-    -- CUSTOM METADATA
-    -- =========================================
-    CM_AGG.CUSTOM_METADATA_JSON AS COL_CUSTOM_METADATA_JSON,
-    -- =========================================
-    -- ATLAN ENRICHMENT ATTRIBUTES
-    -- =========================================
-    COL.CERTIFICATESTATUS AS COL_CERTIFICATESTATUS,
-    COL.CERTIFICATESTATUSMESSAGE AS COL_CERTIFICATESTATUSMESSAGE,
-    COL.CERTIFICATEUPDATEDBY AS COL_CERTIFICATEUPDATEDBY,
-    COL.CERTIFICATEUPDATEDAT AS COL_CERTIFICATEUPDATEDAT,
-    COL.ANNOUNCEMENTTITLE AS COL_ANNOUNCEMENTTITLE,
-    COL.ANNOUNCEMENTMESSAGE AS COL_ANNOUNCEMENTMESSAGE,
-    COL.ANNOUNCEMENTTYPE AS COL_ANNOUNCEMENTTYPE,
-    COL.ANNOUNCEMENTUPDATEDAT AS COL_ANNOUNCEMENTUPDATEDAT,
-    COL.ANNOUNCEMENTUPDATEDBY AS COL_ANNOUNCEMENTUPDATEDBY,
-    COL.LINKS AS COL_LINKS,
-    -- =========================================
-    -- PERMISSIONS SPECIFIC
-    -- =========================================
-    COL.OWNERUSERS AS COL_OWNERUSERS,
-    COL.OWNERGROUPS AS COL_OWNERGROUPS,
-    COL.ADMINUSERS AS COL_ADMINUSERS,
-    COL.ADMINROLES AS COL_ADMINROLES,
-    COL.ADMINGROUPS AS COL_ADMINGROUPS,
-    COL.VIEWERUSERS AS COL_VIEWERUSERS,
-    COL.VIEWERGROUPS AS COL_VIEWERGROUPS,
-    -- =========================================
-    -- DATA PRODUCTS RELATED
-    -- =========================================
-    COL.DOMAINGUIDS AS COL_DOMAINGUIDS,
-    COL.PRODUCTGUIDS AS COL_PRODUCTGUIDS,
-    COL.INPUTPORTDATAPRODUCTS AS COL_INPUTPORTDATAPRODUCTS,
-    COL.OUTPUTPRODUCTGUIDS AS COL_OUTPUTPRODUCTGUIDS,
-    -- =========================================
-    -- ATLAN POPULARITY METRICS
-    -- =========================================
-    COL.QUERYCOUNT AS COL_QUERYCOUNT,
-    COL.QUERYUSERCOUNT AS COL_QUERYUSERCOUNT,
-    COL.QUERYCOUNTUPDATEDAT AS COL_QUERYCOUNTUPDATEDAT,
-    COL.VIEWSCORE AS COL_VIEWSCORE,
-    COL.POPULARITYSCORE AS COL_POPULARITYSCORE,
-    COL.SOURCETOTALCOST AS COL_SOURCETOTALCOST,
-    COL.SOURCECOSTUNIT AS COL_SOURCECOSTUNIT,
-    COL.SOURCEREADQUERYCOST AS COL_SOURCEREADQUERYCOST,
-    COL.SOURCEREADRECENTUSERLIST AS COL_SOURCEREADRECENTUSERLIST,
-    COL.SOURCEREADTOPUSERLIST AS COL_SOURCEREADTOPUSERLIST,
-    COL.SOURCEQUERYCOMPUTECOSTLIST AS COL_SOURCEQUERYCOMPUTECOSTLIST,
-    -- =========================================
-    -- PROFILING METRICS
-    -- =========================================
-    COL.ISPROFILED AS COL_ISPROFILED,
-    COL.LASTPROFILEDAT AS COL_LASTPROFILEDAT,
-    COL.COLUMNDISTINCTVALUESCOUNT AS COL_COLUMNDISTINCTVALUESCOUNT,
-    COL.COLUMNDISTINCTVALUESCOUNTLONG AS COL_COLUMNDISTINCTVALUESCOUNTLONG,
-    COL.COLUMNMAX AS COL_COLUMNMAX,
-    COL.COLUMNMIN AS COL_COLUMNMIN,
-    COL.COLUMNMEAN AS COL_COLUMNMEAN,
-    COL.COLUMNSUM AS COL_COLUMNSUM,
-    COL.COLUMNMEDIAN AS COL_COLUMNMEDIAN,
-    COL.COLUMNSTANDARDDEVIATION AS COL_COLUMNSTANDARDDEVIATION,
-    COL.COLUMNUNIQUEVALUESCOUNT AS COL_COLUMNUNIQUEVALUESCOUNT,
-    COL.COLUMNUNIQUEVALUESCOUNTLONG AS COL_COLUMNUNIQUEVALUESCOUNTLONG,
-    COL.COLUMNAVERAGE AS COL_COLUMNAVERAGE,
-    COL.COLUMNAVERAGELENGTH AS COL_COLUMNAVERAGELENGTH,
-    COL.COLUMNDUPLICATEVALUESCOUNT AS COL_COLUMNDUPLICATEVALUESCOUNT,
-    COL.COLUMNDUPLICATEVALUESCOUNTLONG AS COL_COLUMNDUPLICATEVALUESCOUNTLONG,
-    COL.COLUMNMAXIMUMSTRINGLENGTH AS COL_COLUMNMAXIMUMSTRINGLENGTH,
-    COL.COLUMNMAXS AS COL_COLUMNMAXS,
-    COL.COLUMNMINIMUMSTRINGLENGTH AS COL_COLUMNMINIMUMSTRINGLENGTH,
-    COL.COLUMNMINS AS COL_COLUMNMINS,
-    COL.COLUMNMISSINGVALUESCOUNT AS COL_COLUMNMISSINGVALUESCOUNT,
-    COL.COLUMNMISSINGVALUESCOUNTLONG AS COL_COLUMNMISSINGVALUESCOUNTLONG,
-    COL.COLUMNMISSINGVALUESPERCENTAGE AS COL_COLUMNMISSINGVALUESPERCENTAGE,
-    COL.COLUMNUNIQUENESSPERCENTAGE AS COL_COLUMNUNIQUENESSPERCENTAGE,
-    COL.COLUMNVARIANCE AS COL_COLUMNVARIANCE,
-    COL.COLUMNDEPTHLEVEL AS COL_COLUMNDEPTHLEVEL
-FROM
-    COLUMN_ENTITY COL
-    LEFT JOIN CM_AGG ON COL.GUID = CM_AGG.ENTITYGUID
-    LEFT JOIN TR_AGG ON COL.GUID = TR_AGG.ENTITYGUID
-WHERE
-    COL.CONNECTORNAME IN ('glue', 'snowflake')
-LIMIT
-    100;`
+    COL.ISPARTITION, COL.ISPRIMARY, COL.ISNULLABLE,
+    COL.PRECISION, COL.MAXLENGTH,
+    -- Atlan Metrics
+    COL.STATUS, COL.HASLINEAGE, COL.POPULARITYSCORE,
+    COL.QUERYCOUNT, COL.QUERYUSERCOUNT,
+    -- Tags & Custom Metadata
+    TR_AGG.TAG_JSON AS COL_TAGS,
+    CM_AGG.CUSTOM_METADATA_JSON AS COL_CUSTOM_METADATA,
+    -- Enrichment
+    COL.CERTIFICATESTATUS, COL.MEANINGS,
+    COL.OWNERUSERS, COL.OWNERGROUPS
+FROM COLUMN_ENTITY COL
+LEFT JOIN CM_AGG ON COL.GUID = CM_AGG.ENTITYGUID
+LEFT JOIN TR_AGG ON COL.GUID = TR_AGG.ENTITYGUID
+WHERE COL.CONNECTORNAME IN ('glue', 'snowflake')
+LIMIT 100;`
     },
     {
       title: 'Tables Without Descriptions',
@@ -783,24 +588,18 @@ ORDER BY QUERYCOUNT DESC
 LIMIT 20;`
     },
     {
-      title: 'Popularity Analysis: Frequent Column Updaters',
+      title: 'Frequent Column Updaters',
       description: 'Find users who update columns most frequently - useful for identifying power users',
-      query: `/*
-Use Case: Popularity Analysis
-
-For example, here's a query that shows the users who update Columns most frequently in Atlan:
-*/
-
+      query: `-- POPULARITY ANALYSIS
+-- Shows users who update Columns most frequently in Atlan
+-- Useful for identifying power users and data stewards
 SELECT
   UPDATEDBY,
   TO_TIMESTAMP(MAX(UPDATETIME)/1000) AS LASTUPDATE,
   COUNT(*) AS UPDATECOUNT
-FROM
-  COLUMN_ENTITY
-GROUP BY
-  UPDATEDBY
-ORDER BY
-  UPDATECOUNT DESC;`
+FROM COLUMN_ENTITY
+GROUP BY UPDATEDBY
+ORDER BY UPDATECOUNT DESC;`
     },
     {
       title: 'Table-Column Join',
@@ -981,21 +780,17 @@ GROUP BY TAGNAME
 ORDER BY usage_count DESC;`
     },
     {
-      title: 'List Assets with Tags',
-      description: 'List all tables with their assigned classification tags',
-      query: `/*
-List assets with tags
-*/
+      title: 'Tagged Tables',
+      description: 'List all tables with their assigned tags',
+      query: `-- Get all tables that have tags and their tag names
+-- Useful for auditing tag coverage
 SELECT
   TB.GUID,
-  TB.NAME TABLENAME,
+  TB.NAME AS TABLENAME,
   TG.TAGNAME
-FROM
-  TABLE_ENTITY TB
-  JOIN TAG_RELATIONSHIP TG
-  ON TB.GUID = TG.ENTITYGUID
-WHERE
-  TB.NAME IS NOT NULL;`
+FROM TABLE_ENTITY TB
+JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
+WHERE TB.NAME IS NOT NULL;`
     },
     {
       title: 'Untagged Tables (Compliance)',
@@ -1124,8 +919,135 @@ function CopyButton({ text }) {
   );
 }
 
-function QueryCard({ title, description, query }) {
-  const [expanded, setExpanded] = useState(false);
+// Inline copy button for table cells
+function CellCopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  
+  const handleCopy = async (e) => {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  
+  return (
+    <button
+      onClick={handleCopy}
+      className={`ml-1.5 opacity-0 group-hover:opacity-100 inline-flex items-center justify-center w-5 h-5 rounded transition-all duration-150 ${
+        copied 
+          ? 'bg-green-500 text-white' 
+          : 'bg-gray-200 hover:bg-[#3366FF] text-gray-500 hover:text-white'
+      }`}
+      title="Copy"
+    >
+      {copied ? <Check size={10} /> : <Copy size={10} />}
+    </button>
+  );
+}
+
+// Slide-out Query Panel
+function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery }) {
+  const panelRef = useRef(null);
+  const highlightedRef = useRef(null);
+
+  // Close on escape key
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
+
+  // Close on click outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (panelRef.current && !panelRef.current.contains(e.target) && isOpen) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen, onClose]);
+
+  // Scroll to highlighted query when panel opens
+  useEffect(() => {
+    if (isOpen && highlightedQuery && highlightedRef.current) {
+      setTimeout(() => {
+        highlightedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 350);
+    }
+  }, [isOpen, highlightedQuery]);
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div 
+        className={`fixed inset-0 bg-black/30 backdrop-blur-sm z-40 transition-opacity duration-300 ${
+          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      />
+      
+      {/* Panel */}
+      <div 
+        ref={panelRef}
+        className={`fixed top-0 right-0 h-full w-full max-w-2xl bg-white border-l border-gray-200 shadow-2xl z-50 transform transition-transform duration-300 ease-out ${
+          isOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
+        {/* Panel Header */}
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-[#3366FF]">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-lg">
+              <Code2 size={20} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-white">Example Queries</h2>
+              <p className="text-sm text-blue-100">{categoryLabel} • {queries.length} queries</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-white/20 text-white transition-colors"
+            title="Close (Esc)"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Panel Content */}
+        <div className="overflow-y-auto h-[calc(100%-80px)] p-4 space-y-3 bg-gray-50">
+          {queries.length > 0 ? (
+            queries.map((q, i) => {
+              const isHighlighted = highlightedQuery && q.query === highlightedQuery;
+              return (
+                <div key={i} ref={isHighlighted ? highlightedRef : null}>
+                  <QueryCard 
+                    title={q.title} 
+                    description={q.description} 
+                    query={q.query} 
+                    defaultExpanded={isHighlighted}
+                  />
+                </div>
+              );
+            })
+          ) : (
+            <div className="text-center py-16">
+              <Code2 size={48} className="mx-auto text-gray-300 mb-3" />
+              <p className="text-gray-600 font-medium">No queries available</p>
+              <p className="text-gray-400 text-sm mt-1">Queries for this category are coming soon</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function QueryCard({ title, description, query, defaultExpanded = false }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   
   return (
     <div className={`bg-white rounded-xl border overflow-hidden transition-all duration-200 ${
@@ -1162,10 +1084,40 @@ function QueryCard({ title, description, query }) {
   );
 }
 
+// Play button for running a query
+function PlayQueryButton({ onClick, hasQuery }) {
+  if (!hasQuery) return null;
+  
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-[#3366FF] hover:bg-blue-600 text-white transition-all duration-200 shadow-sm hover:shadow-md"
+      title="View query"
+    >
+      <Code2 size={12} />
+      <span>Query</span>
+    </button>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('core');
   const [search, setSearch] = useState('');
   const [showQueries, setShowQueries] = useState(false);
+  const [highlightedQuery, setHighlightedQuery] = useState(null);
+  const searchRef = useRef(null);
+
+  // Keyboard shortcut: Cmd/Ctrl + K to focus search
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const filteredData = data[activeTab].filter(row =>
     Object.values(row).some(val => 
@@ -1178,6 +1130,36 @@ export default function App() {
     q.description.toLowerCase().includes(search.toLowerCase()) ||
     q.query.toLowerCase().includes(search.toLowerCase())
   );
+
+  // Find a query related to an entity
+  const findQueryForEntity = (entityName, tableName) => {
+    const allQueries = exampleQueries[activeTab] || [];
+    // First try to find a query that mentions the entity or table name
+    const matchedQuery = allQueries.find(q => 
+      q.title.toLowerCase().includes(entityName.toLowerCase()) ||
+      q.query.toLowerCase().includes(tableName.toLowerCase()) ||
+      q.query.toLowerCase().includes(entityName.toLowerCase())
+    );
+    return matchedQuery?.query || null;
+  };
+
+  // Open panel with highlighted query
+  const openQueryForEntity = (entityName, tableName, exampleQuery) => {
+    // If entity has its own exampleQuery field, use that
+    if (exampleQuery) {
+      setHighlightedQuery(exampleQuery);
+    } else {
+      const query = findQueryForEntity(entityName, tableName);
+      setHighlightedQuery(query);
+    }
+    setShowQueries(true);
+  };
+
+  // Check if entity has a related query
+  const hasQueryForEntity = (entityName, tableName, exampleQuery) => {
+    if (exampleQuery) return true;
+    return findQueryForEntity(entityName, tableName) !== null;
+  };
 
   const downloadCSV = () => {
     const cols = columns[activeTab];
@@ -1213,20 +1195,28 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-white text-gray-900">
-      {/* Header Navigation Bar */}
-      <nav className="border-b border-gray-200 bg-white sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+      {/* Navigation Bar */}
+      <nav className="border-b border-gray-200 bg-white sticky top-0 z-30">
+        <div className="max-w-full mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-[#3366FF] font-bold text-xl">atlan</span>
           </div>
           <div className="flex items-center gap-3">
-            <input
-              type="text"
-              placeholder="Search"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-64 px-4 py-2 bg-white border border-gray-300 rounded-full text-sm focus:outline-none focus:border-[#3366FF] focus:ring-2 focus:ring-[#3366FF]/20 transition-all duration-200 placeholder-gray-400"
-            />
+            <div className="relative">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                ref={searchRef}
+                type="text"
+                placeholder="Search..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-64 pl-9 pr-16 py-2 bg-white border border-gray-300 rounded-full text-sm focus:outline-none focus:border-[#3366FF] focus:ring-2 focus:ring-[#3366FF]/20 transition-all duration-200 placeholder-gray-400"
+              />
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5 text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                <Command size={10} />
+                <span>K</span>
+              </div>
+            </div>
           </div>
         </div>
       </nav>
@@ -1244,14 +1234,14 @@ export default function App() {
           {/* Quick Action Buttons */}
           <div className="flex flex-wrap justify-center gap-3 mt-6">
             <button
-              onClick={() => setShowQueries(!showQueries)}
-              className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all duration-200 ${
-                showQueries 
-                  ? 'bg-white text-[#3366FF]' 
-                  : 'bg-white/20 text-white border border-white/30 hover:bg-white/30'
-              }`}
+              onClick={() => {
+                setHighlightedQuery(null);
+                setShowQueries(true);
+              }}
+              className="px-5 py-2.5 bg-white text-[#3366FF] rounded-full text-sm font-medium hover:bg-blue-50 transition-all duration-200 flex items-center gap-2"
             >
-              {showQueries ? 'Show Entities' : 'Show Queries'}
+              <Code2 size={16} />
+              View All Queries
             </button>
             <button
               onClick={downloadCSV}
@@ -1271,7 +1261,8 @@ export default function App() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
+      {/* Main Content */}
+      <div className="max-w-full mx-auto px-6 py-6">
         {/* Tab Navigation */}
         <div className="flex flex-wrap gap-2 mb-6 pb-4 border-b border-gray-200">
           {tabs.map(tab => {
@@ -1292,78 +1283,88 @@ export default function App() {
             );
           })}
         </div>
-
-        {!showQueries ? (
-          <>
-            <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50">
+        <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50">
+                {columns[activeTab].map(col => (
+                  <th key={col} className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider">
+                    {colHeaders[col]}
+                  </th>
+                ))}
+                <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider w-24">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {filteredData.length > 0 ? (
+                filteredData.map((row, i) => (
+                  <tr key={i} className="group hover:bg-blue-50/50 transition-colors duration-150">
                     {columns[activeTab].map(col => (
-                      <th key={col} className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider">
-                        {colHeaders[col]}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredData.map((row, i) => (
-                    <tr key={i} className="hover:bg-blue-50/50 transition-colors duration-150">
-                      {columns[activeTab].map(col => (
-                        <td key={col} className="px-4 py-3 align-top">
-                          {col === 'entity' ? (
+                      <td key={col} className="px-4 py-3 align-top">
+                        {col === 'entity' ? (
+                          <span className="inline-flex items-center">
                             <span className="font-semibold text-[#3366FF]">{row[col]}</span>
-                          ) : col === 'table' ? (
+                            <CellCopyButton text={row[col]} />
+                          </span>
+                        ) : col === 'table' ? (
+                          <span className="inline-flex items-center">
                             <span className="font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs">{row[col]}</span>
-                          ) : col === 'exampleQuery' ? (
+                            {row[col] !== '(abstract)' && <CellCopyButton text={row[col]} />}
+                          </span>
+                        ) : col === 'exampleQuery' ? (
+                          <span className="inline-flex items-center">
                             <code className="text-gray-600 bg-gray-100 px-2 py-0.5 rounded text-xs break-all">{row[col]}</code>
-                          ) : (
-                            <span className="text-gray-600">{row[col]}</span>
-                          )}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-5 flex items-center justify-between">
-              <p className="text-sm text-gray-500">
-                Showing <span className="text-gray-900 font-medium">{filteredData.length}</span> of <span className="text-gray-900 font-medium">{data[activeTab].length}</span> entities in <span className="text-[#3366FF] font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
-              </p>
-              <p className="text-sm text-gray-400">
-                Click "Show Queries" to see example SQL queries
-              </p>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="space-y-3">
-              {filteredQueries.length > 0 ? (
-                filteredQueries.map((q, i) => (
-                  <QueryCard key={i} title={q.title} description={q.description} query={q.query} />
+                            {row[col] && <CellCopyButton text={row[col]} />}
+                          </span>
+                        ) : (
+                          <span className="text-gray-600">{row[col]}</span>
+                        )}
+                      </td>
+                    ))}
+                    <td className="px-4 py-3 align-top">
+                      <PlayQueryButton 
+                        hasQuery={hasQueryForEntity(row.entity, row.table, row.exampleQuery)}
+                        onClick={() => openQueryForEntity(row.entity, row.table, row.exampleQuery)}
+                      />
+                    </td>
+                  </tr>
                 ))
               ) : (
-                <div className="text-center py-12 bg-gray-50 rounded-xl border border-gray-200">
-                  <Code2 size={48} className="mx-auto text-gray-300 mb-3" />
-                  <p className="text-gray-600 font-medium">No example queries available</p>
-                  <p className="text-gray-400 text-sm mt-1">Queries for this category are coming soon</p>
-                </div>
+                <tr>
+                  <td colSpan={columns[activeTab].length + 1} className="px-4 py-12 text-center">
+                    <Search size={32} className="mx-auto text-gray-300 mb-2" />
+                    <p className="text-gray-600 font-medium">No results found</p>
+                    <p className="text-gray-400 text-xs mt-1">Try adjusting your search terms</p>
+                  </td>
+                </tr>
               )}
-            </div>
+            </tbody>
+          </table>
+        </div>
 
-            <div className="mt-5 flex items-center justify-between">
-              <p className="text-sm text-gray-500">
-                Showing <span className="text-gray-900 font-medium">{filteredQueries.length}</span> example queries for <span className="text-[#3366FF] font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
-              </p>
-              <p className="text-sm text-gray-400">
-                Click any query to expand and copy
-              </p>
-            </div>
-          </>
-        )}
+        <div className="mt-4 flex items-center justify-between">
+          <p className="text-sm text-gray-500">
+            Showing <span className="text-gray-900 font-medium">{filteredData.length}</span> of <span className="text-gray-900 font-medium">{data[activeTab].length}</span> entities in <span className="text-[#3366FF] font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
+          </p>
+          <p className="text-sm text-gray-400">
+            Press <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600 font-mono text-xs">⌘K</kbd> to search • Click <span className="text-[#3366FF]">Query</span> buttons for SQL examples
+          </p>
+        </div>
       </div>
+
+      {/* Query Side Panel */}
+      <QueryPanel 
+        isOpen={showQueries} 
+        onClose={() => {
+          setShowQueries(false);
+          setHighlightedQuery(null);
+        }} 
+        queries={filteredQueries}
+        categoryLabel={tabs.find(t => t.id === activeTab)?.label}
+        highlightedQuery={highlightedQuery}
+      />
     </div>
   );
 }
