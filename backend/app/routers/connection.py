@@ -14,6 +14,8 @@ class ConnectionRequest(BaseModel):
     account: Optional[str] = None
     user: Optional[str] = None
     password: Optional[str] = None
+    token: Optional[str] = None  # Personal Access Token
+    auth_type: Optional[str] = "password"  # 'password' or 'token'
     warehouse: Optional[str] = None
     database: Optional[str] = None
     schema: Optional[str] = None
@@ -25,16 +27,30 @@ async def test_connection(request: ConnectionRequest = None):
     """Test connection to Snowflake and return connection info."""
     try:
         # If credentials provided in request, use them
-        if request and request.account and request.user and request.password:
-            result = snowflake_service.connect_with_credentials(
-                account=request.account,
-                user=request.user,
-                password=request.password,
-                warehouse=request.warehouse,
-                database=request.database,
-                schema=request.schema,
-                role=request.role
-            )
+        if request and request.account and request.user:
+            # Check if using token or password auth
+            if request.auth_type == "token" and request.token:
+                result = snowflake_service.connect_with_token(
+                    account=request.account,
+                    user=request.user,
+                    token=request.token,
+                    warehouse=request.warehouse,
+                    database=request.database,
+                    schema=request.schema,
+                    role=request.role
+                )
+            elif request.password:
+                result = snowflake_service.connect_with_credentials(
+                    account=request.account,
+                    user=request.user,
+                    password=request.password,
+                    warehouse=request.warehouse,
+                    database=request.database,
+                    schema=request.schema,
+                    role=request.role
+                )
+            else:
+                return ConnectionStatus(connected=False, error="No authentication credentials provided")
         else:
             # Use environment config
             result = snowflake_service.test_connection()

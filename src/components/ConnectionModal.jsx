@@ -3,19 +3,21 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, Database, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Info } from 'lucide-react';
+import { X, Database, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Info, Key, Lock } from 'lucide-react';
 
 export default function ConnectionModal({ isOpen, onClose, onConnect, currentStatus }) {
+  const [authType, setAuthType] = useState('password'); // 'password' or 'token'
   const [formData, setFormData] = useState({
     account: '',
     user: '',
     password: '',
+    token: '',
     warehouse: 'COMPUTE_WH',
     database: 'ATLAN_MDLH',
     schema: 'PUBLIC',
     role: ''
   });
-  const [showPassword, setShowPassword] = useState(false);
+  const [showSecret, setShowSecret] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [saveToStorage, setSaveToStorage] = useState(true);
@@ -27,7 +29,10 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          setFormData(prev => ({ ...prev, ...parsed, password: '' }));
+          setFormData(prev => ({ ...prev, ...parsed, password: '', token: '' }));
+          if (parsed.authType) {
+            setAuthType(parsed.authType);
+          }
         } catch (e) {
           console.error('Failed to load saved config');
         }
@@ -45,27 +50,36 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
     setTestResult(null);
     
     try {
+      const requestBody = {
+        account: formData.account,
+        user: formData.user,
+        warehouse: formData.warehouse,
+        database: formData.database,
+        schema: formData.schema,
+        role: formData.role || undefined,
+        auth_type: authType
+      };
+      
+      // Add auth credentials based on type
+      if (authType === 'token') {
+        requestBody.token = formData.token;
+      } else {
+        requestBody.password = formData.password;
+      }
+      
       const response = await fetch('http://localhost:8000/api/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          account: formData.account,
-          user: formData.user,
-          password: formData.password,
-          warehouse: formData.warehouse,
-          database: formData.database,
-          schema: formData.schema,
-          role: formData.role || undefined
-        })
+        body: JSON.stringify(requestBody)
       });
       
       const result = await response.json();
       setTestResult(result);
       
       if (result.connected && saveToStorage) {
-        // Save config (without password) to localStorage
-        const { password, ...configToSave } = formData;
-        localStorage.setItem('snowflake_config', JSON.stringify(configToSave));
+        // Save config (without password/token) to localStorage
+        const { password, token, ...configToSave } = formData;
+        localStorage.setItem('snowflake_config', JSON.stringify({ ...configToSave, authType }));
       }
       
       if (result.connected) {
@@ -130,7 +144,40 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
             </p>
           </div>
 
-          {/* User & Password */}
+          {/* Auth Type Toggle */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Authentication Method
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setAuthType('password')}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
+                  authType === 'password'
+                    ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <Lock size={16} />
+                <span className="font-medium">Password</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthType('token')}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
+                  authType === 'token'
+                    ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <Key size={16} />
+                <span className="font-medium">Access Token</span>
+              </button>
+            </div>
+          </div>
+
+          {/* User & Password/Token */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -147,25 +194,31 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Password *
+                {authType === 'token' ? 'Personal Access Token *' : 'Password *'}
               </label>
               <div className="relative">
                 <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={formData.password}
-                  onChange={(e) => handleChange('password', e.target.value)}
-                  placeholder="••••••••"
+                  type={showSecret ? 'text' : 'password'}
+                  value={authType === 'token' ? formData.token : formData.password}
+                  onChange={(e) => handleChange(authType === 'token' ? 'token' : 'password', e.target.value)}
+                  placeholder={authType === 'token' ? 'pat_xxxxxxxxx...' : '••••••••'}
                   className="w-full px-4 py-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
                   required
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
+                  onClick={() => setShowSecret(!showSecret)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
+              {authType === 'token' && (
+                <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                  <Info size={12} />
+                  Generate in Snowsight: User menu → Profile → Access Tokens
+                </p>
+              )}
             </div>
           </div>
 
@@ -275,7 +328,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
             </button>
             <button
               type="submit"
-              disabled={testing || !formData.account || !formData.user || !formData.password}
+              disabled={testing || !formData.account || !formData.user || (authType === 'token' ? !formData.token : !formData.password)}
               className="flex-1 px-4 py-2.5 bg-[#3366FF] text-white rounded-lg hover:bg-blue-600 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {testing ? (

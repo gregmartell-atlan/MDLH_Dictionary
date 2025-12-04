@@ -157,6 +157,51 @@ class SnowflakeService:
                 "error": str(e)
             }
     
+    def connect_with_token(
+        self,
+        account: str,
+        user: str,
+        token: str,
+        warehouse: Optional[str] = None,
+        database: Optional[str] = None,
+        schema: Optional[str] = None,
+        role: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Connect using a Personal Access Token (PAT)."""
+        try:
+            connect_params = {
+                "account": account,
+                "user": user,
+                "token": token,
+                "authenticator": "oauth",
+                "warehouse": warehouse or "COMPUTE_WH",
+                "database": database or "ATLAN_MDLH",
+                "schema": schema or "PUBLIC",
+            }
+            
+            if role:
+                connect_params["role"] = role
+            
+            self._connection = snowflake.connector.connect(**connect_params)
+            
+            with self.get_cursor() as cursor:
+                cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE()")
+                row = cursor.fetchone()
+                return {
+                    "connected": True,
+                    "user": row["CURRENT_USER()"],
+                    "account": row["CURRENT_ACCOUNT()"],
+                    "warehouse": row["CURRENT_WAREHOUSE()"],
+                    "database": row["CURRENT_DATABASE()"],
+                    "schema": row["CURRENT_SCHEMA()"],
+                    "role": row["CURRENT_ROLE()"],
+                }
+        except Exception as e:
+            return {
+                "connected": False,
+                "error": str(e)
+            }
+    
     def disconnect(self):
         """Close the connection."""
         if self._connection:
