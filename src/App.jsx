@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot } from 'lucide-react';
+import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2 } from 'lucide-react';
 
 const tabs = [
   { id: 'core', label: 'Core', icon: Table },
@@ -63,15 +63,18 @@ const data = {
     { entity: 'TableauWorkbook', table: 'TABLEAUWORKBOOK_ENTITY', description: 'Tableau workbook', keyAttributes: 'name, projectQualifiedName', relationships: 'project, dashboards, worksheets', connector: 'Tableau', hierarchy: 'Project → Workbook' },
     { entity: 'TableauDashboard', table: 'TABLEAUDASHBOARD_ENTITY', description: 'Tableau dashboard', keyAttributes: 'name, workbookQualifiedName', relationships: 'workbook, worksheets', connector: 'Tableau', hierarchy: 'Workbook → Dashboard' },
     { entity: 'TableauDatasource', table: 'TABLEAUDATASOURCE_ENTITY', description: 'Tableau data source', keyAttributes: 'name, hasExtracts', relationships: 'project, fields, upstreamTables', connector: 'Tableau', hierarchy: 'Project → Datasource' },
+    { entity: 'TableauCalculatedField', table: 'TABLEAUCALCULATEDFIELD_ENTITY', description: 'Tableau calculated field', keyAttributes: 'name, formula, workbookQualifiedName', relationships: 'workbook, datasource', connector: 'Tableau', hierarchy: 'Workbook → CalculatedField' },
     { entity: 'PowerBIWorkspace', table: 'POWERBIWORKSPACE_ENTITY', description: 'Power BI workspace', keyAttributes: 'name, webUrl', relationships: 'reports, dashboards, datasets', connector: 'Power BI', hierarchy: 'Root' },
     { entity: 'PowerBIReport', table: 'POWERBIREPORT_ENTITY', description: 'Power BI report', keyAttributes: 'name, webUrl, workspaceQualifiedName', relationships: 'workspace, pages, dataset', connector: 'Power BI', hierarchy: 'Workspace → Report' },
     { entity: 'PowerBIDataset', table: 'POWERBIDATASET_ENTITY', description: 'Power BI dataset', keyAttributes: 'name, workspaceQualifiedName', relationships: 'workspace, tables, measures', connector: 'Power BI', hierarchy: 'Workspace → Dataset' },
+    { entity: 'PowerBIMeasure', table: 'POWERBIMEASURE_ENTITY', description: 'Power BI measure', keyAttributes: 'name, powerBIMeasureExpression, table', relationships: 'dataset, table', connector: 'Power BI', hierarchy: 'Dataset → Measure' },
     { entity: 'LookerProject', table: 'LOOKERPROJECT_ENTITY', description: 'Looker project', keyAttributes: 'name', relationships: 'models, explores', connector: 'Looker', hierarchy: 'Root' },
     { entity: 'LookerModel', table: 'LOOKERMODEL_ENTITY', description: 'Looker model', keyAttributes: 'name, projectName', relationships: 'project, explores, views', connector: 'Looker', hierarchy: 'Project → Model' },
     { entity: 'LookerExplore', table: 'LOOKEREXPLORE_ENTITY', description: 'Looker explore', keyAttributes: 'name, modelName, connectionName', relationships: 'model, fields', connector: 'Looker', hierarchy: 'Model → Explore' },
     { entity: 'LookerDashboard', table: 'LOOKERDASHBOARD_ENTITY', description: 'Looker dashboard', keyAttributes: 'name, folderName', relationships: 'folder, tiles', connector: 'Looker', hierarchy: 'Folder → Dashboard' },
     { entity: 'MetabaseDashboard', table: 'METABASEDASHBOARD_ENTITY', description: 'Metabase dashboard', keyAttributes: 'name, collectionQualifiedName', relationships: 'collection, questions', connector: 'Metabase', hierarchy: 'Collection → Dashboard' },
     { entity: 'MetabaseQuestion', table: 'METABASEQUESTION_ENTITY', description: 'Metabase question/chart', keyAttributes: 'name, queryType', relationships: 'collection, dashboards', connector: 'Metabase', hierarchy: 'Collection → Question' },
+    { entity: 'SigmaDataElement', table: 'SIGMADATAELEMENT_ENTITY', description: 'Sigma data element', keyAttributes: 'name, guid', relationships: 'workbook, dataset', connector: 'Sigma', hierarchy: 'Workbook → DataElement' },
   ],
   dbt: [
     { entity: 'DbtModel', table: 'DBTMODEL_ENTITY', description: 'dbt model (transformation)', keyAttributes: 'name, dbtAlias, dbtMaterialization, dbtModelSqlAssets, dbtCompiledSQL, dbtRawSQL', relationships: 'columns, sources, tests, metrics', qualifiedNamePattern: 'dbt-specific', notes: 'Links to SQL table/view' },
@@ -107,6 +110,7 @@ const data = {
   ],
   governance: [
     { entity: 'Tag (Classification)', table: 'TAG_RELATIONSHIP', description: 'Classification tag for assets', keyAttributes: 'tagName, propagate, restrictPropagationThroughLineage', relationships: 'entityGuid (linked asset)', notes: 'Use TAG_RELATIONSHIP to find tagged assets' },
+    { entity: 'CustomMetadata', table: 'CUSTOMMETADATA_RELATIONSHIP', description: 'Custom metadata attributes', keyAttributes: 'entityGuid, attributeDisplayName, attributeValue', relationships: 'entityGuid (linked asset)', notes: 'Join with entity tables on guid' },
     { entity: 'SnowflakeTag', table: 'SNOWFLAKETAG_ENTITY', description: 'Native Snowflake tag', keyAttributes: 'name, tagAllowedValues', relationships: 'taggedAssets', notes: 'Synced from Snowflake' },
     { entity: 'DatabricksUnityCatalogTag', table: 'DATABRICKSUNITYCATALOGTAG_ENTITY', description: 'Databricks Unity Catalog tag', keyAttributes: 'name', relationships: 'taggedAssets', notes: 'Synced from Databricks' },
     { entity: 'BigqueryTag', table: 'BIGQUERYTAG_ENTITY', description: 'BigQuery policy tag', keyAttributes: 'name', relationships: 'taggedAssets', notes: 'Synced from BigQuery' },
@@ -118,6 +122,943 @@ const data = {
   ai: [
     { entity: 'AIModel', table: 'AIMODEL_ENTITY', description: 'AI/ML model', keyAttributes: 'name, aiModelStatus, aiModelVersion, aiModelType', relationships: 'aiApplications, datasets (via Process)', notes: 'Model governance' },
     { entity: 'AIApplication', table: 'AIAPPLICATION_ENTITY', description: 'Application using AI models', keyAttributes: 'name, aiApplicationVersion, aiApplicationDevelopmentStage', relationships: 'aiModels', notes: 'App-level AI governance' },
+  ],
+};
+
+// Example queries organized by category
+const exampleQueries = {
+  core: [
+    {
+      title: 'Connect to MDLH Database',
+      description: 'First step: Select your MDLH database environment',
+      query: `USE <DATABASE>;
+
+-- Example environments:
+-- USE FIELD_METADATA;      -- For atlan.atlan.com
+-- USE MDLH_GOVERNANCE;     -- For demo-governance.atlan.com
+-- USE MDLH_ATLAN_HOME;     -- For home tenant`
+    },
+    {
+      title: 'List All MDLH Tables',
+      description: 'Discover all available entity tables in the lakehouse',
+      query: `-- List all tables in MDLH
+SHOW TABLES;`
+    },
+    {
+      title: 'Explore TABLE_ENTITY',
+      description: 'View sample metadata about Table entities in your Atlan tenant',
+      query: `-- The TABLE_ENTITY table contains metadata about all Table entities
+SELECT *
+FROM TABLE_ENTITY
+LIMIT 10;`
+    },
+    {
+      title: 'Explore Catalog Integrations',
+      description: 'View configured catalog integrations',
+      query: `SHOW CATALOG INTEGRATIONS;
+DESCRIBE CATALOG INTEGRATION <integration_name>;`
+    },
+    {
+      title: 'Time Travel Query',
+      description: 'Query historical data using Iceberg time travel',
+      query: `-- Query data from a specific timestamp
+SELECT *
+FROM ATLASGLOSSARY_ENTITY
+AT(TIMESTAMP => '2025-07-22 12:00:00'::timestamp_tz)
+LIMIT 10;
+
+-- View snapshot history for a table
+SELECT *
+FROM TABLE(INFORMATION_SCHEMA.ICEBERG_TABLE_SNAPSHOT_REFRESH_HISTORY(
+  TABLE_NAME => 'ATLASGLOSSARY_ENTITY'
+));`
+    },
+    {
+      title: 'Downstream Lineage (No Limit)',
+      description: 'Find ALL downstream assets from a source - no recursion limit',
+      query: `-- GET DOWNSTREAM ASSETS - NO DISTANCE, NO RECURSION LIMIT
+-- Warning: May be slow for assets with extensive lineage
+WITH RECURSIVE lineage_cte (guid) AS (
+    -- Anchor: Start with your source GUID
+    SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid
+
+    UNION ALL
+    
+    -- Recursive: Find all downstream dependencies
+    SELECT outputs_flat.value::VARCHAR
+    FROM lineage_cte AS L
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
+)
+SELECT DISTINCT
+    COALESCE(T.name, V.name, SGELEM.name) AS entity_name,
+    L.guid AS entity_guid,
+    CASE
+        WHEN T.name IS NOT NULL THEN 'TABLE'
+        WHEN V.name IS NOT NULL THEN 'VIEW'
+        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
+        ELSE 'UNKNOWN'
+    END AS entity_type
+FROM lineage_cte AS L
+LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
+LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
+LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
+ORDER BY entity_name ASC;`
+    },
+    {
+      title: 'Downstream Lineage (With Limit)',
+      description: 'Find downstream assets with recursion depth limit and distance tracking',
+      query: `-- GET DOWNSTREAM ASSETS - WITH DISTANCE AND RECURSION LIMIT
+WITH RECURSIVE lineage_cte (guid, level) AS (
+    -- Anchor: Start with your source GUID
+    SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid, 0 AS level
+
+    UNION ALL
+    
+    -- Recursive: Find downstream, increment level each step
+    SELECT outputs_flat.value::VARCHAR, L.level + 1
+    FROM lineage_cte AS L
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
+    WHERE L.level < 5  -- Stop at 5 hops
+)
+SELECT DISTINCT
+    COALESCE(T.name, V.name, SF.name, SGELEM.name) AS entity_name,
+    L.guid AS entity_guid,
+    CASE
+        WHEN T.name IS NOT NULL THEN 'TABLE'
+        WHEN V.name IS NOT NULL THEN 'VIEW'
+        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
+        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
+        ELSE 'UNKNOWN'
+    END AS entity_type,
+    L.level AS distance
+FROM lineage_cte AS L
+LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
+LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
+LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
+LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
+WHERE L.level > 0  -- Exclude the starting asset
+ORDER BY distance ASC;`
+    },
+    {
+      title: 'Upstream Lineage (With Distance)',
+      description: 'Find all upstream sources with distance tracking',
+      query: `-- GET UPSTREAM ASSETS - WITH DISTANCE AND RECURSION LIMIT
+WITH RECURSIVE lineage_cte (guid, level) AS (
+    -- Anchor: Start with your target GUID
+    SELECT '<YOUR_TARGET_GUID>'::VARCHAR AS guid, 0 AS level
+
+    UNION ALL
+    
+    -- Recursive: Find upstream by joining on OUTPUTS
+    SELECT inputs_flat.value::VARCHAR, L.level + 1
+    FROM lineage_cte AS L
+    -- Note: Join on OUTPUTS to go upstream
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat
+    WHERE L.level < 5  -- Stop at 5 hops
+)
+SELECT DISTINCT
+    COALESCE(T.name, V.name, SF.name) AS entity_name,
+    L.guid AS entity_guid,
+    CASE
+        WHEN T.name IS NOT NULL THEN 'TABLE'
+        WHEN V.name IS NOT NULL THEN 'VIEW'
+        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
+        ELSE 'UNKNOWN'
+    END AS entity_type,
+    L.level AS distance
+FROM lineage_cte AS L
+LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
+LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
+LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
+WHERE L.level > 0  -- Exclude starting asset
+ORDER BY distance ASC;`
+    },
+    {
+      title: 'Bidirectional Lineage',
+      description: 'Get both upstream and downstream lineage with positive/negative distance',
+      query: `-- BIDIRECTIONAL LINEAGE - Both upstream and downstream
+-- Positive distance = downstream, Negative = upstream
+WITH RECURSIVE downstream_cte (guid, level) AS (
+    SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level
+    UNION ALL
+    SELECT outputs_flat.value::VARCHAR, L.level + 1
+    FROM downstream_cte AS L
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
+    WHERE L.level < 5
+),
+upstream_cte (guid, level) AS (
+    SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level
+    UNION ALL
+    SELECT inputs_flat.value::VARCHAR, L.level - 1  -- Negative for upstream
+    FROM upstream_cte AS L
+    JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR
+    , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat
+    WHERE L.level > -5
+),
+combined_lineage AS (
+    SELECT * FROM downstream_cte
+    UNION ALL
+    SELECT * FROM upstream_cte
+)
+SELECT DISTINCT
+    COALESCE(T.name, V.name, SF.name, SGELEM.name) AS entity_name,
+    L.guid AS entity_guid,
+    CASE
+        WHEN T.name IS NOT NULL THEN 'TABLE'
+        WHEN V.name IS NOT NULL THEN 'VIEW'
+        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
+        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
+        ELSE 'UNKNOWN'
+    END AS entity_type,
+    L.level AS distance  -- Negative = upstream, Positive = downstream
+FROM combined_lineage AS L
+LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
+LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
+LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
+LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
+WHERE L.level != 0  -- Exclude starting asset
+ORDER BY distance ASC;`
+    },
+  ],
+  glossary: [
+    {
+      title: 'List All Glossaries',
+      description: 'View all business glossaries in your tenant with creator info',
+      query: `-- First, see all Glossaries in your Atlan tenant
+SELECT
+  NAME,
+  GUID,
+  CREATEDBY
+FROM ATLASGLOSSARY_ENTITY;
+
+-- Note the GUID of the glossary you want to explore
+-- You'll use it in subsequent queries with ARRAY_CONTAINS`
+    },
+    {
+      title: 'List Glossary Terms and Categories',
+      description: 'List glossary terms with their parent glossaries and categories resolved to names',
+      query: `/*
+List Glossary terms and categories 
+*/
+WITH glossary_lookup AS (
+    SELECT GUID AS glossary_guid, NAME AS glossary_name
+    FROM GLOSSARY_ENTITY
+),
+category_lookup AS (
+    SELECT GUID AS category_guid, NAME AS category_name
+    FROM GLOSSARYCATEGORY_ENTITY
+),
+term_anchors AS (
+    SELECT
+        TERM.GUID AS term_guid,
+        anchor_elem.value::STRING AS glossary_guid
+    FROM GLOSSARYTERM_ENTITY TERM,
+         LATERAL FLATTEN(input => TERM.ANCHOR) AS anchor_elem
+),
+term_categories AS (
+    SELECT
+        TERM.GUID AS term_guid,
+        category_elem.value::STRING AS category_guid
+    FROM GLOSSARYTERM_ENTITY TERM,
+         LATERAL FLATTEN(input => TERM.CATEGORIES) AS category_elem
+),
+term_glossary_names AS (
+    SELECT
+        TA.term_guid,
+        LISTAGG(GL.glossary_name, ', ') WITHIN GROUP (ORDER BY GL.glossary_name) AS glossaries
+    FROM term_anchors TA
+    LEFT JOIN glossary_lookup GL
+      ON TA.glossary_guid = GL.glossary_guid
+    GROUP BY TA.term_guid
+),
+term_category_names AS (
+    SELECT
+        TC.term_guid,
+        LISTAGG(CL.category_name, ', ') WITHIN GROUP (ORDER BY CL.category_name) AS categories
+    FROM term_categories TC
+    LEFT JOIN category_lookup CL
+      ON TC.category_guid = CL.category_guid
+    GROUP BY TC.term_guid
+)
+SELECT
+    T.NAME,
+    T.CATEGORIES AS TERM_CATEGORIES_ARRAY,
+    T.USERDESCRIPTION,
+    --T.README,
+    --T.ANCHOR,
+    TG.glossaries AS GLOSSARIES,
+    TC.categories AS CATEGORIES,
+    T.GUID,
+FROM GLOSSARYTERM_ENTITY T
+LEFT JOIN term_glossary_names TG
+       ON T.GUID = TG.term_guid
+LEFT JOIN term_category_names TC
+       ON T.GUID = TC.term_guid
+LIMIT 10;`
+    },
+    {
+      title: 'Terms by Glossary GUID',
+      description: 'Get all terms belonging to a specific glossary',
+      query: `SELECT GUID, NAME, USERDESCRIPTION
+FROM ATLASGLOSSARYTERM_ENTITY
+WHERE ARRAY_CONTAINS('<GLOSSARY_GUID>', ANCHOR);`
+    },
+    {
+      title: 'Terms by Creator',
+      description: 'Find all terms created by a specific user',
+      query: `SELECT GUID, NAME
+FROM ATLASGLOSSARYTERM_ENTITY
+WHERE CREATEDBY = '<username>';`
+    },
+    {
+      title: 'Certificate Status Distribution',
+      description: 'Count terms by certification status',
+      query: `SELECT CERTIFICATESTATUS, COUNT(GUID) as term_count
+FROM ATLASGLOSSARYTERM_ENTITY
+GROUP BY CERTIFICATESTATUS;`
+    },
+    {
+      title: 'Find Duplicate Terms (Jaro-Winkler)',
+      description: 'Identify similar terms across glossaries using fuzzy matching',
+      query: `WITH core_terms AS (
+  SELECT NAME AS core_name, GUID AS core_guid,
+         USERDESCRIPTION AS core_description
+  FROM ATLASGLOSSARYTERM_ENTITY
+  WHERE ARRAY_CONTAINS('<CORE_GLOSSARY_GUID>', ANCHOR)
+),
+non_core_terms AS (
+  SELECT NAME AS non_core_name, GUID AS non_core_guid,
+         USERDESCRIPTION AS non_core_description,
+         ANCHOR AS non_core_anchor_guid
+  FROM ATLASGLOSSARYTERM_ENTITY
+  WHERE NOT(ARRAY_CONTAINS('<CORE_GLOSSARY_GUID>', ANCHOR))
+),
+glossary_lookup AS (
+  SELECT GUID AS glossary_guid, NAME AS glossary_name
+  FROM ATLASGLOSSARY_ENTITY
+)
+SELECT DISTINCT
+  T1.core_name AS source_of_truth_name,
+  T2.non_core_name AS potential_duplicate_name,
+  T3.glossary_name AS duplicate_glossary,
+  JAROWINKLER_SIMILARITY(T1.core_name, T2.non_core_name) AS similarity_score
+FROM core_terms T1
+JOIN non_core_terms T2
+  ON JAROWINKLER_SIMILARITY(T1.core_name, T2.non_core_name) >= 95
+  AND T1.core_guid != T2.non_core_guid
+JOIN glossary_lookup T3
+  ON ARRAY_CONTAINS(T3.glossary_guid, T2.non_core_anchor_guid)
+ORDER BY similarity_score DESC;`
+    },
+    {
+      title: 'Find Substring Duplicates',
+      description: 'Find terms where one name contains another',
+      query: `WITH standardized_terms AS (
+  SELECT NAME AS original_term_name, GUID AS term_guid,
+         USERDESCRIPTION AS term_description,
+         LOWER(REGEXP_REPLACE(NAME, '[ _-]', '', 1, 0)) AS standardized_name
+  FROM ATLASGLOSSARYTERM_ENTITY
+)
+SELECT DISTINCT
+  t1.original_term_name AS potential_duplicate_1_name,
+  t2.original_term_name AS potential_duplicate_2_name,
+  t1.term_guid AS potential_duplicate_1_guid,
+  t2.term_guid AS potential_duplicate_2_guid
+FROM standardized_terms t1
+JOIN standardized_terms t2
+  ON t1.standardized_name LIKE '%' || t2.standardized_name || '%'
+  AND LENGTH(t1.standardized_name) > LENGTH(t2.standardized_name)
+  AND t1.term_guid != t2.term_guid
+ORDER BY potential_duplicate_1_name;`
+    },
+  ],
+  datamesh: [
+    {
+      title: 'List Data Domains',
+      description: 'View all data domains and their hierarchy',
+      query: `SELECT NAME, USERDESCRIPTION, PARENTDOMAINQUALIFIEDNAME
+FROM DATADOMAIN_ENTITY
+ORDER BY NAME;`
+    },
+    {
+      title: 'Active Data Products',
+      description: 'Find all active data products with their status',
+      query: `SELECT NAME, DATAPRODUCTSTATUS, DATAPRODUCTCRITICALITY
+FROM DATAPRODUCT_ENTITY
+WHERE DATAPRODUCTSTATUS = 'Active'
+ORDER BY DATAPRODUCTCRITICALITY DESC;`
+    },
+    {
+      title: 'Data Contracts Overview',
+      description: 'View data contract versions and certification status',
+      query: `SELECT DATACONTRACTVERSION, CERTIFICATESTATUS, DATACONTRACTASSETGUID
+FROM DATACONTRACT_ENTITY
+ORDER BY DATACONTRACTVERSION DESC;`
+    },
+  ],
+  relational: [
+    {
+      title: 'Basic Table Exploration',
+      description: 'View table metadata with row counts and sizes',
+      query: `SELECT NAME, ROWCOUNT, COLUMNCOUNT, SIZEBYTES, POPULARITYSCORE
+FROM TABLE_ENTITY
+WHERE SIZEBYTES IS NOT NULL
+ORDER BY SIZEBYTES DESC
+LIMIT 100;`
+    },
+    {
+      title: 'Full Column Metadata Export',
+      description: 'Comprehensive column-level metadata with tags and custom metadata as JSON arrays',
+      query: `/*
+List all Columns with important attributes like description, tags, custom metadata
+
+1. FILTERED_COLUMNS CTE
+- Picks only COLUMN_ENTITY rows for glue or snowflake.
+- Used to filter CM and Tag relationships so only relevant metadata is aggregated.
+
+2. CM_AGG CTE
+- Aggregates all custom metadata for each column into a JSON array as column <> cm is a 1:many relationship
+- Uses OBJECT_CONSTRUCT('name', ..., 'value', ...) for structured key-value objects.
+- LISTAGG combines multiple rows into a single JSON string.
+
+3. TR_AGG CTE
+- Same as CM_AGG but for tags.
+- Produces a JSON array of {name, value} objects per column.
+
+4. Main SELECT
+- Selects all column-level attributes (COL_) and joins CM_AGG and TR_AGG on GUID.
+- Result: Each row is a column, with tags and custom metadata as JSON arrays.
+*/
+-- =========================================
+-- Column-Level Metadata Query for Snowflake/Glue
+-- Includes aggregated Custom Metadata and Tags as JSON
+-- =========================================
+WITH FILTERED_COLUMNS AS (
+    -- Filter only relevant columns
+    SELECT
+        GUID
+    FROM
+        COLUMN_ENTITY
+    WHERE
+        CONNECTORNAME IN ('glue', 'snowflake')
+),
+-- Aggregate Custom Metadata for each column as JSON
+CM_AGG AS (
+    SELECT
+        CM.ENTITYGUID,
+        ARRAY_AGG(
+            DISTINCT OBJECT_CONSTRUCT(
+                'set_name',
+                SETDISPLAYNAME,
+                'field_name',
+                ATTRIBUTEDISPLAYNAME,
+                'field_value',
+                ATTRIBUTEVALUE
+            )
+        ) AS CUSTOM_METADATA_JSON
+    FROM
+        CUSTOMMETADATA_RELATIONSHIP CM
+        JOIN FILTERED_COLUMNS FC ON CM.ENTITYGUID = FC.GUID
+    GROUP BY
+        CM.ENTITYGUID
+),
+-- Aggregate Tags for each column as JSON
+TR_AGG AS (
+    SELECT
+        TR.ENTITYGUID,
+        '[' || LISTAGG(
+            OBJECT_CONSTRUCT('name', TR.TAGNAME, 'value', TR.TAGVALUE)::STRING,
+            ','
+        ) WITHIN GROUP (
+            ORDER BY
+                TR.TAGNAME
+        ) || ']' AS TAG_JSON
+    FROM
+        TAG_RELATIONSHIP TR
+        JOIN FILTERED_COLUMNS FC ON TR.ENTITYGUID = FC.GUID
+    GROUP BY
+        TR.ENTITYGUID
+)
+SELECT
+    -- =========================================
+    -- ASSET IDENTIFIERS
+    -- =========================================
+    COL.NAME AS COL_NAME,
+    COL.QUALIFIEDNAME AS COL_QUALIFIEDNAME,
+    COL.GUID AS COL_GUID,
+    COL.DISPLAYNAME AS COL_DISPLAYNAME,
+    COL.DESCRIPTION AS COL_DESCRIPTION,
+    COL.USERDESCRIPTION AS COL_USERDESCRIPTION,
+    COL.CONNECTORNAME AS COL_CONNECTORNAME,
+    COL.CONNECTIONNAME AS COL_CONNECTIONNAME,
+    COL.CONNECTIONQUALIFIEDNAME AS COL_CONNECTIONQUALIFIEDNAME,
+    COL.DATABASENAME AS COL_DATABASENAME,
+    COL.DATABASEQUALIFIEDNAME AS COL_DATABASEQUALIFIEDNAME,
+    COL.SCHEMANAME AS COL_SCHEMANAME,
+    COL.SCHEMAQUALIFIEDNAME AS COL_SCHEMAQUALIFIEDNAME,
+    COL."TABLE" AS COL_TABLE,
+    COL.TABLENAME AS COL_TABLENAME,
+    COL.TABLEQUALIFIEDNAME AS COL_TABLEQUALIFIEDNAME,
+    -- =========================================
+    -- SOURCE SPECIFIC ATTRIBUTES
+    -- =========================================
+    COL.TYPENAME AS COL_TYPENAME,
+    COL.DATATYPE AS COL_DATATYPE,
+    COL.SUBDATATYPE AS COL_SUBDATATYPE,
+    COL."ORDER" AS COL_ORDER,
+    COL.ISPARTITION AS COL_ISPARTITION,
+    COL.PARTITIONORDER AS COL_PARTITIONORDER,
+    COL.ISPRIMARY AS COL_ISPRIMARY,
+    COL.PRECISION AS COL_PRECISION,
+    COL.ISNULLABLE AS COL_ISNULLABLE,
+    COL.MAXLENGTH AS COL_MAXLENGTH,
+    COL.SOURCEOWNERS AS COL_SOURCEOWNERS,
+    COL.SOURCECREATEDBY AS COL_SOURCECREATEDBY,
+    COL.SOURCECREATEDAT AS COL_SOURCECREATEDAT,
+    COL.SOURCEUPDATEDAT AS COL_SOURCEUPDATEDAT,
+    COL.SOURCEUPDATEDBY AS COL_SOURCEUPDATEDBY,
+    COL.SOURCEURL AS COL_SOURCEURL,
+    COL.SOURCEEMBEDURL AS COL_SOURCEEMBEDURL,
+    COL.SOURCEREADCOUNT AS COL_SOURCEREADCOUNT,
+    COL.SOURCEREADUSERCOUNT AS COL_SOURCEREADUSERCOUNT,
+    COL.SOURCELASTREADAT AS COL_SOURCELASTREADAT,
+    COL.LASTROWCHANGEDAT AS COL_LASTROWCHANGEDAT,
+    -- =========================================
+    -- ATLAN SPECIFIC OPERATIONAL METRICS
+    -- =========================================
+    COL.CREATETIME AS COL_CREATETIME,
+    COL.UPDATETIME AS COL_UPDATETIME,
+    COL.CREATEDBY AS COL_CREATEDBY,
+    COL.UPDATEDBY AS COL_UPDATEDBY,
+    COL.STATUS AS COL_STATUS,
+    COL.VIEWNAME AS COL_VIEWNAME,
+    COL.VIEWQUALIFIEDNAME AS COL_VIEWQUALIFIEDNAME,
+    COL.CALCULATIONVIEWNAME AS COL_CALCULATIONVIEWNAME,
+    COL.CALCULATIONVIEWQUALIFIEDNAME AS COL_CALCULATIONVIEWQUALIFIEDNAME,
+    COL.TENANTID AS COL_TENANTID,
+    COL.HASLINEAGE AS COL_HASLINEAGE,
+    COL.ISDISCOVERABLE AS COL_ISDISCOVERABLE,
+    COL.ISEDITABLE AS COL_ISEDITABLE,
+    COL.LASTSYNCWORKFLOWNAME AS COL_LASTSYNCWORKFLOWNAME,
+    COL.LASTSYNCRUNAT AS COL_LASTSYNCRUNAT,
+    COL.LASTSYNCRUN AS COL_LASTSYNCRUN,
+    COL.MATERIALISEDVIEW AS COL_MATERIALISEDVIEW,
+    COL.README AS COL_README,
+    COL."QUERIES" AS COL_QUERIES,
+    COL.METRICTIMESTAMPS AS COL_METRICTIMESTAMPS,
+    COL.MEANINGS AS COL_MEANINGS,
+    COL.FOREIGNKEYTO AS COL_FOREIGNKEYTO,
+    COL.TABLEPARTITION AS COL_TABLEPARTITION,
+    COL.INPUTTOPROCESSES AS COL_INPUTTOPROCESSES,
+    COL.OUTPUTFROMPROCESSES AS COL_OUTPUTFROMPROCESSES,
+    -- =========================================
+    -- TAGS
+    -- =========================================
+    TR_AGG.TAG_JSON AS COL_TAG_JSON,
+    -- =========================================
+    -- CUSTOM METADATA
+    -- =========================================
+    CM_AGG.CUSTOM_METADATA_JSON AS COL_CUSTOM_METADATA_JSON,
+    -- =========================================
+    -- ATLAN ENRICHMENT ATTRIBUTES
+    -- =========================================
+    COL.CERTIFICATESTATUS AS COL_CERTIFICATESTATUS,
+    COL.CERTIFICATESTATUSMESSAGE AS COL_CERTIFICATESTATUSMESSAGE,
+    COL.CERTIFICATEUPDATEDBY AS COL_CERTIFICATEUPDATEDBY,
+    COL.CERTIFICATEUPDATEDAT AS COL_CERTIFICATEUPDATEDAT,
+    COL.ANNOUNCEMENTTITLE AS COL_ANNOUNCEMENTTITLE,
+    COL.ANNOUNCEMENTMESSAGE AS COL_ANNOUNCEMENTMESSAGE,
+    COL.ANNOUNCEMENTTYPE AS COL_ANNOUNCEMENTTYPE,
+    COL.ANNOUNCEMENTUPDATEDAT AS COL_ANNOUNCEMENTUPDATEDAT,
+    COL.ANNOUNCEMENTUPDATEDBY AS COL_ANNOUNCEMENTUPDATEDBY,
+    COL.LINKS AS COL_LINKS,
+    -- =========================================
+    -- PERMISSIONS SPECIFIC
+    -- =========================================
+    COL.OWNERUSERS AS COL_OWNERUSERS,
+    COL.OWNERGROUPS AS COL_OWNERGROUPS,
+    COL.ADMINUSERS AS COL_ADMINUSERS,
+    COL.ADMINROLES AS COL_ADMINROLES,
+    COL.ADMINGROUPS AS COL_ADMINGROUPS,
+    COL.VIEWERUSERS AS COL_VIEWERUSERS,
+    COL.VIEWERGROUPS AS COL_VIEWERGROUPS,
+    -- =========================================
+    -- DATA PRODUCTS RELATED
+    -- =========================================
+    COL.DOMAINGUIDS AS COL_DOMAINGUIDS,
+    COL.PRODUCTGUIDS AS COL_PRODUCTGUIDS,
+    COL.INPUTPORTDATAPRODUCTS AS COL_INPUTPORTDATAPRODUCTS,
+    COL.OUTPUTPRODUCTGUIDS AS COL_OUTPUTPRODUCTGUIDS,
+    -- =========================================
+    -- ATLAN POPULARITY METRICS
+    -- =========================================
+    COL.QUERYCOUNT AS COL_QUERYCOUNT,
+    COL.QUERYUSERCOUNT AS COL_QUERYUSERCOUNT,
+    COL.QUERYCOUNTUPDATEDAT AS COL_QUERYCOUNTUPDATEDAT,
+    COL.VIEWSCORE AS COL_VIEWSCORE,
+    COL.POPULARITYSCORE AS COL_POPULARITYSCORE,
+    COL.SOURCETOTALCOST AS COL_SOURCETOTALCOST,
+    COL.SOURCECOSTUNIT AS COL_SOURCECOSTUNIT,
+    COL.SOURCEREADQUERYCOST AS COL_SOURCEREADQUERYCOST,
+    COL.SOURCEREADRECENTUSERLIST AS COL_SOURCEREADRECENTUSERLIST,
+    COL.SOURCEREADTOPUSERLIST AS COL_SOURCEREADTOPUSERLIST,
+    COL.SOURCEQUERYCOMPUTECOSTLIST AS COL_SOURCEQUERYCOMPUTECOSTLIST,
+    -- =========================================
+    -- PROFILING METRICS
+    -- =========================================
+    COL.ISPROFILED AS COL_ISPROFILED,
+    COL.LASTPROFILEDAT AS COL_LASTPROFILEDAT,
+    COL.COLUMNDISTINCTVALUESCOUNT AS COL_COLUMNDISTINCTVALUESCOUNT,
+    COL.COLUMNDISTINCTVALUESCOUNTLONG AS COL_COLUMNDISTINCTVALUESCOUNTLONG,
+    COL.COLUMNMAX AS COL_COLUMNMAX,
+    COL.COLUMNMIN AS COL_COLUMNMIN,
+    COL.COLUMNMEAN AS COL_COLUMNMEAN,
+    COL.COLUMNSUM AS COL_COLUMNSUM,
+    COL.COLUMNMEDIAN AS COL_COLUMNMEDIAN,
+    COL.COLUMNSTANDARDDEVIATION AS COL_COLUMNSTANDARDDEVIATION,
+    COL.COLUMNUNIQUEVALUESCOUNT AS COL_COLUMNUNIQUEVALUESCOUNT,
+    COL.COLUMNUNIQUEVALUESCOUNTLONG AS COL_COLUMNUNIQUEVALUESCOUNTLONG,
+    COL.COLUMNAVERAGE AS COL_COLUMNAVERAGE,
+    COL.COLUMNAVERAGELENGTH AS COL_COLUMNAVERAGELENGTH,
+    COL.COLUMNDUPLICATEVALUESCOUNT AS COL_COLUMNDUPLICATEVALUESCOUNT,
+    COL.COLUMNDUPLICATEVALUESCOUNTLONG AS COL_COLUMNDUPLICATEVALUESCOUNTLONG,
+    COL.COLUMNMAXIMUMSTRINGLENGTH AS COL_COLUMNMAXIMUMSTRINGLENGTH,
+    COL.COLUMNMAXS AS COL_COLUMNMAXS,
+    COL.COLUMNMINIMUMSTRINGLENGTH AS COL_COLUMNMINIMUMSTRINGLENGTH,
+    COL.COLUMNMINS AS COL_COLUMNMINS,
+    COL.COLUMNMISSINGVALUESCOUNT AS COL_COLUMNMISSINGVALUESCOUNT,
+    COL.COLUMNMISSINGVALUESCOUNTLONG AS COL_COLUMNMISSINGVALUESCOUNTLONG,
+    COL.COLUMNMISSINGVALUESPERCENTAGE AS COL_COLUMNMISSINGVALUESPERCENTAGE,
+    COL.COLUMNUNIQUENESSPERCENTAGE AS COL_COLUMNUNIQUENESSPERCENTAGE,
+    COL.COLUMNVARIANCE AS COL_COLUMNVARIANCE,
+    COL.COLUMNDEPTHLEVEL AS COL_COLUMNDEPTHLEVEL
+FROM
+    COLUMN_ENTITY COL
+    LEFT JOIN CM_AGG ON COL.GUID = CM_AGG.ENTITYGUID
+    LEFT JOIN TR_AGG ON COL.GUID = TR_AGG.ENTITYGUID
+WHERE
+    COL.CONNECTORNAME IN ('glue', 'snowflake')
+LIMIT
+    100;`
+    },
+    {
+      title: 'Tables Without Descriptions',
+      description: 'Find tables missing documentation',
+      query: `SELECT
+  SUM(CASE WHEN DESCRIPTION IS NOT NULL THEN 1 ELSE 0 END) "WITH DESCRIPTIONS",
+  SUM(CASE WHEN DESCRIPTION IS NULL THEN 1 ELSE 0 END) "WITHOUT DESCRIPTIONS"
+FROM TABLE_ENTITY;`
+    },
+    {
+      title: 'Storage Reclamation Analysis',
+      description: 'Find large tables by size and popularity for storage optimization',
+      query: `-- STORAGE RECLAMATION ANALYSIS
+-- Show the largest tables and their popularity scores
+-- Use this to identify large, unused tables for cleanup
+SELECT
+  NAME,
+  ROWCOUNT,
+  COLUMNCOUNT,
+  SIZEBYTES,
+  POPULARITYSCORE
+FROM TABLE_ENTITY
+WHERE SIZEBYTES IS NOT NULL
+ORDER BY SIZEBYTES DESC;
+
+-- Calculate total storage used by unpopular tables
+SELECT SUM(SIZEBYTES) as bytes_in_unpopular_tables
+FROM TABLE_ENTITY
+WHERE POPULARITYSCORE < 0.05;`
+    },
+    {
+      title: 'Most Popular Tables',
+      description: 'Find tables with highest query counts',
+      query: `SELECT NAME, QUERYCOUNT, POPULARITYSCORE, COLUMNCOUNT
+FROM TABLE_ENTITY
+ORDER BY QUERYCOUNT DESC
+LIMIT 20;`
+    },
+    {
+      title: 'Popularity Analysis: Frequent Column Updaters',
+      description: 'Find users who update columns most frequently - useful for identifying power users',
+      query: `/*
+Use Case: Popularity Analysis
+
+For example, here's a query that shows the users who update Columns most frequently in Atlan:
+*/
+
+SELECT
+  UPDATEDBY,
+  TO_TIMESTAMP(MAX(UPDATETIME)/1000) AS LASTUPDATE,
+  COUNT(*) AS UPDATECOUNT
+FROM
+  COLUMN_ENTITY
+GROUP BY
+  UPDATEDBY
+ORDER BY
+  UPDATECOUNT DESC;`
+    },
+    {
+      title: 'Table-Column Join',
+      description: 'Get column details with parent table information',
+      query: `SELECT tbl.name AS table_name,
+       col.name AS column_name,
+       col.datatype,
+       TO_TIMESTAMP(col.updatetime/1000) AS column_updated,
+       tbl.rowcount
+FROM COLUMN_ENTITY col
+JOIN TABLE_ENTITY tbl ON col."TABLE"[0] = tbl.guid
+LIMIT 50;`
+    },
+    {
+      title: 'Find Column by GUID',
+      description: 'Get parent table for a specific column',
+      query: `SELECT name AS table_name, rowcount
+FROM TABLE_ENTITY
+WHERE ARRAY_CONTAINS('<COLUMN_GUID>', columns);`
+    },
+    {
+      title: 'Untagged Tables',
+      description: 'Find tables without any classification tags',
+      query: `SELECT GUID, QUALIFIEDNAME, COLUMNCOUNT, ROWCOUNT
+FROM TABLE_ENTITY
+WHERE ASSETTAGS = '[]';`
+    },
+    {
+      title: 'Inactive Tables',
+      description: 'Find tables with inactive status',
+      query: `SELECT GUID, QUALIFIEDNAME, COLUMNCOUNT, ROWCOUNT, QUERYCOUNT
+FROM TABLE_ENTITY
+WHERE STATUS = 'INACTIVE';
+
+-- Status distribution
+SELECT STATUS, COUNT(*)
+FROM TABLE_ENTITY
+GROUP BY STATUS;`
+    },
+  ],
+  queries: [
+    {
+      title: 'List Collections',
+      description: 'View all Insights collections',
+      query: `SELECT * FROM COLLECTION_ENTITY;`
+    },
+    {
+      title: 'Collection Hierarchy',
+      description: 'See folders within collections',
+      query: `SELECT c.NAME as collection_name, f.NAME as folder_name
+FROM COLLECTION_ENTITY c
+LEFT JOIN FOLDER_ENTITY f ON f.COLLECTIONQUALIFIEDNAME = c.QUALIFIEDNAME;`
+    },
+  ],
+  bi: [
+    {
+      title: 'Tableau Calculated Field Duplicates',
+      description: 'Find potential duplicate calculated fields by name',
+      query: `WITH standardized_metrics AS (
+  SELECT NAME AS original_metric_name, GUID AS metric_guid,
+         FORMULA AS original_formula,
+         LOWER(REGEXP_REPLACE(NAME, '[ _-]', '', 1, 0)) AS standardized_name
+  FROM TABLEAUCALCULATEDFIELD_ENTITY
+)
+SELECT DISTINCT
+  t1.original_metric_name AS duplicate_1_name,
+  t1.metric_guid AS duplicate_1_guid,
+  t1.original_formula AS duplicate_1_formula,
+  t2.original_metric_name AS duplicate_2_name,
+  t2.metric_guid AS duplicate_2_guid,
+  t2.original_formula AS duplicate_2_formula
+FROM standardized_metrics t1
+JOIN standardized_metrics t2
+  ON t1.standardized_name LIKE '%' || t2.standardized_name || '%'
+  AND LENGTH(t1.standardized_name) > LENGTH(t2.standardized_name)
+  AND t1.metric_guid != t2.metric_guid
+ORDER BY duplicate_1_name;`
+    },
+    {
+      title: 'Tableau Formula Duplicates',
+      description: 'Find calculated fields with identical formulas',
+      query: `WITH standardized_metrics AS (
+  SELECT NAME AS metric_name, GUID AS metric_guid, FORMULA AS original_formula,
+         LOWER(REGEXP_REPLACE(FORMULA, '[ _\\[\\]]', '', 1, 0)) AS standardized_formula
+  FROM TABLEAUCALCULATEDFIELD_ENTITY
+)
+SELECT standardized_formula,
+       COUNT(*) AS number_of_metrics,
+       LISTAGG(metric_guid, ', ') WITHIN GROUP (ORDER BY metric_guid) AS all_guids,
+       LISTAGG(metric_name, ', ') WITHIN GROUP (ORDER BY metric_name) AS all_names
+FROM standardized_metrics
+GROUP BY standardized_formula
+HAVING COUNT(*) > 1
+ORDER BY number_of_metrics DESC;`
+    },
+    {
+      title: 'Power BI Measure Duplicates',
+      description: 'Find measures with same name across tables',
+      query: `SELECT
+  t1.NAME "MEASURE 1 NAME",
+  t1.GUID "MEASURE 1 GUID",
+  t1.POWERBIMEASUREEXPRESSION "MEASURE 1 EXPRESSION",
+  t2.NAME "MEASURE 2 NAME",
+  t2.GUID "MEASURE 2 GUID",
+  t2.POWERBIMEASUREEXPRESSION "MEASURE 2 EXPRESSION",
+  t1."TABLE" "COMMON TABLE"
+FROM POWERBIMEASURE_ENTITY t1
+JOIN POWERBIMEASURE_ENTITY t2
+  ON t1.NAME = t2.NAME
+  AND GET(t1."TABLE", 0) = GET(t2."TABLE", 0)
+WHERE t1.GUID < t2.GUID
+ORDER BY "MEASURE 1 NAME";`
+    },
+    {
+      title: 'Power BI Measures by Popularity',
+      description: 'Find most popular Power BI measures',
+      query: `SELECT NAME, POPULARITYSCORE, POWERBIMEASUREEXPRESSION
+FROM POWERBIMEASURE_ENTITY
+ORDER BY POPULARITYSCORE DESC
+LIMIT 20;`
+    },
+    {
+      title: 'Tables with Measures',
+      description: 'Find Power BI tables that have measures',
+      query: `SELECT * FROM POWERBITABLE_ENTITY
+WHERE POWERBITABLEMEASURECOUNT > 0;`
+    },
+  ],
+  dbt: [
+    {
+      title: 'dbt Job Status Summary',
+      description: 'Count models by job status',
+      query: `SELECT dbtJobStatus, COUNT(*)
+FROM DBTMODELCOLUMN_ENTITY
+GROUP BY dbtJobStatus;
+
+SELECT assetDbtJobStatus, COUNT(*)
+FROM TABLE_ENTITY
+GROUP BY assetDbtJobStatus;`
+    },
+    {
+      title: 'dbt Models Overview',
+      description: 'View dbt models with materialization type',
+      query: `SELECT NAME, DBTALIAS, DBTMATERIALIZATION, DBTRAWSQL
+FROM DBTMODEL_ENTITY
+LIMIT 50;`
+    },
+  ],
+  storage: [
+    {
+      title: 'S3 Bucket Overview',
+      description: 'List S3 buckets with object counts',
+      query: `SELECT NAME, S3BUCKETARN, AWSREGION, S3OBJECTCOUNT
+FROM S3BUCKET_ENTITY
+ORDER BY S3OBJECTCOUNT DESC;`
+    },
+  ],
+  orchestration: [
+    {
+      title: 'Airflow DAGs',
+      description: 'List all Airflow DAGs with schedules',
+      query: `SELECT NAME, AIRFLOWDAGSCHEDULE, AIRFLOWDAGSCHEDULEINTERVAL
+FROM AIRFLOWDAG_ENTITY;`
+    },
+    {
+      title: 'Workflow Entities',
+      description: 'View all workflow definitions',
+      query: `SELECT * FROM WORKFLOW_ENTITY;`
+    },
+  ],
+  governance: [
+    {
+      title: 'Most Popular Tags',
+      description: 'Find most frequently used classification tags',
+      query: `SELECT TAGNAME, COUNT(TAGNAME) as usage_count
+FROM TAG_RELATIONSHIP
+GROUP BY TAGNAME
+ORDER BY usage_count DESC;`
+    },
+    {
+      title: 'List Assets with Tags',
+      description: 'List all tables with their assigned classification tags',
+      query: `/*
+List assets with tags
+*/
+SELECT
+  TB.GUID,
+  TB.NAME TABLENAME,
+  TG.TAGNAME
+FROM
+  TABLE_ENTITY TB
+  JOIN TAG_RELATIONSHIP TG
+  ON TB.GUID = TG.ENTITYGUID
+WHERE
+  TB.NAME IS NOT NULL;`
+    },
+    {
+      title: 'Untagged Tables (Compliance)',
+      description: 'Find tables without tags for compliance - includes creator and database for notification',
+      query: `-- TAG COMPLIANCE USE CASE
+-- Some companies require all tables to have a tag
+-- (e.g., specifying data retention period).
+-- Tables without tags may be flagged for deletion.
+
+-- Find all untagged tables with creator info for follow-up:
+SELECT DISTINCT
+  TB.GUID,
+  TB.NAME AS TABLENAME,
+  TB.CREATEDBY,
+  TB.DATABASEQUALIFIEDNAME
+FROM TABLE_ENTITY TB
+LEFT JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
+WHERE TG.TAGNAME IS NULL;
+
+-- Use this to notify creators to add required tags`
+    },
+    {
+      title: 'Custom Metadata Query',
+      description: 'Find assets with specific custom metadata values',
+      query: `SELECT col.guid, col.name AS column_name,
+       cm.attributedisplayname, cm.attributevalue
+FROM COLUMN_ENTITY col
+JOIN CUSTOMMETADATA_RELATIONSHIP cm ON col.guid = cm.entityguid
+WHERE attributedisplayname = 'Cost Center Attribution'
+  AND attributevalue = 'COGS';`
+    },
+    {
+      title: 'Custom Metadata Overview',
+      description: 'Explore all custom metadata attributes',
+      query: `SELECT DISTINCT attributedisplayname, attributevalue, COUNT(*)
+FROM CUSTOMMETADATA_RELATIONSHIP
+GROUP BY attributedisplayname, attributevalue
+ORDER BY COUNT(*) DESC;`
+    },
+    {
+      title: 'Assets with Tags (Join Pattern)',
+      description: 'List assets with their tags using JOIN pattern',
+      query: `-- Pattern for listing any asset type with tags
+SELECT
+  TB.GUID,
+  TB.NAME AS TABLENAME,
+  TG.TAGNAME
+FROM TABLE_ENTITY TB
+JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
+WHERE TB.NAME IS NOT NULL;
+
+-- Same pattern works for columns, views, etc.
+-- Just replace TABLE_ENTITY with the entity type you need`
+    },
+  ],
+  ai: [
+    {
+      title: 'AI Models Overview',
+      description: 'List all AI/ML models with status',
+      query: `SELECT NAME, AIMODELSTATUS, AIMODELVERSION, AIMODELTYPE
+FROM AIMODEL_ENTITY
+ORDER BY AIMODELVERSION DESC;`
+    },
   ],
 };
 
@@ -148,14 +1089,94 @@ const colHeaders = {
   exampleQuery: 'Example Query',
 };
 
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  
+  const handleCopy = async (e) => {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  
+  return (
+    <button
+      onClick={handleCopy}
+      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-all duration-200 ${
+        copied 
+          ? 'bg-green-500 text-white' 
+          : 'bg-white border border-gray-200 text-gray-600 hover:border-[#3366FF] hover:text-[#3366FF]'
+      }`}
+      title="Copy to clipboard"
+    >
+      {copied ? (
+        <>
+          <Check size={12} />
+          <span>Copied!</span>
+        </>
+      ) : (
+        <>
+          <Copy size={12} />
+          <span>Copy</span>
+        </>
+      )}
+    </button>
+  );
+}
+
+function QueryCard({ title, description, query }) {
+  const [expanded, setExpanded] = useState(false);
+  
+  return (
+    <div className={`bg-white rounded-xl border overflow-hidden transition-all duration-200 ${
+      expanded ? 'border-[#3366FF] shadow-lg' : 'border-gray-200 shadow-sm hover:shadow-md hover:border-gray-300'
+    }`}>
+      <div 
+        className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-[#3366FF]/10 rounded-lg">
+            <Code2 size={18} className="text-[#3366FF]" />
+          </div>
+          <div>
+            <h4 className="font-semibold text-gray-900 text-sm">{title}</h4>
+            <p className="text-gray-500 text-xs mt-0.5">{description}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <CopyButton text={query} />
+          <div className={`w-6 h-6 flex items-center justify-center rounded-full bg-gray-100 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}>
+            <span className="text-gray-500 text-xs">▶</span>
+          </div>
+        </div>
+      </div>
+      {expanded && (
+        <div className="border-t border-gray-100 p-4 bg-gray-50">
+          <pre className="text-xs text-gray-800 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed p-4 bg-white rounded-lg border border-gray-200">
+            {query}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('core');
   const [search, setSearch] = useState('');
+  const [showQueries, setShowQueries] = useState(false);
 
   const filteredData = data[activeTab].filter(row =>
     Object.values(row).some(val => 
       val?.toString().toLowerCase().includes(search.toLowerCase())
     )
+  );
+
+  const filteredQueries = (exampleQueries[activeTab] || []).filter(q =>
+    q.title.toLowerCase().includes(search.toLowerCase()) ||
+    q.description.toLowerCase().includes(search.toLowerCase()) ||
+    q.query.toLowerCase().includes(search.toLowerCase())
   );
 
   const downloadCSV = () => {
@@ -191,24 +1212,78 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 p-4">
-      <div className="max-w-full mx-auto">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-white mb-2">Atlan Metadata Lakehouse Entity Dictionary</h1>
-          <p className="text-gray-400 text-sm">Reference guide for MDLH entity types, tables, and attributes</p>
+    <div className="min-h-screen bg-white text-gray-900">
+      {/* Header Navigation Bar */}
+      <nav className="border-b border-gray-200 bg-white sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-[#3366FF] font-bold text-xl">atlan</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <input
+              type="text"
+              placeholder="Search"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-64 px-4 py-2 bg-white border border-gray-300 rounded-full text-sm focus:outline-none focus:border-[#3366FF] focus:ring-2 focus:ring-[#3366FF]/20 transition-all duration-200 placeholder-gray-400"
+            />
+          </div>
         </div>
+      </nav>
 
-        <div className="flex flex-wrap gap-1 mb-4 bg-gray-900 p-2 rounded-lg">
+      {/* Hero Section */}
+      <div className="bg-[#3366FF] rounded-2xl mx-6 mt-6 p-8 text-white">
+        <div className="max-w-4xl mx-auto text-center">
+          <h1 className="text-3xl font-semibold mb-3 italic">
+            Metadata Lakehouse Entity Dictionary
+          </h1>
+          <p className="text-blue-100 text-lg">
+            Reference guide for MDLH entity types, tables, attributes, and example queries
+          </p>
+          
+          {/* Quick Action Buttons */}
+          <div className="flex flex-wrap justify-center gap-3 mt-6">
+            <button
+              onClick={() => setShowQueries(!showQueries)}
+              className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all duration-200 ${
+                showQueries 
+                  ? 'bg-white text-[#3366FF]' 
+                  : 'bg-white/20 text-white border border-white/30 hover:bg-white/30'
+              }`}
+            >
+              {showQueries ? 'Show Entities' : 'Show Queries'}
+            </button>
+            <button
+              onClick={downloadCSV}
+              className="px-5 py-2.5 bg-white/20 text-white border border-white/30 rounded-full text-sm font-medium hover:bg-white/30 transition-all duration-200 flex items-center gap-2"
+            >
+              <Download size={14} />
+              Export Tab
+            </button>
+            <button
+              onClick={downloadAllCSV}
+              className="px-5 py-2.5 bg-white/20 text-white border border-white/30 rounded-full text-sm font-medium hover:bg-white/30 transition-all duration-200 flex items-center gap-2"
+            >
+              <Download size={14} />
+              Export All
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-6 py-6">
+        {/* Tab Navigation */}
+        <div className="flex flex-wrap gap-2 mb-6 pb-4 border-b border-gray-200">
           {tabs.map(tab => {
             const Icon = tab.icon;
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 ${
                   activeTab === tab.id
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                    ? 'bg-[#3366FF] text-white'
+                    : 'bg-white text-gray-600 border border-gray-200 hover:border-[#3366FF] hover:text-[#3366FF]'
                 }`}
               >
                 <Icon size={14} />
@@ -218,68 +1293,77 @@ export default function App() {
           })}
         </div>
 
-        <div className="flex gap-2 mb-4">
-          <input
-            type="text"
-            placeholder="Search entities..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm focus:outline-none focus:border-blue-500"
-          />
-          <button
-            onClick={downloadCSV}
-            className="flex items-center gap-1.5 px-3 py-2 bg-green-700 hover:bg-green-600 rounded text-sm font-medium"
-          >
-            <Download size={14} />
-            Export Tab
-          </button>
-          <button
-            onClick={downloadAllCSV}
-            className="flex items-center gap-1.5 px-3 py-2 bg-purple-700 hover:bg-purple-600 rounded text-sm font-medium"
-          >
-            <Download size={14} />
-            Export All
-          </button>
-        </div>
-
-        <div className="overflow-x-auto bg-gray-900 rounded-lg border border-gray-800">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="bg-gray-800">
-                {columns[activeTab].map(col => (
-                  <th key={col} className="px-3 py-2 text-left font-semibold text-gray-300 border-b border-gray-700">
-                    {colHeaders[col]}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredData.map((row, i) => (
-                <tr key={i} className="border-b border-gray-800 hover:bg-gray-800/50">
-                  {columns[activeTab].map(col => (
-                    <td key={col} className="px-3 py-2 align-top">
-                      {col === 'entity' ? (
-                        <span className="font-mono font-semibold text-blue-400">{row[col]}</span>
-                      ) : col === 'table' ? (
-                        <span className="font-mono text-green-400">{row[col]}</span>
-                      ) : col === 'exampleQuery' ? (
-                        <code className="text-yellow-300 text-[10px] break-all">{row[col]}</code>
-                      ) : (
-                        <span className="text-gray-300">{row[col]}</span>
-                      )}
-                    </td>
+        {!showQueries ? (
+          <>
+            <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50">
+                    {columns[activeTab].map(col => (
+                      <th key={col} className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider">
+                        {colHeaders[col]}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredData.map((row, i) => (
+                    <tr key={i} className="hover:bg-blue-50/50 transition-colors duration-150">
+                      {columns[activeTab].map(col => (
+                        <td key={col} className="px-4 py-3 align-top">
+                          {col === 'entity' ? (
+                            <span className="font-semibold text-[#3366FF]">{row[col]}</span>
+                          ) : col === 'table' ? (
+                            <span className="font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs">{row[col]}</span>
+                          ) : col === 'exampleQuery' ? (
+                            <code className="text-gray-600 bg-gray-100 px-2 py-0.5 rounded text-xs break-all">{row[col]}</code>
+                          ) : (
+                            <span className="text-gray-600">{row[col]}</span>
+                          )}
+                        </td>
+                      ))}
+                    </tr>
                   ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                </tbody>
+              </table>
+            </div>
 
-        <div className="mt-4 text-xs text-gray-500">
-          Showing {filteredData.length} of {data[activeTab].length} entities in {tabs.find(t => t.id === activeTab)?.label}
-        </div>
+            <div className="mt-5 flex items-center justify-between">
+              <p className="text-sm text-gray-500">
+                Showing <span className="text-gray-900 font-medium">{filteredData.length}</span> of <span className="text-gray-900 font-medium">{data[activeTab].length}</span> entities in <span className="text-[#3366FF] font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
+              </p>
+              <p className="text-sm text-gray-400">
+                Click "Show Queries" to see example SQL queries
+              </p>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="space-y-3">
+              {filteredQueries.length > 0 ? (
+                filteredQueries.map((q, i) => (
+                  <QueryCard key={i} title={q.title} description={q.description} query={q.query} />
+                ))
+              ) : (
+                <div className="text-center py-12 bg-gray-50 rounded-xl border border-gray-200">
+                  <Code2 size={48} className="mx-auto text-gray-300 mb-3" />
+                  <p className="text-gray-600 font-medium">No example queries available</p>
+                  <p className="text-gray-400 text-sm mt-1">Queries for this category are coming soon</p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 flex items-center justify-between">
+              <p className="text-sm text-gray-500">
+                Showing <span className="text-gray-900 font-medium">{filteredQueries.length}</span> example queries for <span className="text-[#3366FF] font-medium">{tabs.find(t => t.id === activeTab)?.label}</span>
+              </p>
+              <p className="text-sm text-gray-400">
+                Click any query to expand and copy
+              </p>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
-
