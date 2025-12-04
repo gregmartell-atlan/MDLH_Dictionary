@@ -15,7 +15,7 @@ class ConnectionRequest(BaseModel):
     user: Optional[str] = None
     password: Optional[str] = None
     token: Optional[str] = None  # Personal Access Token
-    auth_type: Optional[str] = "password"  # 'password' or 'token'
+    auth_type: Optional[str] = "token"  # 'token' or 'sso'
     warehouse: Optional[str] = None
     database: Optional[str] = None
     schema: Optional[str] = None
@@ -28,8 +28,18 @@ async def test_connection(request: ConnectionRequest = None):
     try:
         # If credentials provided in request, use them
         if request and request.account and request.user:
-            # Check if using token or password auth
-            if request.auth_type == "token" and request.token:
+            # Check auth type
+            if request.auth_type == "sso":
+                # External browser authentication (SSO/Okta)
+                result = snowflake_service.connect_with_sso(
+                    account=request.account,
+                    user=request.user,
+                    warehouse=request.warehouse,
+                    database=request.database,
+                    schema=request.schema,
+                    role=request.role
+                )
+            elif request.auth_type == "token" and request.token:
                 result = snowflake_service.connect_with_token(
                     account=request.account,
                     user=request.user,
@@ -50,7 +60,7 @@ async def test_connection(request: ConnectionRequest = None):
                     role=request.role
                 )
             else:
-                return ConnectionStatus(connected=False, error="No authentication credentials provided")
+                return ConnectionStatus(connected=False, error="No authentication credentials provided. Use SSO or provide a token.")
         else:
             # Use environment config
             result = snowflake_service.test_connection()

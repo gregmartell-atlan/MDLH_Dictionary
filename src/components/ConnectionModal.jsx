@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Database, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Info, Key } from 'lucide-react';
 
 export default function ConnectionModal({ isOpen, onClose, onConnect, currentStatus }) {
+  const [authMethod, setAuthMethod] = useState('token'); // 'token' or 'sso'
   const [formData, setFormData] = useState({
     account: '',
     user: '',
@@ -48,13 +49,17 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
       const requestBody = {
         account: formData.account,
         user: formData.user,
-        token: formData.token,
         warehouse: formData.warehouse,
         database: formData.database,
         schema: formData.schema,
         role: formData.role || undefined,
-        auth_type: 'token'
+        auth_type: authMethod // 'token' or 'sso'
       };
+      
+      // Add token only for token auth
+      if (authMethod === 'token') {
+        requestBody.token = formData.token;
+      }
       
       const response = await fetch('http://localhost:8000/api/connect', {
         method: 'POST',
@@ -68,7 +73,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
       if (result.connected && saveToStorage) {
         // Save config (without token) to localStorage
         const { token, ...configToSave } = formData;
-        localStorage.setItem('snowflake_config', JSON.stringify(configToSave));
+        localStorage.setItem('snowflake_config', JSON.stringify({ ...configToSave, authMethod }));
       }
       
       if (result.connected) {
@@ -114,6 +119,39 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {/* Auth Method Toggle */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Authentication Method
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setAuthMethod('token')}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
+                  authMethod === 'token'
+                    ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <Key size={16} />
+                <span className="font-medium">Access Token</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthMethod('sso')}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
+                  authMethod === 'sso'
+                    ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <Database size={16} />
+                <span className="font-medium">SSO / Browser</span>
+              </button>
+            </div>
+          </div>
+
           {/* Account */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -142,40 +180,61 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
               type="text"
               value={formData.user}
               onChange={(e) => handleChange('user', e.target.value)}
-              placeholder="your_username"
+              placeholder="your_username@company.com"
               className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
               required
             />
+            {authMethod === 'sso' && (
+              <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                <Info size={12} />
+                Use your SSO email address
+              </p>
+            )}
           </div>
 
-          {/* Personal Access Token */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-              <Key size={14} />
-              Personal Access Token *
-            </label>
-            <div className="relative">
-              <input
-                type={showSecret ? 'text' : 'password'}
-                value={formData.token}
-                onChange={(e) => handleChange('token', e.target.value)}
-                placeholder="Paste your PAT here..."
-                className="w-full px-4 py-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none font-mono text-sm"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowSecret(!showSecret)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+          {/* Personal Access Token - only show for token auth */}
+          {authMethod === 'token' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                <Key size={14} />
+                Personal Access Token *
+              </label>
+              <div className="relative">
+                <input
+                  type={showSecret ? 'text' : 'password'}
+                  value={formData.token}
+                  onChange={(e) => handleChange('token', e.target.value)}
+                  placeholder="Paste your PAT here..."
+                  className="w-full px-4 py-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none font-mono text-sm"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowSecret(!showSecret)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                <Info size={12} />
+                Generate in Snowsight: User menu → Profile → Access Tokens
+              </p>
             </div>
-            <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-              <Info size={12} />
-              Generate in Snowsight: User menu → Profile → Access Tokens
-            </p>
-          </div>
+          )}
+
+          {/* SSO Info */}
+          {authMethod === 'sso' && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <p className="text-sm text-amber-800 flex items-start gap-2">
+                <Info size={16} className="mt-0.5 flex-shrink-0" />
+                <span>
+                  <strong>SSO Authentication:</strong> A browser window will open for you to log in with your company's SSO (Okta, Azure AD, etc). 
+                  The backend server must be running locally for this to work.
+                </span>
+              </p>
+            </div>
+          )}
 
           {/* Warehouse & Database */}
           <div className="grid grid-cols-2 gap-4">
@@ -283,7 +342,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
             </button>
             <button
               type="submit"
-              disabled={testing || !formData.account || !formData.user || !formData.token}
+              disabled={testing || !formData.account || !formData.user || (authMethod === 'token' && !formData.token)}
               className="flex-1 px-4 py-2.5 bg-[#3366FF] text-white rounded-lg hover:bg-blue-600 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {testing ? (

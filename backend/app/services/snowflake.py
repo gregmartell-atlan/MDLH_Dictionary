@@ -234,6 +234,50 @@ class SnowflakeService:
             "error": f"Token authentication failed. Your PAT may have expired or lacks permissions. Error: {error_summary}"
         }
     
+    def connect_with_sso(
+        self,
+        account: str,
+        user: str,
+        warehouse: Optional[str] = None,
+        database: Optional[str] = None,
+        schema: Optional[str] = None,
+        role: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Connect using external browser (SSO/Okta) authentication."""
+        try:
+            connect_params = {
+                "account": account,
+                "user": user,
+                "authenticator": "externalbrowser",
+                "warehouse": warehouse or "COMPUTE_WH",
+                "database": database or "ATLAN_MDLH",
+                "schema": schema or "PUBLIC",
+            }
+            
+            if role:
+                connect_params["role"] = role
+            
+            # This will open a browser for SSO login
+            self._connection = snowflake.connector.connect(**connect_params)
+            
+            with self.get_cursor() as cursor:
+                cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE()")
+                row = cursor.fetchone()
+                return {
+                    "connected": True,
+                    "user": row["CURRENT_USER()"],
+                    "account": row["CURRENT_ACCOUNT()"],
+                    "warehouse": row["CURRENT_WAREHOUSE()"],
+                    "database": row["CURRENT_DATABASE()"],
+                    "schema": row["CURRENT_SCHEMA()"],
+                    "role": row["CURRENT_ROLE()"],
+                }
+        except Exception as e:
+            return {
+                "connected": False,
+                "error": f"SSO authentication failed. Make sure you complete the login in the browser window. Error: {str(e)}"
+            }
+    
     def disconnect(self):
         """Close the connection."""
         if self._connection:
