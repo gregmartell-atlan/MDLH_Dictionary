@@ -162,20 +162,33 @@ async def execute_query(
         statement_count = _count_statements(request.sql)
         
         # Execute query (enable multi-statement if needed)
+        columns = []
+        rows = []
+        
         if statement_count > 1:
             logger.info(f"Executing {statement_count} statements")
             cursor.execute(request.sql, num_statements=statement_count)
-            # For multi-statement, get results from the last statement
-            while cursor.nextset():
-                pass  # Skip to last result set
+            
+            # For multi-statement, collect results from each statement
+            # Keep the last non-empty result set (usually the SELECT/SHOW)
+            while True:
+                if cursor.description:
+                    current_columns = [desc[0] for desc in cursor.description]
+                    current_rows = cursor.fetchall()
+                    # Keep results if this statement returned rows
+                    if current_rows or not rows:
+                        columns = current_columns
+                        rows = [list(row) for row in current_rows]
+                        logger.info(f"Statement returned {len(rows)} rows, {len(columns)} columns")
+                
+                # Move to next result set, break if none left
+                if not cursor.nextset():
+                    break
         else:
             cursor.execute(request.sql)
-        
-        # Fetch results
-        columns = [desc[0] for desc in cursor.description] if cursor.description else []
-        rows = cursor.fetchall()
-        # Convert to lists for JSON serialization
-        rows = [list(row) for row in rows]
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+            rows = [list(row) for row in rows]
         
         execution_time_ms = int((time.time() - start_time) * 1000)
         cursor.close()
