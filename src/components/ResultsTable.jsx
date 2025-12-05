@@ -293,16 +293,49 @@ export default function ResultsTable({
     );
   }
   
+  const rowCount = results.rowCount ?? results.total_rows ?? results.rows?.length ?? 0;
+  const columnCount = results.columns?.length ?? 0;
+  
+  // Show empty table message when 0 rows but columns exist
+  if (rowCount === 0 && columnCount > 0) {
+    return (
+      <div className="flex flex-col h-full bg-white">
+        {/* Toolbar */}
+        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
+          <div className="flex items-center gap-4 text-sm text-gray-600">
+            <span><strong>0</strong> rows</span>
+            <span><strong>{columnCount}</strong> columns</span>
+          </div>
+        </div>
+        
+        {/* Empty results message */}
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="text-center max-w-md">
+            <div className="text-6xl mb-4">📭</div>
+            <h3 className="text-lg font-medium text-gray-700 mb-2">Query Returned No Rows</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              The query executed successfully and found <strong>{columnCount} columns</strong>, but the table is empty or no rows matched your query conditions.
+            </p>
+            <div className="text-xs text-gray-400 bg-gray-50 rounded p-2 font-mono">
+              Columns: {results.columns?.slice(0, 5).map(c => typeof c === 'string' ? c : c.name).join(', ')}
+              {columnCount > 5 && ` ... +${columnCount - 5} more`}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
         <div className="flex items-center gap-4 text-sm text-gray-600">
           <span>
-            <strong>{(results.rowCount ?? results.total_rows ?? results.rows?.length ?? 0).toLocaleString()}</strong> rows
+            <strong>{rowCount.toLocaleString()}</strong> rows
           </span>
           <span>
-            <strong>{results.columns?.length ?? 0}</strong> columns
+            <strong>{columnCount}</strong> columns
           </span>
         </div>
         

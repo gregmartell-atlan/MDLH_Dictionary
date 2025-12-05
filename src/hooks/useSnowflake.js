@@ -159,19 +159,35 @@ export function useQuery() {
           `${API_URL}/api/query/${data.query_id}/results`,
           { headers: { 'X-Session-ID': sessionId } }
         );
+        
+        // Check for errors in results fetch
+        if (!resultsRes.ok) {
+          // If results fetch failed, still show what we know from the execute response
+          console.warn(`[Query] Results fetch failed (${resultsRes.status}), using execute response`);
+          const result = {
+            columns: [],
+            rows: [],
+            rowCount: data.row_count || 0,
+            executionTime: data.execution_time_ms,
+            warning: `Results fetch failed: ${resultsRes.status}`
+          };
+          setResults(result);
+          return result;
+        }
+        
         const resultsData = await resultsRes.json();
 
         const result = {
-          columns: resultsData.columns,
-          rows: resultsData.rows,
-          rowCount: resultsData.total_rows,
+          columns: resultsData.columns || [],
+          rows: resultsData.rows || [],
+          rowCount: resultsData.total_rows ?? resultsData.rows?.length ?? data.row_count ?? 0,
           executionTime: data.execution_time_ms
         };
         setResults(result);
         return result;
       } else {
         setError(data.message || 'Query failed');
-        return null;
+        return { success: false, error: data.message };
       }
     } catch (err) {
       setError(err.message || 'Query failed');
