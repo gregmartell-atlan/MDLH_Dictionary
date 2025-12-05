@@ -65,6 +65,149 @@ async function discoverMDLHTables(database, schema) {
   return new Set();
 }
 
+// Find alternative table name if expected one doesn't exist
+function findAlternativeTable(expectedTable, discoveredTables) {
+  if (!expectedTable || discoveredTables.size === 0) return null;
+  
+  const expected = expectedTable.toUpperCase();
+  
+  // If exact match exists, return it
+  if (discoveredTables.has(expected)) return expected;
+  
+  // Try common variations
+  const variations = [
+    expected,
+    expected.replace('_ENTITY', ''),  // TABLE_ENTITY -> TABLE
+    expected + '_ENTITY',              // TABLE -> TABLE_ENTITY
+    expected.replace('ATLAS', ''),     // ATLASGLOSSARY -> GLOSSARY
+    'ATLAS' + expected,                // GLOSSARY -> ATLASGLOSSARY
+  ];
+  
+  for (const variation of variations) {
+    if (discoveredTables.has(variation)) return variation;
+  }
+  
+  // Try fuzzy match - find tables containing the key part
+  const keyPart = expected.replace('_ENTITY', '').replace('ATLAS', '');
+  for (const table of discoveredTables) {
+    if (table.includes(keyPart) && table.endsWith('_ENTITY')) {
+      return table;
+    }
+  }
+  
+  return null;
+}
+
+// Fix a query to use available tables
+function fixQueryForAvailableTables(sql, discoveredTables, database, schema) {
+  if (!sql || discoveredTables.size === 0) return { sql, fixed: false, changes: [] };
+  
+  const changes = [];
+  let fixedSql = sql;
+  
+  // Find all table references in the query (FROM/JOIN clauses)
+  const tablePattern = /(?:FROM|JOIN)\s+(?:[\w.]+\.)?(\w+_ENTITY)/gi;
+  let match;
+  
+  while ((match = tablePattern.exec(sql)) !== null) {
+    const originalTable = match[1].toUpperCase();
+    
+    if (!discoveredTables.has(originalTable)) {
+      const alternative = findAlternativeTable(originalTable, discoveredTables);
+      
+      if (alternative && alternative !== originalTable) {
+        // Replace the table name in the query
+        const fullRef = `${database}.${schema}.${alternative}`;
+        fixedSql = fixedSql.replace(
+          new RegExp(`(FROM|JOIN)\\s+(?:[\\w.]+\\.)?${match[1]}`, 'gi'),
+          `$1 ${fullRef}`
+        );
+        changes.push({ from: originalTable, to: alternative });
+      }
+    }
+  }
+  
+  return {
+    sql: fixedSql,
+    fixed: changes.length > 0,
+    changes
+  };
+}
+
+// Get all entity tables referenced in a category's queries and data
+function getEntityTablesForCategory(category, dataForCategory, queriesForCategory) {
+  const tables = new Set();
+  
+  // From entity data
+  if (dataForCategory) {
+    dataForCategory.forEach(row => {
+      if (row.table && row.table !== '(abstract)') {
+        tables.add(row.table.toUpperCase());
+      }
+    });
+  }
+  
+  // From queries
+  if (queriesForCategory) {
+    queriesForCategory.forEach(q => {
+      const match = q.query?.match(/FROM\s+(?:[\w.]+\.)?(\w+_ENTITY)/i);
+      if (match) tables.add(match[1].toUpperCase());
+    });
+  }
+  
+  return tables;
+}
+
+// Pre-validate all queries and return validation map
+function preValidateAllQueries(allQueries, discoveredTables, database, schema) {
+  const validationMap = new Map();
+  
+  Object.entries(allQueries).forEach(([category, queries]) => {
+    queries.forEach((q, index) => {
+      const queryId = `${category}-${index}`;
+      const tableName = extractTableFromQuery(q.query);
+      
+      if (!tableName) {
+        validationMap.set(queryId, { valid: null, tableName: null });
+        return;
+      }
+      
+      const tableExists = discoveredTables.has(tableName.toUpperCase());
+      
+      if (tableExists) {
+        validationMap.set(queryId, { 
+          valid: true, 
+          tableName,
+          originalQuery: q.query
+        });
+      } else {
+        // Try to fix the query
+        const fixed = fixQueryForAvailableTables(q.query, discoveredTables, database, schema);
+        
+        if (fixed.fixed) {
+          validationMap.set(queryId, {
+            valid: true,
+            tableName: fixed.changes[0]?.to,
+            originalQuery: q.query,
+            fixedQuery: fixed.sql,
+            changes: fixed.changes,
+            autoFixed: true
+          });
+        } else {
+          validationMap.set(queryId, {
+            valid: false,
+            tableName,
+            originalQuery: q.query,
+            error: `Table ${tableName} not found in ${database}.${schema}`
+          });
+        }
+      }
+    });
+  });
+  
+  return validationMap;
+}
+
 // Validate a query by running it with LIMIT 0 (fast check)
 async function validateQuery(sql, database, schema) {
   try {
@@ -1225,15 +1368,22 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
               {sortedQueries.map((q, i) => {
                 const isHighlighted = highlightedQuery && q.query === highlightedQuery;
                 const tableAvailable = getTableAvailability(q.query);
+                const isAutoFixed = q.validation?.autoFixed;
+                
                 return (
-                  <div key={i} ref={isHighlighted ? highlightedRef : null}>
+                  <div key={q.queryId || i} ref={isHighlighted ? highlightedRef : null}>
                     <QueryCard 
-                      title={q.title} 
-                      description={q.description} 
+                      title={isAutoFixed ? `${q.title} (Auto-Fixed)` : q.title}
+                      description={isAutoFixed 
+                        ? `${q.description} • Table changed: ${q.validation.changes.map(c => `${c.from} → ${c.to}`).join(', ')}`
+                        : q.description
+                      }
                       query={q.query} 
                       defaultExpanded={isHighlighted}
                       onRunInEditor={onRunInEditor}
                       tableAvailable={tableAvailable}
+                      validated={q.validation?.valid}
+                      autoFixed={isAutoFixed}
                     />
                   </div>
                 );
@@ -1252,12 +1402,13 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
   );
 }
 
-function QueryCard({ title, description, query, defaultExpanded = false, onRunInEditor, validated = null, tableAvailable = null }) {
+function QueryCard({ title, description, query, defaultExpanded = false, onRunInEditor, validated = null, tableAvailable = null, autoFixed = false }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   
   // Determine status for visual feedback
   const isValidated = validated === true || tableAvailable === true;
   const isUnavailable = tableAvailable === false;
+  const isAutoFixed = autoFixed;
   
   return (
     <div className={`bg-white rounded-xl border overflow-hidden transition-all duration-200 ${
@@ -1288,7 +1439,12 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
           <div>
             <div className="flex items-center gap-2">
               <h4 className="font-semibold text-gray-900 text-sm">{title}</h4>
-              {isValidated && (
+              {isAutoFixed && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-medium rounded-full">
+                  🔧 Fixed
+                </span>
+              )}
+              {isValidated && !isAutoFixed && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-medium rounded-full">
                   <Check size={10} /> Ready
                 </span>
@@ -1762,6 +1918,8 @@ export default function App() {
   const [validatedQueries, setValidatedQueries] = useState(new Map()); // queryId -> { valid, error, columns }
   const [isValidating, setIsValidating] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [showOnlyAvailable, setShowOnlyAvailable] = useState(true); // Filter to show only queryable entities
+  const [queryValidationMap, setQueryValidationMap] = useState(new Map()); // Pre-validated queries
   
   // Check connection status on mount and when session changes
   useEffect(() => {
@@ -1793,7 +1951,7 @@ export default function App() {
     };
   }, []);
   
-  // Discover tables when database/schema changes or connection is made
+  // Discover tables and pre-validate queries when database/schema changes or connection is made
   useEffect(() => {
     if (isConnected && selectedMDLHDatabase && selectedMDLHSchema) {
       setIsDiscovering(true);
@@ -1801,6 +1959,23 @@ export default function App() {
         .then(tables => {
           setDiscoveredTables(tables);
           console.log(`[App] Discovered ${tables.size} tables`);
+          
+          // Pre-validate all queries
+          if (tables.size > 0) {
+            const validationMap = preValidateAllQueries(
+              exampleQueries, 
+              tables, 
+              selectedMDLHDatabase, 
+              selectedMDLHSchema
+            );
+            setQueryValidationMap(validationMap);
+            
+            // Log validation summary
+            const valid = [...validationMap.values()].filter(v => v.valid === true).length;
+            const invalid = [...validationMap.values()].filter(v => v.valid === false).length;
+            const autoFixed = [...validationMap.values()].filter(v => v.autoFixed).length;
+            console.log(`[App] Query validation: ${valid} valid, ${invalid} invalid, ${autoFixed} auto-fixed`);
+          }
         })
         .finally(() => setIsDiscovering(false));
     }
@@ -1837,17 +2012,60 @@ export default function App() {
   };
 
   // Skip filtering for editor tab
-  const filteredData = activeTab === 'editor' ? [] : (data[activeTab] || []).filter(row =>
-    Object.values(row).some(val => 
+  // Filter entities - optionally only show those with available tables
+  const filteredData = activeTab === 'editor' ? [] : (data[activeTab] || []).filter(row => {
+    // Search filter
+    const matchesSearch = Object.values(row).some(val => 
       val?.toString().toLowerCase().includes(search.toLowerCase())
-    )
-  );
+    );
+    if (!matchesSearch) return false;
+    
+    // Availability filter (only when connected and filter is enabled)
+    if (showOnlyAvailable && isConnected && discoveredTables.size > 0) {
+      // Abstract tables are always shown
+      if (row.table === '(abstract)') return true;
+      // Check if table exists
+      return discoveredTables.has(row.table?.toUpperCase());
+    }
+    
+    return true;
+  });
 
-  const filteredQueries = (exampleQueries[activeTab] || []).filter(q =>
-    q.title.toLowerCase().includes(search.toLowerCase()) ||
-    q.description.toLowerCase().includes(search.toLowerCase()) ||
-    q.query.toLowerCase().includes(search.toLowerCase())
-  );
+  // Filter and enhance queries with validation status
+  const filteredQueries = (exampleQueries[activeTab] || []).map((q, index) => {
+    const queryId = `${activeTab}-${index}`;
+    const validation = queryValidationMap.get(queryId);
+    
+    return {
+      ...q,
+      // Use fixed query if available
+      query: validation?.fixedQuery || q.query,
+      validation,
+      queryId
+    };
+  }).filter(q => {
+    // Search filter
+    const matchesSearch = 
+      q.title.toLowerCase().includes(search.toLowerCase()) ||
+      q.description.toLowerCase().includes(search.toLowerCase()) ||
+      q.query.toLowerCase().includes(search.toLowerCase());
+    if (!matchesSearch) return false;
+    
+    // Availability filter
+    if (showOnlyAvailable && isConnected && queryValidationMap.size > 0) {
+      // Show valid queries and auto-fixed queries
+      return q.validation?.valid !== false;
+    }
+    
+    return true;
+  });
+  
+  // Count available vs total for display
+  const totalEntities = (data[activeTab] || []).length;
+  const availableEntities = (data[activeTab] || []).filter(row => {
+    if (row.table === '(abstract)') return true;
+    return discoveredTables.has(row.table?.toUpperCase());
+  }).length;
 
   // Find a query related to an entity by searching for table name in query SQL
   const findQueryForEntity = (entityName, tableName) => {
@@ -2076,6 +2294,45 @@ export default function App() {
                 ))}
               </select>
             </div>
+            
+            {/* Connection status and availability toggle */}
+            {isConnected && discoveredTables.size > 0 ? (
+              <div className="flex items-center gap-3 mt-2">
+                <div className="flex items-center gap-1.5 text-xs text-green-200 bg-green-500/20 px-3 py-1.5 rounded-full">
+                  <Check size={12} />
+                  <span><strong>{discoveredTables.size}</strong> tables found • <strong>{availableEntities}</strong>/{totalEntities} entities queryable</span>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-blue-100 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showOnlyAvailable}
+                    onChange={(e) => setShowOnlyAvailable(e.target.checked)}
+                    className="w-4 h-4 rounded border-white/30 bg-white/20 text-green-500 focus:ring-green-500"
+                  />
+                  <span>Show only queryable</span>
+                </label>
+              </div>
+            ) : isConnected ? (
+              <div className="flex items-center gap-1.5 text-xs text-blue-200 bg-blue-500/20 px-3 py-1.5 rounded-full mt-2">
+                {isDiscovering ? (
+                  <>
+                    <Loader2 size={12} className="animate-spin" />
+                    <span>Discovering tables...</span>
+                  </>
+                ) : (
+                  <>
+                    <Database size={12} />
+                    <span>No tables found in {selectedMDLHDatabase}.{selectedMDLHSchema}</span>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 text-xs text-blue-200 bg-blue-500/20 px-3 py-1.5 rounded-full mt-2">
+                <Database size={12} />
+                <span>Connect via Query Editor to validate tables</span>
+              </div>
+            )}
+            
             {dbWarning && (
               <div className="flex items-center gap-1.5 text-xs text-yellow-200 bg-yellow-500/20 px-3 py-1 rounded-full">
                 <span>⚠️</span>
