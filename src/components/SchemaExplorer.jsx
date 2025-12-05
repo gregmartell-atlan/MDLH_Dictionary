@@ -100,7 +100,8 @@ function ColumnNode({ column, level, onInsert }) {
     'OBJECT': 'text-pink-600',
   };
   
-  const baseType = column.data_type.split('(')[0].toUpperCase();
+  const dataType = column.data_type || column.type || 'UNKNOWN';
+  const baseType = dataType.split('(')[0].toUpperCase();
   const typeColor = typeColors[baseType] || 'text-gray-500';
   
   return (
