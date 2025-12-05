@@ -47,7 +47,8 @@ export default function ResultsTable({
   const columns = useMemo(() => {
     if (!results?.columns) return [];
     
-    return results.columns.map(col => ({
+    return results.columns.map((col, index) => ({
+      id: col.name || `col_${index}`,  // TanStack requires id when header is a function
       accessorKey: col.name,
       header: ({ column }) => (
         <button
