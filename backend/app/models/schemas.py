@@ -1,7 +1,7 @@
 """Pydantic models for API request/response schemas."""
 
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any
 from datetime import datetime
 from enum import Enum
 
@@ -32,37 +32,52 @@ class ConnectionRequest(BaseModel):
 class DatabaseInfo(BaseModel):
     """Database metadata."""
     name: str
-    created_on: Optional[datetime] = None
+    created: Optional[str] = None
     owner: Optional[str] = None
+    comment: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
 
 
 class SchemaInfo(BaseModel):
     """Schema metadata."""
     name: str
-    database_name: str
-    created_on: Optional[datetime] = None
+    database: Optional[str] = None
     owner: Optional[str] = None
+    comment: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
 
 
 class TableInfo(BaseModel):
     """Table or view metadata."""
     name: str
-    database_name: str
-    schema_name: str
-    kind: str  # TABLE, VIEW, MATERIALIZED VIEW
-    rows: Optional[int] = None
-    created_on: Optional[datetime] = None
+    database: Optional[str] = None
+    schema_name: Optional[str] = Field(None, alias="schema")
+    kind: str = "TABLE"  # TABLE, VIEW, MATERIALIZED VIEW
+    row_count: Optional[int] = None
     owner: Optional[str] = None
+    comment: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
 
 
 class ColumnInfo(BaseModel):
     """Column metadata."""
     name: str
-    data_type: str
+    type: str
+    kind: str = "COLUMN"
     nullable: bool = True
     default: Optional[str] = None
     primary_key: bool = False
+    unique_key: bool = False
     comment: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
 
 
 # ============ Query Models ============
@@ -91,6 +106,8 @@ class QuerySubmitResponse(BaseModel):
     query_id: str
     status: QueryStatus
     message: str
+    execution_time_ms: Optional[int] = None
+    row_count: Optional[int] = None
 
 
 class QueryStatusResponse(BaseModel):
@@ -100,20 +117,13 @@ class QueryStatusResponse(BaseModel):
     row_count: Optional[int] = None
     execution_time_ms: Optional[int] = None
     error_message: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-
-
-class ColumnMetadata(BaseModel):
-    """Column metadata for query results."""
-    name: str
-    type: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
 
 
 class QueryResultsResponse(BaseModel):
     """Paginated query results."""
-    query_id: str
-    columns: List[ColumnMetadata]
+    columns: List[str]
     rows: List[List[Any]]
     total_rows: int
     page: int
@@ -128,11 +138,11 @@ class QueryHistoryItem(BaseModel):
     database: Optional[str] = None
     schema_name: Optional[str] = None
     warehouse: Optional[str] = None
-    status: QueryStatus
+    status: str
     row_count: Optional[int] = None
     error_message: Optional[str] = None
-    started_at: datetime
-    completed_at: Optional[datetime] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
     duration_ms: Optional[int] = None
 
 
@@ -148,4 +158,3 @@ class CancelQueryResponse(BaseModel):
     """Response after cancelling a query."""
     message: str
     query_id: str
-

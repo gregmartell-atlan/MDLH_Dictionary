@@ -1,5 +1,10 @@
 /**
- * Connection Modal - Configure Snowflake connection through the UI
+ * Connection Modal - Updated to work with session-based backend
+ * 
+ * Key changes from original:
+ * 1. Stores session ID from backend response
+ * 2. Saves session to sessionStorage for persistence
+ * 3. onConnect callback receives session info including sessionId
  */
 
 import React, { useState, useEffect } from 'react';
@@ -8,8 +13,8 @@ import { X, Database, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Info, Key 
 // API base URL - configurable for different environments
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export default function ConnectionModal({ isOpen, onClose, onConnect, currentStatus }) {
-  const [authMethod, setAuthMethod] = useState('token'); // 'token' or 'sso'
+export default function ConnectionModal({ isOpen, onClose, onConnect, currentSession }) {
+  const [authMethod, setAuthMethod] = useState('token');
   const [formData, setFormData] = useState({
     account: '',
     user: '',
@@ -24,32 +29,26 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
   const [testResult, setTestResult] = useState(null);
   const [saveToStorage, setSaveToStorage] = useState(true);
 
-  // Load saved credentials on mount and reset on close
+  // Load saved config on open
   useEffect(() => {
     if (isOpen) {
-      // Reset test result when opening
       setTestResult(null);
-      
       const saved = localStorage.getItem('snowflake_config');
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           setFormData(prev => ({ ...prev, ...parsed, token: '' }));
-          // Restore saved auth method
-          if (parsed.authMethod) {
-            setAuthMethod(parsed.authMethod);
-          }
+          if (parsed.authMethod) setAuthMethod(parsed.authMethod);
         } catch (e) {
           console.error('Failed to load saved config');
         }
       }
     }
   }, [isOpen]);
-  
-  // Clear test result when switching auth methods
+
   const handleAuthMethodChange = (method) => {
     setAuthMethod(method);
-    setTestResult(null);  // Clear stale results
+    setTestResult(null);
   };
 
   const handleChange = (field, value) => {
@@ -60,11 +59,11 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
-    
-    // Create abort controller for timeout (SSO can take a while, so longer timeout)
+
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), authMethod === 'sso' ? 120000 : 30000);
-    
+    const timeoutMs = authMethod === 'sso' ? 120000 : 30000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
       const requestBody = {
         account: formData.account,
@@ -73,43 +72,86 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
         database: formData.database,
         schema: formData.schema,
         role: formData.role || undefined,
-        auth_type: authMethod // 'token' or 'sso'
+        auth_type: authMethod
       };
-      
-      // Add token only for token auth
+
       if (authMethod === 'token') {
         requestBody.token = formData.token;
       }
-      
+
       const response = await fetch(`${API_BASE_URL}/api/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
         signal: controller.signal
       });
-      
+
       clearTimeout(timeoutId);
-      
       const result = await response.json();
-      setTestResult(result);
-      
-      if (result.connected && saveToStorage) {
-        // Save config (without token) to localStorage
-        const { token, ...configToSave } = formData;
-        localStorage.setItem('snowflake_config', JSON.stringify({ ...configToSave, authMethod }));
-      }
-      
-      if (result.connected) {
+
+      if (result.connected && result.session_id) {
+        // Success! We have a session
+        const sessionInfo = {
+          sessionId: result.session_id,
+          user: result.user,
+          warehouse: result.warehouse,
+          database: result.database,
+          role: result.role,
+          connected: true
+        };
+        
+        setTestResult(sessionInfo);
+
+        // Save config (without token)
+        if (saveToStorage) {
+          const { token, ...configToSave } = formData;
+          localStorage.setItem('snowflake_config', JSON.stringify({ 
+            ...configToSave, 
+            authMethod 
+          }));
+        }
+
+        // Store session in sessionStorage for persistence across page loads
+        sessionStorage.setItem('snowflake_session', JSON.stringify({
+          sessionId: result.session_id,
+          user: result.user,
+          warehouse: result.warehouse,
+          database: result.database,
+          role: result.role
+        }));
+
+        // Notify parent component
+        onConnect?.(sessionInfo);
+      } else if (result.connected) {
+        // Legacy response without session_id (backward compatibility)
+        setTestResult({
+          connected: true,
+          user: result.user,
+          warehouse: result.warehouse,
+          database: result.database,
+          role: result.role
+        });
+        
+        if (saveToStorage) {
+          const { token, ...configToSave } = formData;
+          localStorage.setItem('snowflake_config', JSON.stringify({ 
+            ...configToSave, 
+            authMethod 
+          }));
+        }
+        
         onConnect?.(result);
+      } else {
+        setTestResult({ connected: false, error: result.error || 'Connection failed' });
       }
     } catch (err) {
       clearTimeout(timeoutId);
       if (err.name === 'AbortError') {
-        setTestResult({ 
-          connected: false, 
-          error: authMethod === 'sso' 
-            ? 'SSO login timed out. Make sure to complete the login in the browser window that opened.'
-            : 'Connection timed out. Check that the backend server is running.'
+        setTestResult({
+          connected: false,
+          error: authMethod === 'sso'
+            ? 'SSO login timed out. Complete the login in the browser window.'
+            : 'Connection timed out. Is the backend server running?'
         });
       } else {
         setTestResult({ connected: false, error: err.message });
@@ -141,10 +183,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
                 <p className="text-blue-100 text-sm">Enter your credentials to query MDLH</p>
               </div>
             </div>
-            <button 
-              onClick={onClose}
-              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-            >
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
               <X size={20} />
             </button>
           </div>
@@ -154,17 +193,13 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {/* Auth Method Toggle */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Authentication Method
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Authentication Method</label>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => handleAuthMethodChange('token')}
                 className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
-                  authMethod === 'token'
-                    ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]'
-                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                  authMethod === 'token' ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]' : 'border-gray-200 text-gray-600 hover:border-gray-300'
                 }`}
               >
                 <Key size={16} />
@@ -174,9 +209,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
                 type="button"
                 onClick={() => handleAuthMethodChange('sso')}
                 className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
-                  authMethod === 'sso'
-                    ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]'
-                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                  authMethod === 'sso' ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]' : 'border-gray-200 text-gray-600 hover:border-gray-300'
                 }`}
               >
                 <Database size={16} />
@@ -187,9 +220,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
 
           {/* Account */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Account Identifier *
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Account Identifier *</label>
             <input
               type="text"
               value={formData.account}
@@ -206,9 +237,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
 
           {/* Username */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Username *
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Username *</label>
             <input
               type="text"
               value={formData.user}
@@ -225,7 +254,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
             )}
           </div>
 
-          {/* Personal Access Token - only show for token auth */}
+          {/* Token (only for token auth) */}
           {authMethod === 'token' && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
@@ -261,10 +290,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
               <p className="text-sm text-amber-800 flex items-start gap-2">
                 <Info size={16} className="mt-0.5 flex-shrink-0" />
-                <span>
-                  <strong>SSO Authentication:</strong> A browser window will open for you to log in with your company's SSO (Okta, Azure AD, etc). 
-                  The backend server must be running locally for this to work.
-                </span>
+                <span>A browser window will open for SSO login. The backend must be running locally.</span>
               </p>
             </div>
           )}
@@ -272,9 +298,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
           {/* Warehouse & Database */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Warehouse *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Warehouse *</label>
               <input
                 type="text"
                 value={formData.warehouse}
@@ -285,9 +309,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Database
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Database</label>
               <input
                 type="text"
                 value={formData.database}
@@ -301,9 +323,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
           {/* Schema & Role */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Schema
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Schema</label>
               <input
                 type="text"
                 value={formData.schema}
@@ -313,9 +333,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Role
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
               <input
                 type="text"
                 value={formData.role}
@@ -334,15 +352,13 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
               onChange={(e) => setSaveToStorage(e.target.checked)}
               className="w-4 h-4 rounded border-gray-300 text-[#3366FF] focus:ring-[#3366FF]"
             />
-            <span className="text-sm text-gray-600">Remember connection settings (credentials not saved)</span>
+            <span className="text-sm text-gray-600">Remember connection settings</span>
           </label>
 
           {/* Test Result */}
           {testResult && (
             <div className={`p-4 rounded-lg flex items-start gap-3 ${
-              testResult.connected 
-                ? 'bg-green-50 border border-green-200' 
-                : 'bg-red-50 border border-red-200'
+              testResult.connected ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
             }`}>
               {testResult.connected ? (
                 <CheckCircle className="text-green-500 flex-shrink-0 mt-0.5" size={20} />
@@ -355,7 +371,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
                 </p>
                 {testResult.connected ? (
                   <p className="text-green-600 text-sm mt-1">
-                    {testResult.user}@{testResult.warehouse} • {testResult.database}
+                    {testResult.user}@{testResult.warehouse} • {testResult.sessionId ? 'Session active' : testResult.database}
                   </p>
                 ) : (
                   <p className="text-red-600 text-sm mt-1">{testResult.error}</p>
@@ -381,7 +397,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
               {testing ? (
                 <>
                   <Loader2 size={18} className="animate-spin" />
-                  Testing...
+                  {authMethod === 'sso' ? 'Waiting for SSO...' : 'Connecting...'}
                 </>
               ) : (
                 'Connect'
@@ -393,11 +409,10 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
         {/* Footer Note */}
         <div className="px-6 pb-5">
           <p className="text-xs text-gray-400 text-center">
-            Your credentials are sent directly to the backend server running on localhost:8000
+            Your credentials are sent to the backend server at {API_BASE_URL}
           </p>
         </div>
       </div>
     </div>
   );
 }
-
