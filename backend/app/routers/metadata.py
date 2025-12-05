@@ -1,13 +1,16 @@
 """Metadata discovery endpoints for schema browser with session support."""
 
 import re
+import logging
 from fastapi import APIRouter, HTTPException, Query, Header
 from typing import List, Optional
+import snowflake.connector.errors
 from app.models.schemas import DatabaseInfo, SchemaInfo, TableInfo, ColumnInfo
 from app.services.session import session_manager
 from app.services import metadata_cache
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
+logger = logging.getLogger(__name__)
 
 
 def _validate_identifier(name: str) -> str:
@@ -24,6 +27,26 @@ def _get_session_or_none(session_id: Optional[str]):
     if not session_id:
         return None
     return session_manager.get_session(session_id)
+
+
+def _handle_snowflake_error(e: Exception, context: str) -> List:
+    """Handle Snowflake errors gracefully, returning empty list for permission issues."""
+    error_msg = str(e)
+    logger.warning(f"[Metadata] {context}: {error_msg}")
+    
+    # Permission/access errors - return empty list instead of 500
+    if isinstance(e, snowflake.connector.errors.ProgrammingError):
+        error_code = getattr(e, 'errno', None)
+        # Common permission-related error codes
+        # 2003: Object does not exist or not authorized
+        # 2043: Insufficient privileges
+        # 90105: Cannot perform operation
+        if error_code in (2003, 2043, 90105) or 'does not exist' in error_msg.lower() or 'not authorized' in error_msg.lower():
+            return []
+    
+    # For other errors, still return empty list but log it
+    # This prevents the UI from breaking on edge cases
+    return []
 
 
 @router.get("/databases", response_model=List[DatabaseInfo])
@@ -59,7 +82,7 @@ async def list_databases(
         metadata_cache.set_databases(databases)
         return [DatabaseInfo(**db) for db in databases]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return _handle_snowflake_error(e, "list_databases")
 
 
 @router.get("/schemas", response_model=List[SchemaInfo])
@@ -97,7 +120,7 @@ async def list_schemas(
         metadata_cache.set_schemas(database, schemas)
         return [SchemaInfo(**s) for s in schemas]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return _handle_snowflake_error(e, f"list_schemas({database})")
 
 
 @router.get("/tables", response_model=List[TableInfo])
@@ -155,7 +178,7 @@ async def list_tables(
         metadata_cache.set_tables(database, schema, tables)
         return [TableInfo(**t) for t in tables]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return _handle_snowflake_error(e, f"list_tables({database}.{schema})")
 
 
 @router.get("/columns", response_model=List[ColumnInfo])
@@ -202,7 +225,7 @@ async def list_columns(
         metadata_cache.set_columns(database, schema, table, columns)
         return [ColumnInfo(**c) for c in columns]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return _handle_snowflake_error(e, f"list_columns({database}.{schema}.{table})")
 
 
 @router.post("/refresh")
