@@ -15,6 +15,74 @@ import ResultsTable from './ResultsTable';
 import ConnectionModal from './ConnectionModal';
 import { useConnection, useQuery, useQueryHistory, useMetadata } from '../hooks/useSnowflake';
 
+// Parse SQL to extract database/schema/table references
+function parseSqlContext(sql) {
+  if (!sql) return null;
+  
+  // Remove comments
+  const cleanSql = sql
+    .replace(/--[^\n]*/g, '')  // Single line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '');  // Block comments
+  
+  // Patterns for FROM/JOIN clauses
+  const tablePatterns = [
+    // Full: FROM database.schema.table
+    /(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)/gi,
+    // Partial: FROM schema.table  
+    /(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)/gi,
+    // Single: FROM table
+    /(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)/gi
+  ];
+  
+  const references = [];
+  
+  // Full database.schema.table
+  let match;
+  const fullPattern = /(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)/gi;
+  while ((match = fullPattern.exec(cleanSql)) !== null) {
+    references.push({
+      database: match[1].toUpperCase(),
+      schema: match[2].toUpperCase(),
+      table: match[3].toUpperCase(),
+      full: `${match[1]}.${match[2]}.${match[3]}`.toUpperCase()
+    });
+  }
+  
+  // If we found full references, use the first one
+  if (references.length > 0) {
+    return references[0];
+  }
+  
+  // Try partial schema.table (but skip if looks like db.schema from full match)
+  const partialPattern = /(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\.)/gi;
+  while ((match = partialPattern.exec(cleanSql)) !== null) {
+    // This could be database.table or schema.table - context dependent
+    return {
+      database: null, // Unknown - use default
+      schema: match[1].toUpperCase(),
+      table: match[2].toUpperCase(),
+      partial: true
+    };
+  }
+  
+  // Try single table name
+  const singlePattern = /(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)(?!\.)/gi;
+  while ((match = singlePattern.exec(cleanSql)) !== null) {
+    // Skip if it's a keyword
+    const tableName = match[1].toUpperCase();
+    const keywords = ['SELECT', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'AS'];
+    if (!keywords.includes(tableName)) {
+      return {
+        database: null,
+        schema: null, 
+        table: tableName
+      };
+    }
+  }
+  
+  return null;
+}
+
 function ConnectionBadge({ status, onConnect, loading }) {
   if (loading) {
     return (
@@ -325,79 +393,147 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
   }, [sql, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory]);
   
   // Search for alternative tables when query fails
+  // Dynamically parses the SQL to extract database/schema context
   const handleSearchAlternatives = useCallback(async (objectName, objectType = 'table') => {
     setAlternativesLoading(true);
     setAlternatives(null);
     
     try {
-      const db = selectedDatabase || connStatus?.database;
-      const schema = selectedSchema || connStatus?.schema;
+      // Parse SQL to extract the actual database/schema being referenced
+      const sqlContext = parseSqlContext(sql);
+      console.log('[Alternatives] Parsed SQL context:', sqlContext);
       
-      // Fetch all tables in the current schema
+      // Priority: SQL context > selected values > connection defaults
+      let db = sqlContext?.database || selectedDatabase || connStatus?.database;
+      let schema = sqlContext?.schema || selectedSchema || connStatus?.schema;
+      
+      // Special handling: if we found a partial reference (schema.table),
+      // the "schema" might actually be a database name
+      if (sqlContext?.partial && !sqlContext.database) {
+        // Try fetching from this as if it were a database first
+        const schemasInPotentialDb = await fetchSchemas(sqlContext.schema);
+        if (schemasInPotentialDb && schemasInPotentialDb.length > 0) {
+          // It's a database! Use the default schema
+          db = sqlContext.schema;
+          schema = 'PUBLIC'; // Default to PUBLIC
+          console.log(`[Alternatives] Detected ${sqlContext.schema} as database, using schema PUBLIC`);
+        }
+      }
+      
+      console.log(`[Alternatives] Searching in ${db}.${schema} for tables like "${objectName}"`);
+      
+      // Fetch all tables in the determined schema
       const tables = await fetchTables(db, schema);
       
       if (!tables || tables.length === 0) {
+        console.log(`[Alternatives] No tables found in ${db}.${schema}`);
         setAlternatives([]);
         return;
       }
       
+      console.log(`[Alternatives] Found ${tables.length} tables in ${db}.${schema}`);
+      
       // Filter to find similar tables
       const searchTerm = objectName.toUpperCase()
         .replace('_ENTITY', '')
-        .replace('ATLAS', '');
+        .replace('ATLAS', '')
+        .replace(/_/g, ''); // Remove underscores for flexible matching
       
       const similar = tables
         .map(t => t.name || t)
         .filter(name => {
           const upperName = name.toUpperCase();
-          // Exact match (shouldn't happen, but check)
+          const cleanName = upperName.replace(/_ENTITY/, '').replace(/_/g, '');
+          
+          // Exact match (table exists - shouldn't happen)
           if (upperName === objectName.toUpperCase()) return false;
-          // Contains the key part
-          if (upperName.includes(searchTerm)) return true;
-          // Ends with _ENTITY
-          if (upperName.endsWith('_ENTITY')) {
-            const baseName = upperName.replace('_ENTITY', '');
-            if (searchTerm.includes(baseName) || baseName.includes(searchTerm)) return true;
+          
+          // Contains the key search term
+          if (cleanName.includes(searchTerm) || searchTerm.includes(cleanName)) return true;
+          
+          // Fuzzy: shares significant substring
+          if (searchTerm.length > 3) {
+            for (let i = 0; i <= searchTerm.length - 3; i++) {
+              if (cleanName.includes(searchTerm.substring(i, i + 3))) return true;
+            }
           }
+          
           return false;
         })
         .sort((a, b) => {
           // Prioritize exact base name matches
-          const aBase = a.toUpperCase().replace('_ENTITY', '');
-          const bBase = b.toUpperCase().replace('_ENTITY', '');
-          const searchBase = searchTerm;
+          const aClean = a.toUpperCase().replace('_ENTITY', '').replace(/_/g, '');
+          const bClean = b.toUpperCase().replace('_ENTITY', '').replace(/_/g, '');
           
-          if (aBase === searchBase) return -1;
-          if (bBase === searchBase) return 1;
-          return a.length - b.length; // Shorter names first
-        });
+          // Exact match scores highest
+          if (aClean === searchTerm) return -1;
+          if (bClean === searchTerm) return 1;
+          
+          // Then starts with
+          if (aClean.startsWith(searchTerm) && !bClean.startsWith(searchTerm)) return -1;
+          if (bClean.startsWith(searchTerm) && !aClean.startsWith(searchTerm)) return 1;
+          
+          // Then shorter names
+          return a.length - b.length;
+        })
+        .slice(0, 15); // Limit results
       
-      setAlternatives(similar);
+      // Store context for replacement
+      setAlternatives({
+        suggestions: similar,
+        context: { database: db, schema: schema },
+        originalObject: objectName
+      });
     } catch (err) {
       console.error('Failed to search alternatives:', err);
-      setAlternatives([]);
+      setAlternatives({ suggestions: [], error: err.message });
     } finally {
       setAlternativesLoading(false);
     }
-  }, [selectedDatabase, selectedSchema, connStatus, fetchTables]);
+  }, [sql, selectedDatabase, selectedSchema, connStatus, fetchTables, fetchSchemas]);
   
   // Select an alternative and re-run the query
   const handleSelectAlternative = useCallback((alternativeTable, originalTable) => {
-    // Replace the original table name with the alternative in the SQL
-    const db = selectedDatabase || connStatus?.database;
-    const schema = selectedSchema || connStatus?.schema;
+    // Get context from alternatives (parsed from failed SQL) or fall back to defaults
+    const ctx = alternatives?.context || {};
+    const db = ctx.database || selectedDatabase || connStatus?.database;
+    const schema = ctx.schema || selectedSchema || connStatus?.schema;
+    const origTable = originalTable || alternatives?.originalObject;
     
-    // Create regex to find and replace the table name
-    const patterns = [
-      new RegExp(`(FROM|JOIN)\\s+([\\w.]*\\.)?${originalTable}\\b`, 'gi'),
-      new RegExp(`(FROM|JOIN)\\s+${originalTable}\\b`, 'gi'),
-    ];
+    console.log(`[Alternative] Replacing "${origTable}" with "${alternativeTable}" in ${db}.${schema}`);
+    
+    // Build the fully qualified replacement
+    const fullyQualified = `${db}.${schema}.${alternativeTable}`;
+    
+    // Create regex patterns to find and replace the table name
+    // Order matters: match most specific patterns first
+    const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escaped = escapeRegex(origTable);
     
     let newSql = sql;
-    for (const pattern of patterns) {
-      const replacement = `$1 ${db}.${schema}.${alternativeTable}`;
-      newSql = newSql.replace(pattern, replacement);
-    }
+    
+    // Pattern 1: full reference (db.schema.table)
+    const fullPattern = new RegExp(
+      `(FROM|JOIN)\\s+[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*\\.${escaped}\\b`,
+      'gi'
+    );
+    newSql = newSql.replace(fullPattern, `$1 ${fullyQualified}`);
+    
+    // Pattern 2: partial reference (schema.table or db.table)
+    const partialPattern = new RegExp(
+      `(FROM|JOIN)\\s+[A-Za-z_][A-Za-z0-9_]*\\.${escaped}\\b`,
+      'gi'
+    );
+    newSql = newSql.replace(partialPattern, `$1 ${fullyQualified}`);
+    
+    // Pattern 3: bare table name
+    const barePattern = new RegExp(
+      `(FROM|JOIN)\\s+${escaped}\\b`,
+      'gi'
+    );
+    newSql = newSql.replace(barePattern, `$1 ${fullyQualified}`);
+    
+    console.log('[Alternative] New SQL:', newSql.substring(0, 200));
     
     // Update SQL and execute
     setSql(newSql);
@@ -412,7 +548,7 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
       });
       fetchHistory();
     }, 100);
-  }, [sql, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory]);
+  }, [sql, alternatives, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory]);
   
   // Insert text at cursor
   const handleInsertText = useCallback((text) => {

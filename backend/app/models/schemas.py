@@ -1,6 +1,6 @@
 """Pydantic models for API request/response schemas."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Any
 from datetime import datetime
 from enum import Enum
@@ -35,6 +35,13 @@ class DatabaseInfo(BaseModel):
     created: Optional[str] = None
     owner: Optional[str] = None
     comment: Optional[str] = None
+    
+    @field_validator('comment', mode='before')
+    @classmethod
+    def coerce_comment(cls, v):
+        if v is None:
+            return None
+        return str(v) if v else None
 
     class Config:
         extra = "ignore"
@@ -46,6 +53,13 @@ class SchemaInfo(BaseModel):
     database: Optional[str] = None
     owner: Optional[str] = None
     comment: Optional[str] = None
+    
+    @field_validator('comment', mode='before')
+    @classmethod
+    def coerce_comment(cls, v):
+        if v is None:
+            return None
+        return str(v) if v else None
 
     class Config:
         extra = "ignore"
@@ -60,6 +74,24 @@ class TableInfo(BaseModel):
     row_count: Optional[int] = None
     owner: Optional[str] = None
     comment: Optional[str] = None
+    
+    # Handle Snowflake returning empty strings or wrong types
+    @field_validator('row_count', mode='before')
+    @classmethod
+    def coerce_row_count(cls, v):
+        if v is None or v == '' or v == 'NULL':
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return None
+    
+    @field_validator('comment', mode='before')
+    @classmethod
+    def coerce_comment(cls, v):
+        if v is None:
+            return None
+        return str(v) if v else None
 
     class Config:
         extra = "ignore"

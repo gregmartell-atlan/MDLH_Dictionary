@@ -50,14 +50,20 @@ function AlternativeSuggestions({
   const objectName = typeof missingObject === 'string' ? missingObject : missingObject.name;
   const objectType = typeof missingObject === 'object' ? missingObject.type : 'table';
   
+  // Extract suggestions array from alternatives object (new format) or use directly (old format)
+  const suggestions = alternatives?.suggestions || (Array.isArray(alternatives) ? alternatives : null);
+  const context = alternatives?.context;
+  const hasSuggestions = suggestions && suggestions.length > 0;
+  const hasSearched = alternatives !== null;
+  
   return (
     <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
       <div className="flex items-center gap-2 text-blue-700 font-medium mb-2">
         <Wand2 size={16} />
-        <span>Can't find: {objectName}</span>
+        <span>Can't find: <code className="bg-blue-100 px-1.5 py-0.5 rounded font-mono">{objectName}</code></span>
       </div>
       
-      {!alternatives && !loading && (
+      {!hasSearched && !loading && (
         <button
           onClick={() => onSearch(objectName, objectType)}
           className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
@@ -74,15 +80,20 @@ function AlternativeSuggestions({
         </div>
       )}
       
-      {alternatives && alternatives.length > 0 && (
+      {hasSuggestions && (
         <div className="space-y-2">
-          <p className="text-sm text-blue-600">Found {alternatives.length} similar {objectType}(s):</p>
+          {context && (
+            <p className="text-xs text-blue-500 mb-2">
+              Searching in: <code className="bg-blue-100 px-1 rounded">{context.database}.{context.schema}</code>
+            </p>
+          )}
+          <p className="text-sm text-blue-600">Found {suggestions.length} similar {objectType}(s):</p>
           <div className="flex flex-wrap gap-2">
-            {alternatives.slice(0, 10).map((alt, i) => (
+            {suggestions.slice(0, 15).map((alt, i) => (
               <button
                 key={i}
                 onClick={() => onSelectAlternative(alt, objectName)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-blue-300 rounded-lg text-sm font-mono text-blue-700 hover:bg-blue-100 hover:border-blue-400"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-blue-300 rounded-lg text-sm font-mono text-blue-700 hover:bg-blue-100 hover:border-blue-400 transition-colors"
               >
                 <Play size={12} />
                 {alt}
@@ -93,8 +104,18 @@ function AlternativeSuggestions({
         </div>
       )}
       
-      {alternatives && alternatives.length === 0 && (
-        <p className="text-sm text-blue-600">No similar {objectType}s found. Try a different database/schema.</p>
+      {hasSearched && !hasSuggestions && (
+        <div className="space-y-2">
+          {context && (
+            <p className="text-xs text-blue-500 mb-1">
+              Searched in: <code className="bg-blue-100 px-1 rounded">{context.database}.{context.schema}</code>
+            </p>
+          )}
+          <p className="text-sm text-blue-600">No similar {objectType}s found. Try a different database/schema.</p>
+          {alternatives?.error && (
+            <p className="text-xs text-red-500 mt-1">Error: {alternatives.error}</p>
+          )}
+        </div>
       )}
     </div>
   );

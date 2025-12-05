@@ -18,13 +18,14 @@ const discoveredTablesCache = {
 
 // Discover which MDLH entity tables exist in the connected database
 async function discoverMDLHTables(database, schema) {
-  // Return cached if same context and recent (within 5 minutes)
+  // Return cached if same context, has results, and is recent (within 5 minutes)
   const cacheKey = `${database}.${schema}`;
   const fiveMinutes = 5 * 60 * 1000;
   if (
     discoveredTablesCache.database === database &&
     discoveredTablesCache.schema === schema &&
     discoveredTablesCache.lastDiscovery &&
+    discoveredTablesCache.tables.size > 0 && // Only use cache if it has results
     Date.now() - discoveredTablesCache.lastDiscovery < fiveMinutes
   ) {
     return discoveredTablesCache.tables;
@@ -39,9 +40,12 @@ async function discoverMDLHTables(database, schema) {
       return new Set();
     }
     
+    // Force refresh if previous attempt returned empty
+    const forceRefresh = discoveredTablesCache.tables.size === 0;
+    
     // Fetch all tables in the schema
     const response = await fetch(
-      `${API_BASE_URL}/api/metadata/tables?database=${database}&schema=${schema}&refresh=false`,
+      `${API_BASE_URL}/api/metadata/tables?database=${database}&schema=${schema}&refresh=${forceRefresh}`,
       { headers: { 'X-Session-ID': sessionId } }
     );
     
@@ -1923,11 +1927,35 @@ export default function App() {
   
   // Check connection status on mount and when session changes
   useEffect(() => {
-    const checkConnection = () => {
+    const checkConnection = async () => {
       const sessionData = sessionStorage.getItem('snowflake_session');
-      const newIsConnected = !!sessionData;
-      setIsConnected(newIsConnected);
-      console.log('[App] Connection status:', newIsConnected ? 'Connected' : 'Not connected');
+      if (!sessionData) {
+        setIsConnected(false);
+        console.log('[App] Connection status: Not connected (no session)');
+        return;
+      }
+      
+      // Validate session with backend
+      try {
+        const { sessionId } = JSON.parse(sessionData);
+        const response = await fetch(`${API_BASE_URL}/api/session/status`, {
+          headers: { 'X-Session-ID': sessionId }
+        });
+        const status = await response.json();
+        
+        if (status.valid) {
+          setIsConnected(true);
+          console.log('[App] Connection status: Connected (session valid)');
+        } else {
+          // Session expired or invalid - clear it
+          sessionStorage.removeItem('snowflake_session');
+          setIsConnected(false);
+          console.log('[App] Connection status: Session expired, cleared');
+        }
+      } catch (err) {
+        console.error('[App] Session validation failed:', err);
+        setIsConnected(false);
+      }
     };
     checkConnection();
     

@@ -176,7 +176,17 @@ async def list_tables(
         cursor.close()
         
         metadata_cache.set_tables(database, schema, tables)
-        return [TableInfo(**t) for t in tables]
+        logger.info(f"[Metadata] list_tables({database}.{schema}): Found {len(tables)} tables/views")
+        
+        # Create TableInfo models - wrap in try/except to see validation errors
+        result = []
+        for t in tables:
+            try:
+                result.append(TableInfo(**t))
+            except Exception as ve:
+                logger.warning(f"[Metadata] Validation error for table {t.get('name')}: {ve}")
+        
+        return result
     except Exception as e:
         return _handle_snowflake_error(e, f"list_tables({database}.{schema})")
 
