@@ -119,6 +119,11 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
           database: result.database,
           role: result.role
         }));
+        
+        // Dispatch custom event to notify other components (including App.jsx)
+        window.dispatchEvent(new CustomEvent('snowflake-session-changed', { 
+          detail: { connected: true, sessionId: result.session_id }
+        }));
 
         // Notify parent component
         onConnect?.(sessionInfo);

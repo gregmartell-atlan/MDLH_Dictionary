@@ -1763,20 +1763,31 @@ export default function App() {
   const [isValidating, setIsValidating] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   
-  // Check connection status on mount and when storage changes
+  // Check connection status on mount and when session changes
   useEffect(() => {
     const checkConnection = () => {
       const sessionData = sessionStorage.getItem('snowflake_session');
-      setIsConnected(!!sessionData);
+      const newIsConnected = !!sessionData;
+      setIsConnected(newIsConnected);
+      console.log('[App] Connection status:', newIsConnected ? 'Connected' : 'Not connected');
     };
     checkConnection();
     
-    // Listen for storage changes (when connection is made in QueryEditor)
+    // Listen for custom session change event (dispatched by ConnectionModal)
+    const handleSessionChange = (event) => {
+      console.log('[App] Session change event received:', event.detail);
+      checkConnection();
+    };
+    window.addEventListener('snowflake-session-changed', handleSessionChange);
+    
+    // Also listen for storage changes (in case session is modified from another tab)
     window.addEventListener('storage', checkConnection);
-    // Also check periodically
-    const interval = setInterval(checkConnection, 2000);
+    
+    // Periodic check as fallback
+    const interval = setInterval(checkConnection, 3000);
     
     return () => {
+      window.removeEventListener('snowflake-session-changed', handleSessionChange);
       window.removeEventListener('storage', checkConnection);
       clearInterval(interval);
     };
