@@ -1,10 +1,11 @@
 """Query execution endpoints with session support."""
 
 import logging
+import re
 import time
 import uuid
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, List, Tuple
 from fastapi import APIRouter, HTTPException, Query as QueryParam, Header
 
 from app.models.schemas import (
@@ -18,6 +19,59 @@ from app.database import query_history_db
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/query", tags=["query"])
+
+
+def _split_sql_statements(sql: str) -> List[str]:
+    """
+    Split SQL into individual statements, handling:
+    - Single-line comments (-- ...)
+    - Block comments (/* ... */)
+    - String literals ('...' and "...")
+    - Semicolons as statement separators
+    
+    Returns list of non-empty statements.
+    """
+    # Remove block comments
+    sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+    
+    # Remove single-line comments
+    sql = re.sub(r'--.*?$', '', sql, flags=re.MULTILINE)
+    
+    # Split on semicolons (simple approach - works for most cases)
+    # For production, consider a proper SQL parser
+    statements = []
+    current = []
+    in_string = False
+    string_char = None
+    
+    for char in sql:
+        if char in ("'", '"') and not in_string:
+            in_string = True
+            string_char = char
+            current.append(char)
+        elif char == string_char and in_string:
+            in_string = False
+            string_char = None
+            current.append(char)
+        elif char == ';' and not in_string:
+            stmt = ''.join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+        else:
+            current.append(char)
+    
+    # Don't forget the last statement (may not end with ;)
+    stmt = ''.join(current).strip()
+    if stmt:
+        statements.append(stmt)
+    
+    return statements
+
+
+def _count_statements(sql: str) -> int:
+    """Count the number of SQL statements."""
+    return len(_split_sql_statements(sql))
 
 VALID_STATUSES = {s.value for s in QueryStatus}
 
@@ -104,8 +158,18 @@ async def execute_query(
     try:
         cursor = session.conn.cursor()
         
-        # Execute query
-        cursor.execute(request.sql)
+        # Count statements (properly handles comments and strings)
+        statement_count = _count_statements(request.sql)
+        
+        # Execute query (enable multi-statement if needed)
+        if statement_count > 1:
+            logger.info(f"Executing {statement_count} statements")
+            cursor.execute(request.sql, num_statements=statement_count)
+            # For multi-statement, get results from the last statement
+            while cursor.nextset():
+                pass  # Skip to last result set
+        else:
+            cursor.execute(request.sql)
         
         # Fetch results
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
