@@ -143,3 +143,9 @@ class QueryHistoryResponse(BaseModel):
     limit: int
     offset: int
 
+
+class CancelQueryResponse(BaseModel):
+    """Response after cancelling a query."""
+    message: str
+    query_id: str
+

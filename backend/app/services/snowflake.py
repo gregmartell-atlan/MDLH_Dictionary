@@ -19,6 +19,27 @@ MAX_QUERY_RESULTS = 100
 RESULT_TTL_HOURS = 1
 
 
+# Custom exceptions for better error handling
+class SnowflakeError(Exception):
+    """Base exception for Snowflake operations."""
+    pass
+
+
+class SnowflakeConnectionError(SnowflakeError):
+    """Raised when connection to Snowflake fails or is lost."""
+    pass
+
+
+class SnowflakeSyntaxError(SnowflakeError):
+    """Raised when SQL syntax is invalid."""
+    pass
+
+
+class SnowflakeTimeoutError(SnowflakeError):
+    """Raised when a query times out."""
+    pass
+
+
 class SnowflakeService:
     """Manages Snowflake connections and query execution."""
     
