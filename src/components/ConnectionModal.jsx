@@ -5,6 +5,9 @@
 import React, { useState, useEffect } from 'react';
 import { X, Database, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Info, Key } from 'lucide-react';
 
+// API base URL - configurable for different environments
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 export default function ConnectionModal({ isOpen, onClose, onConnect, currentStatus }) {
   const [authMethod, setAuthMethod] = useState('token'); // 'token' or 'sso'
   const [formData, setFormData] = useState({
@@ -21,20 +24,33 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
   const [testResult, setTestResult] = useState(null);
   const [saveToStorage, setSaveToStorage] = useState(true);
 
-  // Load saved credentials on mount
+  // Load saved credentials on mount and reset on close
   useEffect(() => {
     if (isOpen) {
+      // Reset test result when opening
+      setTestResult(null);
+      
       const saved = localStorage.getItem('snowflake_config');
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           setFormData(prev => ({ ...prev, ...parsed, token: '' }));
+          // Restore saved auth method
+          if (parsed.authMethod) {
+            setAuthMethod(parsed.authMethod);
+          }
         } catch (e) {
           console.error('Failed to load saved config');
         }
       }
     }
   }, [isOpen]);
+  
+  // Clear test result when switching auth methods
+  const handleAuthMethodChange = (method) => {
+    setAuthMethod(method);
+    setTestResult(null);  // Clear stale results
+  };
 
   const handleChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -44,6 +60,10 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
+    
+    // Create abort controller for timeout (SSO can take a while, so longer timeout)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), authMethod === 'sso' ? 120000 : 30000);
     
     try {
       const requestBody = {
@@ -61,11 +81,14 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
         requestBody.token = formData.token;
       }
       
-      const response = await fetch('http://localhost:8000/api/connect', {
+      const response = await fetch(`${API_BASE_URL}/api/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
       
       const result = await response.json();
       setTestResult(result);
@@ -80,7 +103,17 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
         onConnect?.(result);
       }
     } catch (err) {
-      setTestResult({ connected: false, error: err.message });
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        setTestResult({ 
+          connected: false, 
+          error: authMethod === 'sso' 
+            ? 'SSO login timed out. Make sure to complete the login in the browser window that opened.'
+            : 'Connection timed out. Check that the backend server is running.'
+        });
+      } else {
+        setTestResult({ connected: false, error: err.message });
+      }
     } finally {
       setTesting(false);
     }
@@ -127,7 +160,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setAuthMethod('token')}
+                onClick={() => handleAuthMethodChange('token')}
                 className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
                   authMethod === 'token'
                     ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]'
@@ -139,7 +172,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
               </button>
               <button
                 type="button"
-                onClick={() => setAuthMethod('sso')}
+                onClick={() => handleAuthMethodChange('sso')}
                 className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
                   authMethod === 'sso'
                     ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]'
@@ -301,7 +334,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSta
               onChange={(e) => setSaveToStorage(e.target.checked)}
               className="w-4 h-4 rounded border-gray-300 text-[#3366FF] focus:ring-[#3366FF]"
             />
-            <span className="text-sm text-gray-600">Remember connection settings (password not saved)</span>
+            <span className="text-sm text-gray-600">Remember connection settings (credentials not saved)</span>
           </label>
 
           {/* Test Result */}
