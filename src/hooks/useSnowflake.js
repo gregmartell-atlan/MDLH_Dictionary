@@ -402,4 +402,139 @@ export function useMetadata() {
   };
 }
 
-export default { useConnection, useQuery, useQueryHistory, useMetadata };
+// =============================================================================
+// Batch Validation Hook
+// =============================================================================
+
+export function useBatchValidation() {
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const getSessionId = () => {
+    const stored = sessionStorage.getItem(SESSION_KEY);
+    if (stored) {
+      try {
+        return JSON.parse(stored).sessionId;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  const validateBatch = useCallback(async (queries, options = {}) => {
+    const sessionId = getSessionId();
+    if (!sessionId) {
+      setError('Not connected');
+      return null;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_URL}/api/query/validate-batch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-ID': sessionId
+        },
+        body: JSON.stringify({
+          queries,
+          database: options.database,
+          schema_name: options.schema,
+          include_samples: options.includeSamples ?? true,
+          sample_limit: options.sampleLimit ?? 3
+        })
+      });
+
+      if (response.status === 401) {
+        sessionStorage.removeItem(SESSION_KEY);
+        setError('Session expired');
+        return null;
+      }
+
+      const data = await response.json();
+      setResults(data);
+      return data;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const clearResults = useCallback(() => {
+    setResults(null);
+    setError(null);
+  }, []);
+
+  return { results, loading, error, validateBatch, clearResults };
+}
+
+// =============================================================================
+// Query Explanation Hook
+// =============================================================================
+
+export function useQueryExplanation() {
+  const [explanation, setExplanation] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const getSessionId = () => {
+    const stored = sessionStorage.getItem(SESSION_KEY);
+    if (stored) {
+      try {
+        return JSON.parse(stored).sessionId;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  const explainQuery = useCallback(async (sql, options = {}) => {
+    const sessionId = getSessionId();
+    
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_URL}/api/query/explain`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionId && { 'X-Session-ID': sessionId })
+        },
+        body: JSON.stringify({
+          sql,
+          include_execution: options.includeExecution ?? !!sessionId
+        })
+      });
+
+      if (response.status === 401) {
+        sessionStorage.removeItem(SESSION_KEY);
+      }
+
+      const data = await response.json();
+      setExplanation(data);
+      return data;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const clearExplanation = useCallback(() => {
+    setExplanation(null);
+    setError(null);
+  }, []);
+
+  return { explanation, loading, error, explainQuery, clearExplanation };
+}
+
+export default { useConnection, useQuery, useQueryHistory, useMetadata, usePreflight, useBatchValidation, useQueryExplanation };

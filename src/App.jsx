@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command, Terminal, Play, Loader2 } from 'lucide-react';
+import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command, Terminal, Play, Loader2, Sparkles, Eye } from 'lucide-react';
 import QueryEditor from './components/QueryEditor';
+import ShowMyWork from './components/ShowMyWork';
 
 // API base URL for fetching metadata
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -1224,7 +1225,20 @@ function CellCopyButton({ text }) {
 }
 
 // Slide-out Query Panel
-function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery, onRunInEditor, isLoading, discoveredTables = new Set(), isConnected = false }) {
+function QueryPanel({ 
+  isOpen, 
+  onClose, 
+  queries, 
+  categoryLabel, 
+  highlightedQuery, 
+  onRunInEditor, 
+  isLoading, 
+  discoveredTables = new Set(), 
+  isConnected = false,
+  batchValidationResults = new Map(),
+  onShowMyWork = null,
+  isBatchValidating = false
+}) {
   const panelRef = useRef(null);
   const highlightedRef = useRef(null);
   
@@ -1335,11 +1349,18 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
             </div>
           )}
           
-          {/* Loading indicator */}
+          {/* Loading indicators */}
           {isLoading && (
             <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200 mb-4">
               <Loader2 size={16} className="animate-spin text-blue-600" />
               <span className="text-sm text-blue-700">Fetching table columns from Snowflake...</span>
+            </div>
+          )}
+          
+          {isBatchValidating && (
+            <div className="flex items-center gap-2 p-3 bg-purple-50 rounded-lg border border-purple-200 mb-4">
+              <Loader2 size={16} className="animate-spin text-purple-600" />
+              <span className="text-sm text-purple-700">Testing queries & finding alternatives...</span>
             </div>
           )}
           
@@ -1359,6 +1380,7 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
                   tableAvailable={getTableAvailability(highlightedQuery)} 
                   defaultExpanded={true}
                   onRunInEditor={onRunInEditor}
+                  onShowMyWork={onShowMyWork}
                 />
               </div>
             </div>
@@ -1373,6 +1395,7 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
                 const isHighlighted = highlightedQuery && q.query === highlightedQuery;
                 const tableAvailable = getTableAvailability(q.query);
                 const isAutoFixed = q.validation?.autoFixed;
+                const batchResult = batchValidationResults.get(`core_${i}`);
                 
                 return (
                   <div key={q.queryId || i} ref={isHighlighted ? highlightedRef : null}>
@@ -1388,6 +1411,8 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
                       tableAvailable={tableAvailable}
                       validated={q.validation?.valid}
                       autoFixed={isAutoFixed}
+                      validationResult={batchResult}
+                      onShowMyWork={onShowMyWork}
                     />
                   </div>
                 );
@@ -1406,13 +1431,28 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
   );
 }
 
-function QueryCard({ title, description, query, defaultExpanded = false, onRunInEditor, validated = null, tableAvailable = null, autoFixed = false }) {
+function QueryCard({ 
+  title, 
+  description, 
+  query, 
+  defaultExpanded = false, 
+  onRunInEditor, 
+  validated = null, 
+  tableAvailable = null, 
+  autoFixed = false,
+  validationResult = null,  // Full validation result with suggestions
+  onShowMyWork = null       // Callback to open Show My Work modal
+}) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   
   // Determine status for visual feedback
-  const isValidated = validated === true || tableAvailable === true;
-  const isUnavailable = tableAvailable === false;
+  const isValidated = validated === true || tableAvailable === true || validationResult?.status === 'success';
+  const isUnavailable = tableAvailable === false || validationResult?.status === 'error';
+  const isEmpty = validationResult?.status === 'empty';
   const isAutoFixed = autoFixed;
+  const hasSuggestion = validationResult?.suggested_query;
+  const rowCount = validationResult?.row_count;
+  const sampleData = validationResult?.sample_data;
   
   return (
     <div className={`bg-white rounded-xl border overflow-hidden transition-all duration-200 ${
@@ -1420,8 +1460,8 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
         ? isValidated 
           ? 'border-green-400 shadow-lg' 
           : 'border-[#3366FF] shadow-lg'
-        : isUnavailable
-          ? 'border-orange-200 shadow-sm hover:shadow-md hover:border-orange-300 opacity-75'
+        : isUnavailable || isEmpty
+          ? 'border-orange-200 shadow-sm hover:shadow-md hover:border-orange-300 opacity-90'
           : 'border-gray-200 shadow-sm hover:shadow-md hover:border-gray-300'
     }`}>
       <div 
@@ -1430,18 +1470,18 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
       >
         <div className="flex items-center gap-3">
           <div className={`p-2 rounded-lg ${
-            isValidated ? 'bg-green-100' : isUnavailable ? 'bg-orange-100' : 'bg-[#3366FF]/10'
+            isValidated ? 'bg-green-100' : (isUnavailable || isEmpty) ? 'bg-orange-100' : 'bg-[#3366FF]/10'
           }`}>
             {isValidated ? (
               <Check size={18} className="text-green-600" />
-            ) : isUnavailable ? (
-              <X size={18} className="text-orange-500" />
+            ) : (isUnavailable || isEmpty) ? (
+              hasSuggestion ? <Sparkles size={18} className="text-orange-500" /> : <X size={18} className="text-orange-500" />
             ) : (
               <Code2 size={18} className="text-[#3366FF]" />
             )}
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h4 className="font-semibold text-gray-900 text-sm">{title}</h4>
               {isAutoFixed && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-medium rounded-full">
@@ -1450,7 +1490,12 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
               )}
               {isValidated && !isAutoFixed && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-medium rounded-full">
-                  <Check size={10} /> Ready
+                  <Check size={10} /> {rowCount ? `${rowCount.toLocaleString()} rows` : 'Ready'}
+                </span>
+              )}
+              {isEmpty && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-medium rounded-full">
+                  ⚠️ Empty table
                 </span>
               )}
               {isUnavailable && (
@@ -1458,29 +1503,60 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
                   Table Missing
                 </span>
               )}
+              {hasSuggestion && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-medium rounded-full">
+                  <Sparkles size={10} /> Alternative available
+                </span>
+              )}
             </div>
             <p className="text-gray-500 text-xs mt-0.5">{description}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          {/* Show My Work button */}
+          {onShowMyWork && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowMyWork(query, validationResult);
+              }}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-100 hover:bg-purple-200 text-purple-700 border border-purple-200"
+              title="Learn how this query works"
+            >
+              <Eye size={10} />
+              Show Work
+            </button>
+          )}
           <CopyButton text={query} />
           {onRunInEditor && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onRunInEditor(query);
+                // If there's a suggested query that works better, offer to run it
+                if (hasSuggestion && (isUnavailable || isEmpty)) {
+                  onRunInEditor(validationResult.suggested_query);
+                } else {
+                  onRunInEditor(query);
+                }
               }}
               className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${
                 isValidated 
                   ? 'bg-green-500 hover:bg-green-600 text-white'
-                  : isUnavailable
-                    ? 'bg-orange-400 hover:bg-orange-500 text-white'
-                    : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                  : hasSuggestion
+                    ? 'bg-purple-500 hover:bg-purple-600 text-white'
+                    : (isUnavailable || isEmpty)
+                      ? 'bg-orange-400 hover:bg-orange-500 text-white'
+                      : 'bg-emerald-500 hover:bg-emerald-600 text-white'
               }`}
-              title={isValidated ? "✓ Run validated query" : isUnavailable ? "Table may not exist" : "Open in Query Editor"}
+              title={
+                isValidated ? "✓ Run validated query" : 
+                hasSuggestion ? "Run suggested alternative" :
+                (isUnavailable || isEmpty) ? "Table may not have data" : 
+                "Open in Query Editor"
+              }
             >
-              <Play size={10} />
-              Run
+              {hasSuggestion && !isValidated ? <Sparkles size={10} /> : <Play size={10} />}
+              {hasSuggestion && !isValidated ? 'Run Alt' : 'Run'}
             </button>
           )}
           <div className={`w-6 h-6 flex items-center justify-center rounded-full bg-gray-100 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}>
@@ -1490,9 +1566,65 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
       </div>
       {expanded && (
         <div className="border-t border-gray-100 p-4 bg-gray-50">
-          <pre className="text-xs text-gray-800 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed p-4 bg-white rounded-lg border border-gray-200">
-            {query}
-          </pre>
+          {/* Sample data preview if available */}
+          {isValidated && sampleData && sampleData.length > 0 && (
+            <div className="mb-4">
+              <h5 className="text-xs font-medium text-gray-600 mb-2">📊 Sample Results ({rowCount?.toLocaleString()} total rows)</h5>
+              <div className="overflow-x-auto bg-white rounded border border-gray-200">
+                <table className="w-full text-[10px]">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      {Object.keys(sampleData[0]).slice(0, 6).map((col, i) => (
+                        <th key={i} className="px-2 py-1 text-left font-medium text-gray-600 border-b">
+                          {col}
+                        </th>
+                      ))}
+                      {Object.keys(sampleData[0]).length > 6 && (
+                        <th className="px-2 py-1 text-left text-gray-400 border-b">...</th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sampleData.slice(0, 3).map((row, rowIdx) => (
+                      <tr key={rowIdx} className="hover:bg-blue-50">
+                        {Object.values(row).slice(0, 6).map((val, colIdx) => (
+                          <td key={colIdx} className="px-2 py-1 border-b border-gray-100 max-w-[150px] truncate">
+                            {val !== null && val !== undefined ? String(val) : <span className="text-gray-300">null</span>}
+                          </td>
+                        ))}
+                        {Object.keys(row).length > 6 && (
+                          <td className="px-2 py-1 text-gray-300 border-b border-gray-100">...</td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          
+          {/* Suggested query if original fails */}
+          {hasSuggestion && (isUnavailable || isEmpty) && (
+            <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles size={14} className="text-purple-500" />
+                <span className="text-xs font-medium text-purple-700">
+                  Suggested alternative ({validationResult.suggested_query_result?.row_count?.toLocaleString() || '?'} rows):
+                </span>
+              </div>
+              <pre className="text-[10px] text-purple-800 font-mono bg-white p-2 rounded overflow-x-auto">
+                {validationResult.suggested_query}
+              </pre>
+            </div>
+          )}
+          
+          {/* Original query */}
+          <div>
+            <h5 className="text-xs font-medium text-gray-600 mb-2">SQL Query</h5>
+            <pre className="text-xs text-gray-800 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed p-4 bg-white rounded-lg border border-gray-200">
+              {query}
+            </pre>
+          </div>
         </div>
       )}
     </div>
@@ -1925,6 +2057,14 @@ export default function App() {
   const [showOnlyAvailable, setShowOnlyAvailable] = useState(true); // Filter to show only queryable entities
   const [queryValidationMap, setQueryValidationMap] = useState(new Map()); // Pre-validated queries
   
+  // State for batch validation results (with suggestions)
+  const [batchValidationResults, setBatchValidationResults] = useState(new Map()); // queryId -> full validation result
+  const [isBatchValidating, setIsBatchValidating] = useState(false);
+  
+  // State for Show My Work modal
+  const [showMyWorkQuery, setShowMyWorkQuery] = useState(null);
+  const [showMyWorkValidation, setShowMyWorkValidation] = useState(null);
+  
   // Check connection status on mount and when session changes
   useEffect(() => {
     const checkConnection = async () => {
@@ -2008,6 +2148,96 @@ export default function App() {
         .finally(() => setIsDiscovering(false));
     }
   }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema]);
+  
+  // Run batch validation on entity example queries to get sample data and suggestions
+  const runBatchValidation = useCallback(async () => {
+    if (!isConnected) return;
+    
+    const sessionData = sessionStorage.getItem('snowflake_session');
+    if (!sessionData) return;
+    
+    const { sessionId } = JSON.parse(sessionData);
+    
+    // Collect entity queries to validate
+    const queriesToValidate = [];
+    Object.entries(exampleQueries).forEach(([category, queries]) => {
+      if (category === 'core') {
+        queries.forEach((q, i) => {
+          queriesToValidate.push({
+            query_id: `core_${i}`,
+            sql: q.query,
+            entity_type: 'core',
+            description: q.title
+          });
+        });
+      }
+    });
+    
+    // Also add entity-specific queries
+    entities.filter(e => e.exampleQuery).forEach(entity => {
+      queriesToValidate.push({
+        query_id: `entity_${entity.tableName || entity.name}`,
+        sql: entity.exampleQuery,
+        entity_type: entity.name,
+        description: `Example query for ${entity.name}`
+      });
+    });
+    
+    if (queriesToValidate.length === 0) return;
+    
+    setIsBatchValidating(true);
+    console.log(`[App] Running batch validation on ${queriesToValidate.length} queries...`);
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/query/validate-batch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-ID': sessionId
+        },
+        body: JSON.stringify({
+          queries: queriesToValidate,
+          database: selectedMDLHDatabase,
+          schema_name: selectedMDLHSchema,
+          include_samples: true,
+          sample_limit: 3
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Build results map
+        const resultsMap = new Map();
+        data.results.forEach(result => {
+          resultsMap.set(result.query_id, result);
+        });
+        
+        setBatchValidationResults(resultsMap);
+        
+        console.log(`[App] Batch validation complete:`, data.summary);
+      } else {
+        console.error('[App] Batch validation failed:', response.status);
+      }
+    } catch (err) {
+      console.error('[App] Batch validation error:', err);
+    } finally {
+      setIsBatchValidating(false);
+    }
+  }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema]);
+  
+  // Trigger batch validation after table discovery completes
+  useEffect(() => {
+    if (isConnected && discoveredTables.size > 0 && !isDiscovering) {
+      runBatchValidation();
+    }
+  }, [isConnected, discoveredTables, isDiscovering, runBatchValidation]);
+  
+  // Handler for "Show My Work" button
+  const handleShowMyWork = useCallback((query, validationResult) => {
+    setShowMyWorkQuery(query);
+    setShowMyWorkValidation(validationResult);
+  }, []);
   
   // Get warning for selected database
   const selectedDbConfig = MDLH_DATABASES.find(db => db.name === selectedMDLHDatabase);
@@ -2509,6 +2739,30 @@ export default function App() {
         isLoading={loadingColumns}
         discoveredTables={discoveredTables}
         isConnected={isConnected}
+        batchValidationResults={batchValidationResults}
+        onShowMyWork={handleShowMyWork}
+        isBatchValidating={isBatchValidating}
+      />
+      
+      {/* Show My Work Modal */}
+      <ShowMyWork
+        isOpen={!!showMyWorkQuery}
+        onClose={() => {
+          setShowMyWorkQuery(null);
+          setShowMyWorkValidation(null);
+        }}
+        query={showMyWorkQuery}
+        validationResult={showMyWorkValidation}
+        onRunQuery={(sql) => {
+          openInEditor(sql);
+          setShowMyWorkQuery(null);
+          setShowMyWorkValidation(null);
+        }}
+        onRunSuggestedQuery={(sql) => {
+          openInEditor(sql);
+          setShowMyWorkQuery(null);
+          setShowMyWorkValidation(null);
+        }}
       />
     </div>
   );

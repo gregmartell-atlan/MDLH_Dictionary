@@ -228,3 +228,75 @@ class PreflightResponse(BaseModel):
     suggestions: List[TableSuggestion] = []
     suggested_query: Optional[str] = None
     message: str = ""
+
+
+# ============ Batch Validation Models ============
+
+class QueryValidationRequest(BaseModel):
+    """Request to validate a single query."""
+    query_id: str
+    sql: str
+    entity_type: Optional[str] = None
+    description: Optional[str] = None
+
+
+class QueryValidationResult(BaseModel):
+    """Result of validating a single query."""
+    query_id: str
+    status: str  # "success", "empty", "error"
+    row_count: Optional[int] = None
+    sample_data: Optional[List[dict]] = None  # First few rows as preview
+    columns: List[str] = []
+    execution_time_ms: Optional[int] = None
+    error_message: Optional[str] = None
+    suggested_query: Optional[str] = None
+    suggested_query_result: Optional[dict] = None  # Preview of suggested query
+
+
+class BatchValidationRequest(BaseModel):
+    """Request to validate multiple queries."""
+    queries: List[QueryValidationRequest]
+    database: Optional[str] = None
+    schema_name: Optional[str] = Field(None, alias="schema")
+    include_samples: bool = True  # Include sample data in results
+    sample_limit: int = 3  # Number of sample rows to return
+
+
+class BatchValidationResponse(BaseModel):
+    """Response from batch validation."""
+    results: List[QueryValidationResult]
+    summary: dict  # {"success": 5, "empty": 3, "error": 2}
+    validated_at: str
+
+
+# ============ Query Explanation Models ============
+
+class QueryExplanationStep(BaseModel):
+    """Single step in a query explanation."""
+    step_number: int
+    clause: str  # SELECT, FROM, WHERE, etc.
+    sql_snippet: str
+    explanation: str  # Plain English explanation
+    tip: Optional[str] = None  # SQL tip for beginners
+
+
+class QueryExplanationRequest(BaseModel):
+    """Request to explain a query."""
+    sql: str
+    include_execution: bool = True  # Also run the query and show results
+
+
+class QueryExplanationResponse(BaseModel):
+    """Response with query explanation."""
+    original_sql: str
+    formatted_sql: str
+    steps: List[QueryExplanationStep]
+    summary: str  # One-line summary of what the query does
+    tables_used: List[str]
+    columns_selected: List[str]
+    # Execution results (if include_execution=True)
+    executed: bool = False
+    row_count: Optional[int] = None
+    sample_data: Optional[List[dict]] = None
+    execution_time_ms: Optional[int] = None
+    error_message: Optional[str] = None

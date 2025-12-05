@@ -12,7 +12,10 @@ from app.models.schemas import (
     QueryRequest, QuerySubmitResponse, QueryStatusResponse,
     QueryResultsResponse, QueryHistoryResponse, QueryHistoryItem,
     QueryStatus, CancelQueryResponse,
-    PreflightRequest, PreflightResponse, TableCheckResult, TableSuggestion
+    PreflightRequest, PreflightResponse, TableCheckResult, TableSuggestion,
+    QueryValidationRequest, QueryValidationResult,
+    BatchValidationRequest, BatchValidationResponse,
+    QueryExplanationRequest, QueryExplanationResponse, QueryExplanationStep
 )
 from app.services.session import session_manager
 from app.database import query_history_db
@@ -629,3 +632,320 @@ async def clear_query_history():
     """Clear all query history."""
     query_history_db.clear_history()
     return {"message": "Query history cleared"}
+
+
+# =============================================================================
+# Batch Validation Endpoints
+# =============================================================================
+
+def _explain_sql_clause(clause_type: str, sql_snippet: str) -> Tuple[str, Optional[str]]:
+    """Generate plain English explanation for a SQL clause."""
+    explanations = {
+        "SELECT": (
+            f"**Choosing columns to display**: This tells the database which columns (fields) to include in the results.",
+            "Tip: Use SELECT * to get all columns, or list specific ones like SELECT name, email"
+        ),
+        "FROM": (
+            f"**Specifying the data source**: This tells the database which table to query.",
+            "Tip: Tables in MDLH end with _ENTITY (e.g., TABLE_ENTITY stores info about tables)"
+        ),
+        "WHERE": (
+            f"**Filtering rows**: Only rows matching these conditions will be included.",
+            "Tip: Use AND to combine conditions, OR for alternatives"
+        ),
+        "ORDER BY": (
+            f"**Sorting results**: Arranges rows in a specific order.",
+            "Tip: Add DESC for descending order (newest/highest first)"
+        ),
+        "LIMIT": (
+            f"**Restricting row count**: Only returns this many rows maximum.",
+            "Tip: Start with LIMIT 10 to preview data before running large queries"
+        ),
+        "GROUP BY": (
+            f"**Grouping data**: Combines rows with the same values for aggregation.",
+            "Tip: Use with COUNT(), SUM(), AVG() to get statistics"
+        ),
+        "JOIN": (
+            f"**Combining tables**: Connects data from multiple tables.",
+            "Tip: JOIN connects tables using a common column (usually GUID)"
+        ),
+        "WITH": (
+            f"**Creating a temporary result set**: Defines a named subquery for reuse.",
+            "Tip: CTEs (WITH clauses) make complex queries more readable"
+        ),
+    }
+    
+    return explanations.get(clause_type, (f"SQL clause: {clause_type}", None))
+
+
+def _parse_sql_for_explanation(sql: str) -> List[QueryExplanationStep]:
+    """Parse SQL and generate step-by-step explanation."""
+    steps = []
+    step_num = 1
+    
+    # Clean up SQL
+    clean_sql = re.sub(r'--[^\n]*', '', sql)  # Remove single-line comments
+    clean_sql = re.sub(r'/\*.*?\*/', '', clean_sql, flags=re.DOTALL)  # Remove block comments
+    clean_sql = ' '.join(clean_sql.split())  # Normalize whitespace
+    
+    # Pattern to find main clauses
+    clause_patterns = [
+        (r'\bWITH\s+(\w+)\s+AS\s*\(', 'WITH'),
+        (r'\bSELECT\s+(.*?)(?=\bFROM\b|$)', 'SELECT'),
+        (r'\bFROM\s+([\w."]+(?:\s*,\s*[\w."]+)*)', 'FROM'),
+        (r'\b(LEFT|RIGHT|INNER|OUTER|CROSS)?\s*JOIN\s+([\w."]+)', 'JOIN'),
+        (r'\bWHERE\s+(.*?)(?=\bGROUP BY\b|\bORDER BY\b|\bLIMIT\b|\bHAVING\b|$)', 'WHERE'),
+        (r'\bGROUP BY\s+(.*?)(?=\bHAVING\b|\bORDER BY\b|\bLIMIT\b|$)', 'GROUP BY'),
+        (r'\bHAVING\s+(.*?)(?=\bORDER BY\b|\bLIMIT\b|$)', 'HAVING'),
+        (r'\bORDER BY\s+(.*?)(?=\bLIMIT\b|$)', 'ORDER BY'),
+        (r'\bLIMIT\s+(\d+)', 'LIMIT'),
+    ]
+    
+    for pattern, clause_type in clause_patterns:
+        match = re.search(pattern, clean_sql, re.IGNORECASE | re.DOTALL)
+        if match:
+            snippet = match.group(0)[:100] + ('...' if len(match.group(0)) > 100 else '')
+            explanation, tip = _explain_sql_clause(clause_type, snippet)
+            
+            steps.append(QueryExplanationStep(
+                step_number=step_num,
+                clause=clause_type,
+                sql_snippet=snippet.strip(),
+                explanation=explanation,
+                tip=tip
+            ))
+            step_num += 1
+    
+    return steps
+
+
+def _generate_query_summary(sql: str, tables: List[str], columns: List[str]) -> str:
+    """Generate a one-line summary of what the query does."""
+    table_str = tables[0] if len(tables) == 1 else f"{len(tables)} tables"
+    
+    if 'COUNT(*)' in sql.upper() or 'COUNT(' in sql.upper():
+        return f"Counts records in {table_str}"
+    elif 'SUM(' in sql.upper() or 'AVG(' in sql.upper():
+        return f"Calculates statistics from {table_str}"
+    elif 'GROUP BY' in sql.upper():
+        return f"Groups and summarizes data from {table_str}"
+    elif 'JOIN' in sql.upper():
+        return f"Combines data from {table_str} based on matching values"
+    elif len(columns) == 1 and columns[0] == '*':
+        return f"Retrieves all columns from {table_str}"
+    else:
+        return f"Retrieves {len(columns)} columns from {table_str}"
+
+
+def _execute_and_sample(cursor, sql: str, sample_limit: int = 3) -> dict:
+    """Execute a query and return sample results."""
+    result = {
+        "success": False,
+        "row_count": 0,
+        "columns": [],
+        "sample_data": [],
+        "execution_time_ms": 0,
+        "error_message": None
+    }
+    
+    try:
+        start = time.time()
+        cursor.execute(sql)
+        
+        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+        rows = cursor.fetchall()
+        
+        result["success"] = True
+        result["row_count"] = len(rows)
+        result["columns"] = columns
+        result["execution_time_ms"] = int((time.time() - start) * 1000)
+        
+        # Convert sample rows to dicts
+        for row in rows[:sample_limit]:
+            row_dict = {}
+            for i, col in enumerate(columns):
+                val = row[i]
+                # Convert non-JSON-serializable types
+                if isinstance(val, (datetime,)):
+                    val = val.isoformat()
+                elif isinstance(val, bytes):
+                    val = val.decode('utf-8', errors='replace')
+                row_dict[col] = val
+            result["sample_data"].append(row_dict)
+            
+    except Exception as e:
+        result["error_message"] = str(e)
+        result["success"] = False
+    
+    return result
+
+
+@router.post("/validate-batch", response_model=BatchValidationResponse)
+async def validate_batch(
+    request: BatchValidationRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
+):
+    """
+    Validate multiple queries at once.
+    
+    For each query:
+    - Executes it to check if it works
+    - Returns row count and sample data
+    - If empty/failed, suggests a working alternative
+    """
+    session = _get_session_or_401(x_session_id)
+    
+    default_db = request.database or session.database or "FIELD_METADATA"
+    default_schema = request.schema_name or session.schema or "PUBLIC"
+    
+    cursor = session.conn.cursor()
+    results = []
+    summary = {"success": 0, "empty": 0, "error": 0}
+    
+    try:
+        for query_req in request.queries:
+            sql = query_req.sql.strip()
+            
+            # Execute the query
+            exec_result = _execute_and_sample(
+                cursor, sql, 
+                request.sample_limit if request.include_samples else 0
+            )
+            
+            # Determine status
+            if exec_result["error_message"]:
+                status = "error"
+                summary["error"] += 1
+            elif exec_result["row_count"] == 0:
+                status = "empty"
+                summary["empty"] += 1
+            else:
+                status = "success"
+                summary["success"] += 1
+            
+            # Build result
+            validation_result = QueryValidationResult(
+                query_id=query_req.query_id,
+                status=status,
+                row_count=exec_result["row_count"],
+                sample_data=exec_result["sample_data"] if request.include_samples else None,
+                columns=exec_result["columns"],
+                execution_time_ms=exec_result["execution_time_ms"],
+                error_message=exec_result["error_message"]
+            )
+            
+            # If failed or empty, try to find alternative
+            if status in ("error", "empty"):
+                # Extract table name from query
+                tables = _extract_tables_from_sql(sql)
+                if tables:
+                    db, schema, table = tables[0]
+                    resolved_db = db or default_db
+                    resolved_schema = schema or default_schema
+                    
+                    # Find similar tables with data
+                    similar = _find_similar_tables(
+                        cursor, resolved_db, resolved_schema, table, limit=5
+                    )
+                    
+                    if similar:
+                        # Generate suggested query using first table with data
+                        best = similar[0]
+                        suggested_sql = re.sub(
+                            rf'(FROM|JOIN)\s+[\w."]*{re.escape(table)}\b',
+                            rf'\1 {best["fully_qualified"]}',
+                            sql,
+                            flags=re.IGNORECASE
+                        )
+                        
+                        # Verify suggested query works
+                        suggested_result = _execute_and_sample(cursor, suggested_sql, 3)
+                        
+                        if suggested_result["success"] and suggested_result["row_count"] > 0:
+                            validation_result.suggested_query = suggested_sql
+                            validation_result.suggested_query_result = {
+                                "row_count": suggested_result["row_count"],
+                                "sample_data": suggested_result["sample_data"],
+                                "columns": suggested_result["columns"]
+                            }
+            
+            results.append(validation_result)
+        
+        cursor.close()
+        
+    except Exception as e:
+        cursor.close()
+        logger.error(f"Batch validation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    return BatchValidationResponse(
+        results=results,
+        summary=summary,
+        validated_at=datetime.utcnow().isoformat()
+    )
+
+
+@router.post("/explain", response_model=QueryExplanationResponse)
+async def explain_query(
+    request: QueryExplanationRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
+):
+    """
+    Explain a SQL query in plain English.
+    
+    Breaks down the query into steps with explanations suitable for SQL beginners.
+    Optionally executes the query and shows sample results.
+    """
+    session = _get_session_or_401(x_session_id) if request.include_execution else None
+    
+    sql = request.sql.strip()
+    
+    # Parse SQL structure
+    steps = _parse_sql_for_explanation(sql)
+    
+    # Extract tables and columns
+    tables = _extract_tables_from_sql(sql)
+    table_names = [f"{t[0] or ''}.{t[1] or ''}.{t[2]}".strip('.') for t in tables]
+    
+    # Extract selected columns
+    select_match = re.search(r'SELECT\s+(.*?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        cols_str = select_match.group(1)
+        if cols_str.strip() == '*':
+            columns = ['*']
+        else:
+            columns = [c.strip().split()[-1] for c in cols_str.split(',')]
+    else:
+        columns = []
+    
+    # Generate summary
+    summary = _generate_query_summary(sql, table_names, columns)
+    
+    # Format SQL nicely
+    formatted = sql
+    for keyword in ['SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'ORDER BY', 'GROUP BY', 'LIMIT', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN']:
+        formatted = re.sub(rf'\b({keyword})\b', rf'\n\1', formatted, flags=re.IGNORECASE)
+    formatted = formatted.strip()
+    
+    response = QueryExplanationResponse(
+        original_sql=sql,
+        formatted_sql=formatted,
+        steps=steps,
+        summary=summary,
+        tables_used=table_names,
+        columns_selected=columns
+    )
+    
+    # Execute if requested
+    if request.include_execution and session:
+        cursor = session.conn.cursor()
+        exec_result = _execute_and_sample(cursor, sql, 5)
+        cursor.close()
+        
+        response.executed = True
+        response.row_count = exec_result["row_count"]
+        response.sample_data = exec_result["sample_data"]
+        response.execution_time_ms = exec_result["execution_time_ms"]
+        response.error_message = exec_result["error_message"]
+    
+    return response
