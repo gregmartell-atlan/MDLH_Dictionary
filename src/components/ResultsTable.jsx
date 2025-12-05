@@ -163,10 +163,10 @@ export default function ResultsTable({
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
         <div className="flex items-center gap-4 text-sm text-gray-600">
           <span>
-            <strong>{results.total_rows.toLocaleString()}</strong> rows
+            <strong>{(results.rowCount ?? results.total_rows ?? results.rows?.length ?? 0).toLocaleString()}</strong> rows
           </span>
           <span>
-            <strong>{results.columns.length}</strong> columns
+            <strong>{results.columns?.length ?? 0}</strong> columns
           </span>
         </div>
         
@@ -214,11 +214,11 @@ export default function ResultsTable({
         </table>
       </div>
       
-      {/* Pagination */}
-      {results.has_more && (
+      {/* Pagination - only show if pagination info is available */}
+      {results.has_more !== undefined && results.page !== undefined && (
         <div className="flex items-center justify-between px-4 py-2 border-t border-gray-200 bg-gray-50">
           <span className="text-sm text-gray-600">
-            Page {results.page} of {Math.ceil(results.total_rows / results.page_size)}
+            Page {results.page} of {Math.ceil((results.total_rows ?? results.rowCount ?? 0) / (results.page_size ?? 100))}
           </span>
           
           <div className="flex items-center gap-2">
