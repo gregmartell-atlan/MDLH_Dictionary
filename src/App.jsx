@@ -8,6 +8,115 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 // Cache for table columns (persisted during session)
 const columnCache = new Map();
 
+// Cache for discovered tables (which tables actually exist)
+const discoveredTablesCache = {
+  tables: new Set(),
+  database: null,
+  schema: null,
+  lastDiscovery: null,
+};
+
+// Discover which MDLH entity tables exist in the connected database
+async function discoverMDLHTables(database, schema) {
+  // Return cached if same context and recent (within 5 minutes)
+  const cacheKey = `${database}.${schema}`;
+  const fiveMinutes = 5 * 60 * 1000;
+  if (
+    discoveredTablesCache.database === database &&
+    discoveredTablesCache.schema === schema &&
+    discoveredTablesCache.lastDiscovery &&
+    Date.now() - discoveredTablesCache.lastDiscovery < fiveMinutes
+  ) {
+    return discoveredTablesCache.tables;
+  }
+  
+  try {
+    const sessionData = sessionStorage.getItem('snowflake_session');
+    const sessionId = sessionData ? JSON.parse(sessionData).sessionId : null;
+    
+    if (!sessionId) {
+      console.log('No session - cannot discover tables');
+      return new Set();
+    }
+    
+    // Fetch all tables in the schema
+    const response = await fetch(
+      `${API_BASE_URL}/api/metadata/tables?database=${database}&schema=${schema}&refresh=false`,
+      { headers: { 'X-Session-ID': sessionId } }
+    );
+    
+    if (response.ok) {
+      const tables = await response.json();
+      const tableNames = new Set(tables.map(t => t.name?.toUpperCase() || t.toUpperCase()));
+      
+      // Update cache
+      discoveredTablesCache.tables = tableNames;
+      discoveredTablesCache.database = database;
+      discoveredTablesCache.schema = schema;
+      discoveredTablesCache.lastDiscovery = Date.now();
+      
+      console.log(`[Discovery] Found ${tableNames.size} tables in ${database}.${schema}`);
+      return tableNames;
+    }
+  } catch (err) {
+    console.error('Failed to discover tables:', err);
+  }
+  
+  return new Set();
+}
+
+// Validate a query by running it with LIMIT 0 (fast check)
+async function validateQuery(sql, database, schema) {
+  try {
+    const sessionData = sessionStorage.getItem('snowflake_session');
+    const sessionId = sessionData ? JSON.parse(sessionData).sessionId : null;
+    
+    if (!sessionId) return { valid: false, error: 'Not connected' };
+    
+    // Modify query to add LIMIT 0 for fast validation (no data transfer)
+    let testSql = sql.trim();
+    // Remove existing LIMIT clause and add LIMIT 0
+    testSql = testSql.replace(/LIMIT\s+\d+\s*;?\s*$/i, '');
+    testSql = testSql.replace(/;?\s*$/, '') + ' LIMIT 0;';
+    
+    const response = await fetch(`${API_BASE_URL}/api/query/execute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-ID': sessionId,
+      },
+      body: JSON.stringify({
+        sql: testSql,
+        database,
+        schema,
+        timeout: 10,
+      }),
+    });
+    
+    const result = await response.json();
+    
+    if (result.status === 'COMPLETED' || result.status === 'completed') {
+      return { valid: true, columns: result.columns };
+    } else {
+      return { valid: false, error: result.error_message || result.error || 'Query failed' };
+    }
+  } catch (err) {
+    return { valid: false, error: err.message };
+  }
+}
+
+// Check if a table exists (fast check using discovered tables)
+function tableExists(tableName, discoveredTables) {
+  if (!tableName || tableName === '(abstract)') return false;
+  return discoveredTables.has(tableName.toUpperCase());
+}
+
+// Extract table name from a query
+function extractTableFromQuery(sql) {
+  const match = sql.match(/FROM\s+(?:[\w.]+\.)?(\w+_ENTITY)/i);
+  return match ? match[1].toUpperCase() : null;
+}
+
 const tabs = [
   { id: 'core', label: 'Core', icon: Table },
   { id: 'glossary', label: 'Glossary', icon: BookOpen },
@@ -968,9 +1077,28 @@ function CellCopyButton({ text }) {
 }
 
 // Slide-out Query Panel
-function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery, onRunInEditor, isLoading }) {
+function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery, onRunInEditor, isLoading, discoveredTables = new Set(), isConnected = false }) {
   const panelRef = useRef(null);
   const highlightedRef = useRef(null);
+  
+  // Helper to check if a query's table is available
+  const getTableAvailability = (query) => {
+    if (!isConnected || discoveredTables.size === 0) return null;
+    const tableName = extractTableFromQuery(query);
+    if (!tableName) return null;
+    return discoveredTables.has(tableName.toUpperCase());
+  };
+  
+  // Sort queries: validated first, then unavailable last
+  const sortedQueries = [...queries].sort((a, b) => {
+    const aAvailable = getTableAvailability(a.query);
+    const bAvailable = getTableAvailability(b.query);
+    if (aAvailable === true && bAvailable !== true) return -1;
+    if (bAvailable === true && aAvailable !== true) return 1;
+    if (aAvailable === false && bAvailable !== false) return 1;
+    if (bAvailable === false && aAvailable !== false) return -1;
+    return 0;
+  });
 
   // Close on escape key
   useEffect(() => {
@@ -1041,6 +1169,25 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
 
         {/* Panel Content */}
         <div className="overflow-y-auto h-[calc(100%-80px)] p-4 space-y-3 bg-gray-50">
+          {/* Connection status banner */}
+          {isConnected && discoveredTables.size > 0 && (
+            <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200 mb-4">
+              <Check size={16} className="text-green-600" />
+              <span className="text-sm text-green-700">
+                <strong>{discoveredTables.size} tables</strong> discovered • Validated queries show <span className="inline-flex items-center gap-1 px-1 bg-green-100 rounded text-green-700 text-xs font-medium"><Check size={10} />Ready</span>
+              </span>
+            </div>
+          )}
+          
+          {!isConnected && (
+            <div className="flex items-center gap-2 p-3 bg-gray-100 rounded-lg border border-gray-200 mb-4">
+              <Database size={16} className="text-gray-500" />
+              <span className="text-sm text-gray-600">
+                Connect to Snowflake (Query Editor tab) to validate which tables exist
+              </span>
+            </div>
+          )}
+          
           {/* Loading indicator */}
           {isLoading && (
             <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200 mb-4">
@@ -1061,7 +1208,8 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
                   description={highlightedQuery.includes('Connect to Snowflake') 
                     ? "Connect to Snowflake for intelligent column selection" 
                     : "Query generated with real column metadata"} 
-                  query={highlightedQuery} 
+                  query={highlightedQuery}
+                  tableAvailable={getTableAvailability(highlightedQuery)} 
                   defaultExpanded={true}
                   onRunInEditor={onRunInEditor}
                 />
@@ -1074,8 +1222,9 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
               {highlightedQuery && !queries.some(q => q.query === highlightedQuery) && (
                 <p className="text-xs text-gray-500 uppercase tracking-wider font-medium">More {categoryLabel} Queries</p>
               )}
-              {queries.map((q, i) => {
+              {sortedQueries.map((q, i) => {
                 const isHighlighted = highlightedQuery && q.query === highlightedQuery;
+                const tableAvailable = getTableAvailability(q.query);
                 return (
                   <div key={i} ref={isHighlighted ? highlightedRef : null}>
                     <QueryCard 
@@ -1084,6 +1233,7 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
                       query={q.query} 
                       defaultExpanded={isHighlighted}
                       onRunInEditor={onRunInEditor}
+                      tableAvailable={tableAvailable}
                     />
                   </div>
                 );
@@ -1102,23 +1252,53 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
   );
 }
 
-function QueryCard({ title, description, query, defaultExpanded = false, onRunInEditor }) {
+function QueryCard({ title, description, query, defaultExpanded = false, onRunInEditor, validated = null, tableAvailable = null }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  
+  // Determine status for visual feedback
+  const isValidated = validated === true || tableAvailable === true;
+  const isUnavailable = tableAvailable === false;
   
   return (
     <div className={`bg-white rounded-xl border overflow-hidden transition-all duration-200 ${
-      expanded ? 'border-[#3366FF] shadow-lg' : 'border-gray-200 shadow-sm hover:shadow-md hover:border-gray-300'
+      expanded 
+        ? isValidated 
+          ? 'border-green-400 shadow-lg' 
+          : 'border-[#3366FF] shadow-lg'
+        : isUnavailable
+          ? 'border-orange-200 shadow-sm hover:shadow-md hover:border-orange-300 opacity-75'
+          : 'border-gray-200 shadow-sm hover:shadow-md hover:border-gray-300'
     }`}>
       <div 
         className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-[#3366FF]/10 rounded-lg">
-            <Code2 size={18} className="text-[#3366FF]" />
+          <div className={`p-2 rounded-lg ${
+            isValidated ? 'bg-green-100' : isUnavailable ? 'bg-orange-100' : 'bg-[#3366FF]/10'
+          }`}>
+            {isValidated ? (
+              <Check size={18} className="text-green-600" />
+            ) : isUnavailable ? (
+              <X size={18} className="text-orange-500" />
+            ) : (
+              <Code2 size={18} className="text-[#3366FF]" />
+            )}
           </div>
           <div>
-            <h4 className="font-semibold text-gray-900 text-sm">{title}</h4>
+            <div className="flex items-center gap-2">
+              <h4 className="font-semibold text-gray-900 text-sm">{title}</h4>
+              {isValidated && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-medium rounded-full">
+                  <Check size={10} /> Ready
+                </span>
+              )}
+              {isUnavailable && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[10px] font-medium rounded-full">
+                  Table Missing
+                </span>
+              )}
+            </div>
             <p className="text-gray-500 text-xs mt-0.5">{description}</p>
           </div>
         </div>
@@ -1130,8 +1310,14 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
                 e.stopPropagation();
                 onRunInEditor(query);
               }}
-              className="flex items-center gap-1 px-2 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded text-xs font-medium"
-              title="Open in Query Editor"
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${
+                isValidated 
+                  ? 'bg-green-500 hover:bg-green-600 text-white'
+                  : isUnavailable
+                    ? 'bg-orange-400 hover:bg-orange-500 text-white'
+                    : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+              }`}
+              title={isValidated ? "✓ Run validated query" : isUnavailable ? "Table may not exist" : "Open in Query Editor"}
             >
               <Play size={10} />
               Run
@@ -1154,9 +1340,41 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
 }
 
 // Play button for running a query
-function PlayQueryButton({ onClick, hasQuery }) {
+function PlayQueryButton({ onClick, hasQuery, tableAvailable, isConnected }) {
   if (!hasQuery) return null;
   
+  // Determine button state based on table availability
+  const isValidated = isConnected && tableAvailable === true;
+  const isUnavailable = isConnected && tableAvailable === false;
+  const isUnknown = !isConnected || tableAvailable === null;
+  
+  if (isUnavailable) {
+    return (
+      <button
+        onClick={onClick}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 hover:bg-orange-200 text-orange-700 transition-all duration-200 border border-orange-200"
+        title="Table not found - query may fail"
+      >
+        <Code2 size={12} />
+        <span>Query</span>
+      </button>
+    );
+  }
+  
+  if (isValidated) {
+    return (
+      <button
+        onClick={onClick}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-500 hover:bg-green-600 text-white transition-all duration-200 shadow-sm hover:shadow-md"
+        title="✓ Table verified - click to run query"
+      >
+        <Check size={12} />
+        <span>Query</span>
+      </button>
+    );
+  }
+  
+  // Unknown state (not connected)
   return (
     <button
       onClick={onClick}
@@ -1538,9 +1756,55 @@ export default function App() {
   const [selectedMDLHSchema, setSelectedMDLHSchema] = useState('PUBLIC');
   const searchRef = useRef(null);
   
+  // State for table discovery and validation
+  const [discoveredTables, setDiscoveredTables] = useState(new Set());
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [validatedQueries, setValidatedQueries] = useState(new Map()); // queryId -> { valid, error, columns }
+  const [isValidating, setIsValidating] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  
+  // Check connection status on mount and when storage changes
+  useEffect(() => {
+    const checkConnection = () => {
+      const sessionData = sessionStorage.getItem('snowflake_session');
+      setIsConnected(!!sessionData);
+    };
+    checkConnection();
+    
+    // Listen for storage changes (when connection is made in QueryEditor)
+    window.addEventListener('storage', checkConnection);
+    // Also check periodically
+    const interval = setInterval(checkConnection, 2000);
+    
+    return () => {
+      window.removeEventListener('storage', checkConnection);
+      clearInterval(interval);
+    };
+  }, []);
+  
+  // Discover tables when database/schema changes or connection is made
+  useEffect(() => {
+    if (isConnected && selectedMDLHDatabase && selectedMDLHSchema) {
+      setIsDiscovering(true);
+      discoverMDLHTables(selectedMDLHDatabase, selectedMDLHSchema)
+        .then(tables => {
+          setDiscoveredTables(tables);
+          console.log(`[App] Discovered ${tables.size} tables`);
+        })
+        .finally(() => setIsDiscovering(false));
+    }
+  }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema]);
+  
   // Get warning for selected database
   const selectedDbConfig = MDLH_DATABASES.find(db => db.name === selectedMDLHDatabase);
   const dbWarning = selectedDbConfig?.warning;
+  
+  // Check if a table exists in the discovered tables
+  const isTableAvailable = useCallback((tableName) => {
+    if (!tableName || tableName === '(abstract)') return null; // Abstract tables
+    if (!isConnected || discoveredTables.size === 0) return null; // Unknown
+    return discoveredTables.has(tableName.toUpperCase());
+  }, [isConnected, discoveredTables]);
 
   // Keyboard shortcut: Cmd/Ctrl + K to focus search
   useEffect(() => {
@@ -1865,8 +2129,29 @@ export default function App() {
                                 <CellCopyButton text={row[col]} />
                               </span>
                             ) : col === 'table' ? (
-                              <span className="inline-flex items-center">
-                                <span className="font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs">{row[col]}</span>
+                              <span className="inline-flex items-center gap-1">
+                                {/* Table availability indicator */}
+                                {row[col] !== '(abstract)' && isConnected && discoveredTables.size > 0 && (
+                                  isTableAvailable(row[col]) ? (
+                                    <span title="Table exists - click to query" className="text-green-500">
+                                      <Check size={14} />
+                                    </span>
+                                  ) : (
+                                    <span title="Table not found in selected database" className="text-orange-400">
+                                      <X size={14} />
+                                    </span>
+                                  )
+                                )}
+                                {isDiscovering && row[col] !== '(abstract)' && (
+                                  <Loader2 size={14} className="animate-spin text-gray-400" />
+                                )}
+                                <span className={`font-mono px-2 py-0.5 rounded text-xs ${
+                                  row[col] === '(abstract)' 
+                                    ? 'text-gray-400 bg-gray-100' 
+                                    : isTableAvailable(row[col]) === false
+                                      ? 'text-orange-600 bg-orange-50'
+                                      : 'text-emerald-600 bg-emerald-50'
+                                }`}>{row[col]}</span>
                                 {row[col] !== '(abstract)' && <CellCopyButton text={row[col]} />}
                               </span>
                             ) : col === 'exampleQuery' ? (
@@ -1883,6 +2168,8 @@ export default function App() {
                           <PlayQueryButton 
                             hasQuery={hasQueryForEntity(row.entity, row.table, row.exampleQuery)}
                             onClick={() => openQueryForEntity(row.entity, row.table, row.exampleQuery)}
+                            tableAvailable={isTableAvailable(row.table)}
+                            isConnected={isConnected}
                           />
                         </td>
                       </tr>
@@ -1924,6 +2211,8 @@ export default function App() {
         highlightedQuery={highlightedQuery}
         onRunInEditor={openInEditor}
         isLoading={loadingColumns}
+        discoveredTables={discoveredTables}
+        isConnected={isConnected}
       />
     </div>
   );
