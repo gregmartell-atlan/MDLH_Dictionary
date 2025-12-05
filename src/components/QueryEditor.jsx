@@ -284,6 +284,7 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
             <SchemaExplorer 
               onInsertText={handleInsertText}
               defaultDatabase={connStatus?.database}
+              isConnected={connectionStatus?.connected}
             />
           </div>
         )}

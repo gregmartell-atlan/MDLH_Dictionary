@@ -70,7 +70,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
         user: formData.user,
         warehouse: formData.warehouse,
         database: formData.database,
-        schema: formData.schema,
+        schema_name: formData.schema,  // Backend expects schema_name
         role: formData.role || undefined,
         auth_type: authMethod
       };

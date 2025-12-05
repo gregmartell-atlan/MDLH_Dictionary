@@ -122,7 +122,7 @@ function ColumnNode({ column, level, onInsert }) {
   );
 }
 
-export default function SchemaExplorer({ onInsertText, defaultDatabase }) {
+export default function SchemaExplorer({ onInsertText, defaultDatabase, isConnected }) {
   const { fetchDatabases, fetchSchemas, fetchTables, fetchColumns, refreshCache, loading } = useMetadata();
   
   const [databases, setDatabases] = useState([]);
@@ -132,10 +132,10 @@ export default function SchemaExplorer({ onInsertText, defaultDatabase }) {
   const [columns, setColumns] = useState({});
   const [loadingNodes, setLoadingNodes] = useState({});
   
-  // Load databases on mount
+  // Load databases on mount and when connection changes
   useEffect(() => {
     loadDatabases();
-  }, []);
+  }, [isConnected]);
   
   // Expand default database
   useEffect(() => {
