@@ -44,45 +44,54 @@ export default function ResultsTable({
   const [sorting, setSorting] = useState([]);
   
   // Build columns from result metadata
+  // Handles both string columns ["col1", "col2"] and object columns [{name: "col1"}, {name: "col2"}]
   const columns = useMemo(() => {
     if (!results?.columns) return [];
     
-    return results.columns.map((col, index) => ({
-      id: col.name || `col_${index}`,  // TanStack requires id when header is a function
-      accessorKey: col.name,
-      header: ({ column }) => (
-        <button
-          className="flex items-center gap-1 font-semibold text-gray-700 hover:text-gray-900"
-          onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-        >
-          <span>{col.name}</span>
-          {column.getIsSorted() === 'asc' ? (
-            <ArrowUp size={14} />
-          ) : column.getIsSorted() === 'desc' ? (
-            <ArrowDown size={14} />
-          ) : (
-            <ArrowUpDown size={14} className="opacity-50" />
-          )}
-        </button>
-      ),
-      cell: ({ getValue }) => {
-        const value = getValue();
-        if (value === null) return <span className="text-gray-400 italic">NULL</span>;
-        if (typeof value === 'object') return JSON.stringify(value);
-        return String(value);
-      },
-      meta: { type: col.type }
-    }));
+    return results.columns.map((col, index) => {
+      // Handle both string and object column formats
+      const colName = typeof col === 'string' ? col : (col.name || `col_${index}`);
+      const colType = typeof col === 'object' ? col.type : undefined;
+      
+      return {
+        id: colName || `col_${index}`,
+        accessorKey: colName,
+        header: ({ column }) => (
+          <button
+            className="flex items-center gap-1 font-semibold text-gray-700 hover:text-gray-900"
+            onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
+          >
+            <span>{colName}</span>
+            {column.getIsSorted() === 'asc' ? (
+              <ArrowUp size={14} />
+            ) : column.getIsSorted() === 'desc' ? (
+              <ArrowDown size={14} />
+            ) : (
+              <ArrowUpDown size={14} className="opacity-50" />
+            )}
+          </button>
+        ),
+        cell: ({ getValue }) => {
+          const value = getValue();
+          if (value === null) return <span className="text-gray-400 italic">NULL</span>;
+          if (typeof value === 'object') return JSON.stringify(value);
+          return String(value);
+        },
+        meta: { type: colType }
+      };
+    });
   }, [results?.columns]);
   
   // Build data from rows
+  // Handles both string and object column formats
   const data = useMemo(() => {
     if (!results?.rows || !results?.columns) return [];
     
     return results.rows.map(row => {
       const obj = {};
       results.columns.forEach((col, i) => {
-        obj[col.name] = row[i];
+        const colName = typeof col === 'string' ? col : col.name;
+        obj[colName] = row[i];
       });
       return obj;
     });
