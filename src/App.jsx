@@ -131,9 +131,23 @@ const data = {
 const exampleQueries = {
   core: [
     {
+      title: '✓ Verify Database Access',
+      description: 'Check which MDLH databases you have access to before querying',
+      query: `-- List all databases you can access
+SHOW DATABASES;
+
+-- Check tables in a specific database
+SHOW TABLES IN FIELD_METADATA.PUBLIC;
+
+-- Verify a specific table exists
+SELECT COUNT(*) as row_count 
+FROM FIELD_METADATA.PUBLIC.TABLE_ENTITY 
+LIMIT 1;`
+    },
+    {
       title: 'List All MDLH Tables',
-      description: 'Discover available entity tables in the lakehouse',
-      query: `SHOW TABLES;`
+      description: 'Discover available entity tables in the current database',
+      query: `SHOW TABLES IN SCHEMA;`
     },
     {
       title: 'Explore Catalog Integrations',
@@ -1138,131 +1152,653 @@ function PlayQueryButton({ onClick, hasQuery }) {
 }
 
 // Default MDLH databases users can query
+// Note: Not all databases have the same tables - users should verify access
 const MDLH_DATABASES = [
-  { name: 'FIELD_METADATA', label: 'Field Metadata (atlan.atlan.com)' },
-  { name: 'MDLH_GOVERNANCE', label: 'MDLH Governance (demo-governance.atlan.com)' },
-  { name: 'MDLH_ATLAN_HOME', label: 'MDLH Atlan Home' },
-  { name: 'ATLAN_MDLH', label: 'Atlan MDLH' },
+  { name: 'FIELD_METADATA', label: 'Field Metadata (atlan.atlan.com)', schema: 'PUBLIC' },
+  { name: 'ATLAN_MDLH', label: 'Atlan MDLH', schema: 'PUBLIC' },
+  { name: 'MDLH_GOVERNANCE', label: 'MDLH Governance', schema: 'PUBLIC', warning: 'May have different tables' },
+  { name: 'MDLH_ATLAN_HOME', label: 'MDLH Atlan Home', schema: 'PUBLIC', warning: 'May have different tables' },
 ];
 
+// Schema options for the selected database
+const MDLH_SCHEMAS = ['PUBLIC', 'INFORMATION_SCHEMA'];
+
 // Generate a context-aware example query for an entity
-function generateEntityQuery(entityName, tableName, database, options = {}) {
+function generateEntityQuery(entityName, tableName, database, schema, options = {}) {
   const db = database || 'FIELD_METADATA';
+  const sch = schema || 'PUBLIC';
   const table = tableName || `${entityName.toUpperCase()}_ENTITY`;
   const limit = options.limit || 10;
-  
-  // Base query with USE and SELECT
-  let query = `-- Query ${entityName} entities from ${db}
-USE ${db};
-
-SELECT *
-FROM ${table}
-LIMIT ${limit};`;
-
-  // Add entity-specific enhancements
+  const fullTableRef = `${db}.${sch}.${table}`;
   const entityLower = entityName.toLowerCase();
   
-  if (entityLower.includes('column')) {
-    query = `-- Query Column entities with key attributes
-USE ${db};
+  // Header comment for all queries
+  const header = `-- Query ${entityName} entities
+-- Database: ${db} | Schema: ${sch}
+-- ⚠️ Verify table exists: SHOW TABLES LIKE '${table}' IN ${db}.${sch};
 
-SELECT 
-    NAME,
-    TABLENAME,
-    DATATYPE,
-    DESCRIPTION,
-    USERDESCRIPTION,
-    CERTIFICATESTATUS,
-    CONNECTORNAME
-FROM ${table}
-WHERE STATUS = 'ACTIVE'
-ORDER BY TABLENAME, "ORDER"
-LIMIT ${limit};`;
-  } else if (entityLower.includes('table') && !entityLower.includes('partition')) {
-    query = `-- Query Table entities with popularity metrics
-USE ${db};
+`;
 
-SELECT 
-    NAME,
-    SCHEMANAME,
-    DATABASENAME,
-    QUERYCOUNT,
-    POPULARITYSCORE,
-    CERTIFICATESTATUS,
-    CONNECTORNAME
-FROM ${table}
-WHERE STATUS = 'ACTIVE'
-ORDER BY POPULARITYSCORE DESC NULLS LAST
-LIMIT ${limit};`;
-  } else if (entityLower.includes('glossary') && entityLower.includes('term')) {
-    query = `-- Query Glossary Terms with verification status
-USE ${db};
-
-SELECT 
-    NAME,
-    USERDESCRIPTION,
-    CERTIFICATESTATUS,
-    OWNERUSERS,
-    UPDATETIME
-FROM ${table}
-WHERE CERTIFICATESTATUS = 'VERIFIED'
-ORDER BY UPDATETIME DESC
-LIMIT ${limit};`;
-  } else if (entityLower.includes('schema')) {
-    query = `-- Query Schema entities
-USE ${db};
-
-SELECT 
-    NAME,
-    DATABASENAME,
-    CONNECTORNAME,
-    DESCRIPTION,
-    OWNERUSERS
-FROM ${table}
-WHERE STATUS = 'ACTIVE'
-LIMIT ${limit};`;
-  } else if (entityLower.includes('database')) {
-    query = `-- Query Database entities
-USE ${db};
-
-SELECT 
+  // ============================================
+  // CORE ENTITIES
+  // ============================================
+  
+  if (entityLower === 'connection') {
+    return header + `SELECT 
     NAME,
     CONNECTORNAME,
-    CONNECTIONNAME,
-    DESCRIPTION,
-    POPULARITYSCORE
-FROM ${table}
-WHERE STATUS = 'ACTIVE'
-ORDER BY POPULARITYSCORE DESC NULLS LAST
+    CATEGORY,
+    HOST,
+    CERTIFICATESTATUS,
+    ADMINUSERS,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
 LIMIT ${limit};`;
-  } else if (entityLower.includes('process') || entityLower.includes('lineage')) {
-    query = `-- Query Process/Lineage entities
-USE ${db};
-
-SELECT 
+  }
+  
+  if (entityLower.includes('process') && !entityLower.includes('dbt')) {
+    return header + `SELECT 
     NAME,
     TYPENAME,
     INPUTS,
     OUTPUTS,
+    SQL,
     CREATETIME
-FROM ${table}
+FROM ${fullTableRef}
 ORDER BY CREATETIME DESC
 LIMIT ${limit};`;
-  } else if (entityLower.includes('connection')) {
-    query = `-- Query Connection entities
-USE ${db};
+  }
 
-SELECT 
+  // ============================================
+  // GLOSSARY ENTITIES
+  // ============================================
+  
+  if (entityLower === 'atlasglossary') {
+    return header + `SELECT 
+    GUID,
     NAME,
-    CONNECTORNAME,
-    HOST,
-    CERTIFICATESTATUS,
-    ADMINUSERS
-FROM ${table}
+    SHORTDESCRIPTION,
+    LANGUAGE,
+    CREATETIME,
+    CREATEDBY
+FROM ${fullTableRef}
+ORDER BY NAME
 LIMIT ${limit};`;
   }
   
-  return query;
+  if (entityLower === 'atlasglossaryterm') {
+    return header + `SELECT 
+    NAME,
+    USERDESCRIPTION,
+    CERTIFICATESTATUS,
+    OWNERUSERS,
+    ANCHOR,
+    UPDATETIME
+FROM ${fullTableRef}
+WHERE CERTIFICATESTATUS = 'VERIFIED'
+ORDER BY UPDATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'atlasglossarycategory') {
+    return header + `SELECT 
+    NAME,
+    SHORTDESCRIPTION,
+    ANCHOR,
+    PARENTCATEGORY,
+    TERMS
+FROM ${fullTableRef}
+ORDER BY NAME
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // DATA MESH ENTITIES
+  // ============================================
+  
+  if (entityLower === 'datadomain') {
+    return header + `SELECT 
+    NAME,
+    USERDESCRIPTION,
+    PARENTDOMAINQUALIFIEDNAME,
+    SUPERDOMAINQUALIFIEDNAME,
+    OWNERUSERS
+FROM ${fullTableRef}
+ORDER BY NAME
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'dataproduct') {
+    return header + `SELECT 
+    NAME,
+    USERDESCRIPTION,
+    DATAPRODUCTSTATUS,
+    DATAPRODUCTCRITICALITY,
+    DATAPRODUCTSENSITIVITY,
+    DATAPRODUCTVISIBILITY,
+    DATAPRODUCTSCORE
+FROM ${fullTableRef}
+WHERE DATAPRODUCTSTATUS = 'Active'
+ORDER BY DATAPRODUCTSCORE DESC NULLS LAST
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'datacontract') {
+    return header + `SELECT 
+    NAME,
+    DATACONTRACTVERSION,
+    CERTIFICATESTATUS,
+    DATACONTRACTASSETGUID,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // RELATIONAL DB ENTITIES
+  // ============================================
+  
+  if (entityLower === 'database') {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    CONNECTIONNAME,
+    SCHEMACOUNT,
+    DESCRIPTION,
+    POPULARITYSCORE
+FROM ${fullTableRef}
+WHERE STATUS = 'ACTIVE'
+ORDER BY POPULARITYSCORE DESC NULLS LAST
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'schema' && !entityLower.includes('registry')) {
+    return header + `SELECT 
+    NAME,
+    DATABASENAME,
+    CONNECTORNAME,
+    TABLECOUNT,
+    VIEWCOUNT,
+    DESCRIPTION
+FROM ${fullTableRef}
+WHERE STATUS = 'ACTIVE'
+ORDER BY DATABASENAME, NAME
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'table') {
+    return header + `SELECT 
+    NAME,
+    SCHEMANAME,
+    DATABASENAME,
+    COLUMNCOUNT,
+    ROWCOUNT,
+    QUERYCOUNT,
+    POPULARITYSCORE,
+    CERTIFICATESTATUS
+FROM ${fullTableRef}
+WHERE STATUS = 'ACTIVE'
+ORDER BY POPULARITYSCORE DESC NULLS LAST
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'view' || entityLower === 'materialisedview') {
+    return header + `SELECT 
+    NAME,
+    SCHEMANAME,
+    DATABASENAME,
+    COLUMNCOUNT,
+    DEFINITION,
+    CERTIFICATESTATUS
+FROM ${fullTableRef}
+WHERE STATUS = 'ACTIVE'
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'column') {
+    return header + `SELECT 
+    NAME,
+    TABLENAME,
+    SCHEMANAME,
+    DATATYPE,
+    ISPRIMARYKEY,
+    ISFOREIGNKEY,
+    ISNULLABLE,
+    DESCRIPTION,
+    CERTIFICATESTATUS
+FROM ${fullTableRef}
+WHERE STATUS = 'ACTIVE'
+ORDER BY TABLENAME, "ORDER"
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'tablepartition') {
+    return header + `SELECT 
+    NAME,
+    TABLENAME,
+    PARTITIONLIST,
+    PARTITIONSTRATEGY,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY TABLENAME
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'procedure' || entityLower === 'function') {
+    return header + `SELECT 
+    NAME,
+    SCHEMANAME,
+    DATABASENAME,
+    DEFINITION,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY SCHEMANAME, NAME
+LIMIT ${limit};`;
+  }
+  
+  // Snowflake-specific
+  if (entityLower.includes('snowflake')) {
+    return header + `SELECT 
+    NAME,
+    SCHEMANAME,
+    DATABASENAME,
+    DEFINITION,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // QUERY ORG ENTITIES
+  // ============================================
+  
+  if (entityLower === 'collection') {
+    return header + `SELECT 
+    NAME,
+    DESCRIPTION,
+    ICON,
+    ADMINUSERS,
+    VIEWERUSERS,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'folder') {
+    return header + `SELECT 
+    NAME,
+    PARENTQUALIFIEDNAME,
+    COLLECTIONQUALIFIEDNAME,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY COLLECTIONQUALIFIEDNAME, NAME
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'query') {
+    return header + `SELECT 
+    NAME,
+    RAWQUERY,
+    DEFAULTDATABASEQUALIFIEDNAME,
+    DEFAULTSCHEMAQUALIFIEDNAME,
+    CREATEDBY,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // BI TOOLS (Tableau, PowerBI, Looker, Sigma, etc.)
+  // ============================================
+  
+  if (entityLower.includes('dashboard') || entityLower.includes('report')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    DESCRIPTION,
+    OWNERUSERS,
+    CERTIFICATESTATUS,
+    POPULARITYSCORE
+FROM ${fullTableRef}
+WHERE STATUS = 'ACTIVE'
+ORDER BY POPULARITYSCORE DESC NULLS LAST
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('workbook') || entityLower.includes('project') || entityLower.includes('workspace')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    DESCRIPTION,
+    OWNERUSERS,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('dataset') || entityLower.includes('datasource')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    CONNECTIONQUALIFIEDNAME,
+    DESCRIPTION,
+    CERTIFICATESTATUS
+FROM ${fullTableRef}
+WHERE STATUS = 'ACTIVE'
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('chart') || entityLower.includes('tile') || entityLower.includes('visual')) {
+    return header + `SELECT 
+    NAME,
+    TYPENAME,
+    CONNECTORNAME,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('field') || entityLower.includes('measure') || entityLower.includes('dimension')) {
+    return header + `SELECT 
+    NAME,
+    TYPENAME,
+    DATATYPE,
+    CONNECTORNAME,
+    DESCRIPTION
+FROM ${fullTableRef}
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // DBT ENTITIES
+  // ============================================
+  
+  if (entityLower === 'dbtmodel') {
+    return header + `SELECT 
+    NAME,
+    DBTPACKAGENAME,
+    DBTSTATUS,
+    DBTMATERIALIZEDTYPE,
+    DESCRIPTION,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'dbtmodelcolumn') {
+    return header + `SELECT 
+    NAME,
+    DBTMODELQUALIFIEDNAME,
+    DATATYPE,
+    DESCRIPTION
+FROM ${fullTableRef}
+ORDER BY DBTMODELQUALIFIEDNAME, NAME
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'dbtsource') {
+    return header + `SELECT 
+    NAME,
+    DBTPACKAGENAME,
+    DBTSOURCEFRESHNESSCRITERIA,
+    DBTSTATE,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'dbttest') {
+    return header + `SELECT 
+    NAME,
+    DBTTESTSTATUS,
+    DBTMODELQUALIFIEDNAME,
+    DBTMODELCOLUMNQUALIFIEDNAME,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'dbtmetric') {
+    return header + `SELECT 
+    NAME,
+    DBTMETRICFILTERLIST,
+    DBTMETRICDIMENSIONLIST,
+    DBTMODEL,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('dbtprocess')) {
+    return header + `SELECT 
+    NAME,
+    INPUTS,
+    OUTPUTS,
+    DBTPROCESSTYPE,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // OBJECT STORAGE (S3, GCS, ADLS)
+  // ============================================
+  
+  if (entityLower.includes('bucket') || entityLower.includes('container') || entityLower.includes('account')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    CONNECTIONQUALIFIEDNAME,
+    OBJECTCOUNT,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('object') || entityLower.includes('file')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    FILEPATH,
+    FILESIZE,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // ORCHESTRATION (Airflow, Fivetran, Matillion)
+  // ============================================
+  
+  if (entityLower.includes('dag') || entityLower.includes('pipeline') || entityLower.includes('job')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    DESCRIPTION,
+    INPUTS,
+    OUTPUTS,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('task') || entityLower.includes('activity') || entityLower.includes('component')) {
+    return header + `SELECT 
+    NAME,
+    TYPENAME,
+    CONNECTORNAME,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('connector') && entityLower.includes('fivetran')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    FIVETRANCONNECTORSTATUS,
+    FIVETRANCONNECTORSYNCFREQUENCY,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // GOVERNANCE ENTITIES
+  // ============================================
+  
+  if (entityLower.includes('tag') && !entityLower.includes('snowflake') && !entityLower.includes('dbt')) {
+    return header + `SELECT 
+    TAGNAME,
+    ENTITYGUID,
+    TAGVALUE,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY TAGNAME
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'persona') {
+    return header + `SELECT 
+    NAME,
+    PERSONAUSERS,
+    PERSONAGROUPS,
+    DESCRIPTION,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY NAME
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower === 'purpose') {
+    return header + `SELECT 
+    NAME,
+    PURPOSEATLANTTAGS,
+    DESCRIPTION,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY NAME
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('businesspolicy')) {
+    return header + `SELECT 
+    NAME,
+    BUSINESSPOLICYTYPE,
+    BUSINESSPOLICYVALIDITYSCHEDULE,
+    CERTIFICATESTATUS,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // AI/ML ENTITIES
+  // ============================================
+  
+  if (entityLower.includes('aimodel') || entityLower.includes('model')) {
+    return header + `SELECT 
+    NAME,
+    AIMODELSTATUS,
+    AIMODELVERSION,
+    AIMODELTYPE,
+    DESCRIPTION,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY AIMODELVERSION DESC NULLS LAST
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('aiapplication')) {
+    return header + `SELECT 
+    NAME,
+    AIAPPLICATIONVERSION,
+    AIAPPLICATIONDEVELOPMENTSTAGE,
+    DESCRIPTION,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // KAFKA / STREAMING
+  // ============================================
+  
+  if (entityLower.includes('topic')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    KAFKATOPICPARTITIONSCOUNT,
+    KAFKATOPICREPLICATIONFACTOR,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+  
+  if (entityLower.includes('consumergroup')) {
+    return header + `SELECT 
+    NAME,
+    CONNECTORNAME,
+    KAFKACONSUMERGROUPMEMBERCOUNT,
+    KAFKACONSUMERGROUPTOPICNAMES,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // CUSTOM METADATA RELATIONSHIP
+  // ============================================
+  
+  if (entityLower.includes('custommetadata')) {
+    return header + `SELECT 
+    ENTITYGUID,
+    SETDISPLAYNAME,
+    ATTRIBUTEDISPLAYNAME,
+    ATTRIBUTEVALUE,
+    CREATETIME
+FROM ${fullTableRef}
+ORDER BY SETDISPLAYNAME, ATTRIBUTEDISPLAYNAME
+LIMIT ${limit};`;
+  }
+
+  // ============================================
+  // DEFAULT FALLBACK
+  // ============================================
+  
+  return header + `SELECT 
+    NAME,
+    TYPENAME,
+    CONNECTORNAME,
+    DESCRIPTION,
+    CERTIFICATESTATUS,
+    CREATETIME,
+    UPDATETIME
+FROM ${fullTableRef}
+WHERE STATUS = 'ACTIVE'
+ORDER BY UPDATETIME DESC NULLS LAST
+LIMIT ${limit};`;
 }
 
 export default function App() {
@@ -1272,7 +1808,12 @@ export default function App() {
   const [highlightedQuery, setHighlightedQuery] = useState(null);
   const [editorQuery, setEditorQuery] = useState('');
   const [selectedMDLHDatabase, setSelectedMDLHDatabase] = useState('FIELD_METADATA');
+  const [selectedMDLHSchema, setSelectedMDLHSchema] = useState('PUBLIC');
   const searchRef = useRef(null);
+  
+  // Get warning for selected database
+  const selectedDbConfig = MDLH_DATABASES.find(db => db.name === selectedMDLHDatabase);
+  const dbWarning = selectedDbConfig?.warning;
 
   // Keyboard shortcut: Cmd/Ctrl + K to focus search
   useEffect(() => {
@@ -1346,9 +1887,14 @@ export default function App() {
 
   // Open panel with highlighted query
   const openQueryForEntity = (entityName, tableName, exampleQuery) => {
-    // Priority 1: Generate a context-aware query using selected database
+    // Priority 1: Generate a context-aware query using selected database and schema
     if (tableName && tableName !== '(abstract)') {
-      const dynamicQuery = generateEntityQuery(entityName, tableName, selectedMDLHDatabase);
+      const dynamicQuery = generateEntityQuery(
+        entityName, 
+        tableName, 
+        selectedMDLHDatabase, 
+        selectedMDLHSchema
+      );
       setHighlightedQuery(dynamicQuery);
     } 
     // Priority 2: Use inline exampleQuery if no table
@@ -1468,22 +2014,43 @@ export default function App() {
             </button>
           </div>
           
-          {/* Database Selector for Query Context */}
-          <div className="flex items-center gap-2 mt-4">
-            <Database size={14} className="text-blue-100" />
-            <span className="text-sm text-blue-100">Query Database:</span>
-            <select
-              value={selectedMDLHDatabase}
-              onChange={(e) => setSelectedMDLHDatabase(e.target.value)}
-              className="px-3 py-1.5 bg-white/20 text-white border border-white/30 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer appearance-none"
-              style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='white'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center', backgroundSize: '16px', paddingRight: '32px' }}
-            >
-              {MDLH_DATABASES.map(db => (
-                <option key={db.name} value={db.name} className="text-gray-900">
-                  {db.name}
-                </option>
-              ))}
-            </select>
+          {/* Database & Schema Selector for Query Context */}
+          <div className="flex flex-col items-center gap-2 mt-4">
+            <div className="flex items-center gap-2">
+              <Database size={14} className="text-blue-100" />
+              <span className="text-sm text-blue-100">Query Context:</span>
+              <select
+                value={selectedMDLHDatabase}
+                onChange={(e) => setSelectedMDLHDatabase(e.target.value)}
+                className="px-3 py-1.5 bg-white/20 text-white border border-white/30 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer appearance-none"
+                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='white'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center', backgroundSize: '16px', paddingRight: '32px' }}
+              >
+                {MDLH_DATABASES.map(db => (
+                  <option key={db.name} value={db.name} className="text-gray-900">
+                    {db.name}
+                  </option>
+                ))}
+              </select>
+              <span className="text-blue-100">.</span>
+              <select
+                value={selectedMDLHSchema}
+                onChange={(e) => setSelectedMDLHSchema(e.target.value)}
+                className="px-3 py-1.5 bg-white/20 text-white border border-white/30 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer appearance-none"
+                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='white'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center', backgroundSize: '16px', paddingRight: '32px' }}
+              >
+                {MDLH_SCHEMAS.map(sch => (
+                  <option key={sch} value={sch} className="text-gray-900">
+                    {sch}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {dbWarning && (
+              <div className="flex items-center gap-1.5 text-xs text-yellow-200 bg-yellow-500/20 px-3 py-1 rounded-full">
+                <span>⚠️</span>
+                <span>{dbWarning} - verify table exists before running</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
