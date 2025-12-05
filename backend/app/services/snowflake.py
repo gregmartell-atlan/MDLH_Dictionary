@@ -9,11 +9,12 @@ import re
 from datetime import datetime, timedelta
 import uuid
 import threading
+from collections import OrderedDict
 
 from app.config import settings
 from app.models.schemas import QueryStatus
 
-# Max results to keep in memory (LRU-style cleanup)
+# Max results to keep in memory (LRU cleanup)
 MAX_QUERY_RESULTS = 100
 RESULT_TTL_HOURS = 1
 
@@ -23,69 +24,123 @@ class SnowflakeService:
     
     def __init__(self):
         self._connection: Optional[snowflake.connector.SnowflakeConnection] = None
-        self._query_results: Dict[str, Dict] = {}  # In-memory store for query results
-        self._results_lock = threading.Lock()  # Thread safety for results dict
+        self._query_results: OrderedDict[str, Dict] = OrderedDict()  # LRU-style ordering
+        self._results_lock = threading.RLock()  # Reentrant lock for nested calls
+        self._connection_lock = threading.Lock()  # Separate lock for connection state
+        self._last_connection_check: Optional[datetime] = None
+        self._connection_check_cache_seconds = 5  # Cache connection status briefly
     
     @staticmethod
     def _validate_identifier(name: str) -> str:
         """Validate and quote a Snowflake identifier to prevent SQL injection.
         
-        Only allows alphanumeric characters, underscores, and dots (for qualified names).
-        Returns the identifier wrapped in double quotes for safety.
+        Snowflake identifiers:
+        - Unquoted: start with letter or underscore, contain letters/digits/underscores/$
+        - Quoted: can contain almost anything, double quotes escaped as ""
+        
+        We validate strictly and always return a safely quoted identifier.
         """
         if not name:
             raise ValueError("Identifier cannot be empty")
         
-        # Check for obviously malicious patterns
-        dangerous_patterns = [';', '--', '/*', '*/', 'DROP', 'DELETE', 'INSERT', 'UPDATE', 'TRUNCATE']
-        name_upper = name.upper()
-        for pattern in dangerous_patterns:
-            if pattern in name_upper:
-                raise ValueError(f"Invalid identifier: contains forbidden pattern '{pattern}'")
+        if len(name) > 255:
+            raise ValueError("Identifier exceeds maximum length of 255 characters")
+        
+        # Remove surrounding quotes if present (user may have pre-quoted)
+        original_name = name
+        if name.startswith('"') and name.endswith('"') and len(name) > 2:
+            name = name[1:-1].replace('""', '"')  # Unescape internal quotes
         
         # Split by dots for qualified names (database.schema.table)
-        parts = name.split('.')
-        validated_parts = []
+        # But be careful - dots inside quotes are literal
+        parts = []
+        current_part = ""
+        in_quotes = False
         
+        for char in name:
+            if char == '"':
+                in_quotes = not in_quotes
+                current_part += char
+            elif char == '.' and not in_quotes:
+                if current_part:
+                    parts.append(current_part)
+                current_part = ""
+            else:
+                current_part += char
+        
+        if current_part:
+            parts.append(current_part)
+        
+        if not parts:
+            raise ValueError(f"Invalid identifier: '{original_name}'")
+        
+        validated_parts = []
         for part in parts:
-            # Allow only alphanumeric, underscore, and dollar sign (Snowflake allows $)
-            if not re.match(r'^[A-Za-z_][A-Za-z0-9_$]*$', part):
-                raise ValueError(f"Invalid identifier part: '{part}'. Only alphanumeric, underscore, and $ allowed.")
-            # Double-quote each part for safety
-            validated_parts.append(f'"{part}"')
+            # Remove quotes from part for validation
+            clean_part = part
+            if part.startswith('"') and part.endswith('"'):
+                clean_part = part[1:-1].replace('""', '"')
+            
+            # Strict allowlist: alphanumeric, underscore, dollar sign
+            # This is MORE restrictive than Snowflake allows, which is intentional for security
+            if not re.match(r'^[A-Za-z_][A-Za-z0-9_$]*$', clean_part):
+                # Check if it's at least printable ASCII without dangerous chars
+                if not clean_part or any(ord(c) < 32 or ord(c) > 126 for c in clean_part):
+                    raise ValueError(f"Invalid identifier: '{clean_part}' contains invalid characters")
+                # Additional check for SQL-like patterns (defense in depth)
+                lower_part = clean_part.lower()
+                if any(pattern in lower_part for pattern in [';', '--', '/*', '*/', 'union ', ' or ', ' and ']):
+                    raise ValueError(f"Invalid identifier: '{clean_part}' contains suspicious patterns")
+            
+            # Escape any internal double quotes and wrap in quotes
+            safe_part = clean_part.replace('"', '""')
+            validated_parts.append(f'"{safe_part}"')
         
         return '.'.join(validated_parts)
     
+    @staticmethod
+    def _validate_snowflake_query_id(query_id: str) -> str:
+        """Validate a Snowflake query ID format.
+        
+        Snowflake query IDs are UUIDs in format: 01234567-89ab-cdef-0123-456789abcdef
+        """
+        if not query_id:
+            raise ValueError("Query ID cannot be empty")
+        
+        # Snowflake query IDs are UUID format
+        uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        if not re.match(uuid_pattern, query_id.lower()):
+            raise ValueError(f"Invalid Snowflake query ID format: {query_id}")
+        
+        return query_id
+    
     def _cleanup_old_results(self):
-        """Remove old query results to prevent memory leak."""
-        with self._results_lock:
-            if len(self._query_results) <= MAX_QUERY_RESULTS:
-                return
-            
-            # Remove completed queries older than TTL
-            cutoff = datetime.utcnow() - timedelta(hours=RESULT_TTL_HOURS)
-            to_remove = []
-            
-            for qid, result in self._query_results.items():
-                completed = result.get("completed_at")
-                if completed and completed < cutoff:
-                    to_remove.append(qid)
-            
-            for qid in to_remove:
-                del self._query_results[qid]
-            
-            # If still too many, remove oldest completed queries
-            if len(self._query_results) > MAX_QUERY_RESULTS:
-                completed_queries = [
-                    (qid, r.get("completed_at") or datetime.min)
-                    for qid, r in self._query_results.items()
-                    if r.get("status") != QueryStatus.RUNNING
-                ]
-                completed_queries.sort(key=lambda x: x[1])
-                
-                # Remove oldest until under limit
-                for qid, _ in completed_queries[:len(self._query_results) - MAX_QUERY_RESULTS]:
+        """Remove old query results to prevent memory leak. Must be called with lock held."""
+        # Note: Caller must hold _results_lock
+        if len(self._query_results) <= MAX_QUERY_RESULTS:
+            return
+        
+        cutoff = datetime.utcnow() - timedelta(hours=RESULT_TTL_HOURS)
+        to_remove = []
+        
+        for qid, result in self._query_results.items():
+            completed = result.get("completed_at")
+            if completed and completed < cutoff and result.get("status") != QueryStatus.RUNNING:
+                to_remove.append(qid)
+        
+        for qid in to_remove:
+            del self._query_results[qid]
+        
+        # If still over limit, remove oldest completed (LRU via OrderedDict order)
+        while len(self._query_results) > MAX_QUERY_RESULTS:
+            # Find first non-running query to remove
+            for qid in list(self._query_results.keys()):
+                if self._query_results[qid].get("status") != QueryStatus.RUNNING:
                     del self._query_results[qid]
+                    break
+            else:
+                # All queries are running, can't remove any
+                break
     
     def _get_private_key(self) -> Optional[bytes]:
         """Load private key from file if configured."""
@@ -122,64 +177,65 @@ class SnowflakeService:
         schema: Optional[str] = None
     ) -> snowflake.connector.SnowflakeConnection:
         """Establish connection to Snowflake."""
-        
-        connect_params = {
-            "account": settings.snowflake_account,
-            "user": settings.snowflake_user,
-            "warehouse": warehouse or settings.snowflake_warehouse,
-            "database": database or settings.snowflake_database,
-            "schema": schema or settings.snowflake_schema,
-        }
-        
-        if settings.snowflake_role:
-            connect_params["role"] = settings.snowflake_role
-        
-        # Try key-pair auth first, fall back to password
-        private_key = self._get_private_key()
-        if private_key:
-            connect_params["private_key"] = private_key
-        elif settings.snowflake_password:
-            connect_params["password"] = settings.snowflake_password
-        else:
-            raise ValueError("No authentication method configured. Set SNOWFLAKE_PRIVATE_KEY_PATH or SNOWFLAKE_PASSWORD")
-        
-        self._connection = snowflake.connector.connect(**connect_params)
-        return self._connection
+        with self._connection_lock:
+            connect_params = {
+                "account": settings.snowflake_account,
+                "user": settings.snowflake_user,
+                "warehouse": warehouse or settings.snowflake_warehouse,
+                "database": database or settings.snowflake_database,
+                "schema": schema or settings.snowflake_schema,
+            }
+            
+            if settings.snowflake_role:
+                connect_params["role"] = settings.snowflake_role
+            
+            # Try key-pair auth first, fall back to password
+            private_key = self._get_private_key()
+            if private_key:
+                connect_params["private_key"] = private_key
+            elif settings.snowflake_password:
+                connect_params["password"] = settings.snowflake_password
+            else:
+                raise ValueError("No authentication method configured. Set SNOWFLAKE_PRIVATE_KEY_PATH or SNOWFLAKE_PASSWORD")
+            
+            self._connection = snowflake.connector.connect(**connect_params)
+            self._last_connection_check = datetime.utcnow()
+            return self._connection
     
     def is_connected(self) -> bool:
-        """Check if there's an active connection."""
-        if self._connection is None:
-            return False
-        try:
-            # Check if cursor method exists and is callable
-            cursor_method = getattr(self._connection, 'cursor', None)
-            if cursor_method is None or not callable(cursor_method):
-                self._connection = None
+        """Check if there's an active connection. Caches result briefly to avoid round-trips."""
+        with self._connection_lock:
+            if self._connection is None:
                 return False
             
-            # Try to check if connection is still alive
-            # is_closed() is a method in newer versions, property in older
-            is_closed = getattr(self._connection, 'is_closed', None)
-            if callable(is_closed):
-                if is_closed():
+            # Use cached result if recent enough
+            if (self._last_connection_check and 
+                (datetime.utcnow() - self._last_connection_check).total_seconds() < self._connection_check_cache_seconds):
+                return True
+            
+            try:
+                # Check is_closed attribute/method
+                is_closed = getattr(self._connection, 'is_closed', None)
+                if callable(is_closed):
+                    if is_closed():
+                        self._connection = None
+                        return False
+                elif is_closed is not None and is_closed:
                     self._connection = None
                     return False
-            elif is_closed is not None and is_closed:
-                self._connection = None
-                return False
-            
-            # Try a simple validation query
-            try:
+                
+                # Verify with a simple query
                 cursor = self._connection.cursor()
-                cursor.execute("SELECT 1")
-                cursor.close()
-                return True
+                try:
+                    cursor.execute("SELECT 1")
+                    self._last_connection_check = datetime.utcnow()
+                    return True
+                finally:
+                    cursor.close()
             except Exception:
                 self._connection = None
+                self._last_connection_check = None
                 return False
-        except Exception:
-            self._connection = None
-            return False
     
     @contextmanager
     def get_cursor(self, dict_cursor: bool = True):
@@ -187,10 +243,10 @@ class SnowflakeService:
         if not self._connection:
             raise ValueError("No active Snowflake connection. Please connect first using the Configure Connection button.")
         
-        # Verify cursor method is available
         cursor_method = getattr(self._connection, 'cursor', None)
         if cursor_method is None or not callable(cursor_method):
-            self._connection = None
+            with self._connection_lock:
+                self._connection = None
             raise ValueError("Connection is invalid. Please reconnect using the Configure Connection button.")
         
         try:
@@ -199,8 +255,8 @@ class SnowflakeService:
             if cursor is None:
                 raise ValueError("Failed to create cursor - connection may be closed")
         except TypeError as e:
-            # Handle case where cursor() itself fails
-            self._connection = None
+            with self._connection_lock:
+                self._connection = None
             raise ValueError(f"Connection lost. Please reconnect. Error: {str(e)}")
         except Exception as e:
             raise ValueError(f"Failed to create cursor: {str(e)}")
@@ -211,12 +267,12 @@ class SnowflakeService:
             try:
                 cursor.close()
             except Exception:
-                pass  # Ignore close errors
+                pass
     
     def test_connection(self) -> Dict[str, Any]:
         """Test connection and return connection info."""
         try:
-            conn = self.connect()
+            self.connect()
             with self.get_cursor() as cursor:
                 cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE()")
                 row = cursor.fetchone()
@@ -247,19 +303,21 @@ class SnowflakeService:
     ) -> Dict[str, Any]:
         """Connect with explicitly provided credentials (from UI)."""
         try:
-            connect_params = {
-                "account": account,
-                "user": user,
-                "password": password,
-                "warehouse": warehouse or "COMPUTE_WH",
-                "database": database or "ATLAN_MDLH",
-                "schema": schema or "PUBLIC",
-            }
-            
-            if role:
-                connect_params["role"] = role
-            
-            self._connection = snowflake.connector.connect(**connect_params)
+            with self._connection_lock:
+                connect_params = {
+                    "account": account,
+                    "user": user,
+                    "password": password,
+                    "warehouse": warehouse or "COMPUTE_WH",
+                    "database": database or "ATLAN_MDLH",
+                    "schema": schema or "PUBLIC",
+                }
+                
+                if role:
+                    connect_params["role"] = role
+                
+                self._connection = snowflake.connector.connect(**connect_params)
+                self._last_connection_check = datetime.utcnow()
             
             with self.get_cursor() as cursor:
                 cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE()")
@@ -301,14 +359,9 @@ class SnowflakeService:
         if role:
             base_params["role"] = role
         
-        # Try different authentication methods for tokens
-        # NOTE: externalbrowser is NOT included here - it hangs in headless contexts
         auth_attempts = [
-            # Method 1: Programmatic Access Token (Snowflake's recommended for PAT)
             {"token": token, "authenticator": "programmatic_access_token"},
-            # Method 2: OAuth 
             {"token": token, "authenticator": "oauth"},
-            # Method 3: Use token as password (works for some token types)
             {"password": token},
         ]
         
@@ -317,7 +370,9 @@ class SnowflakeService:
         for auth_params in auth_attempts:
             try:
                 connect_params = {**base_params, **auth_params}
-                self._connection = snowflake.connector.connect(**connect_params)
+                with self._connection_lock:
+                    self._connection = snowflake.connector.connect(**connect_params)
+                    self._last_connection_check = datetime.utcnow()
                 
                 with self.get_cursor() as cursor:
                     cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE()")
@@ -333,12 +388,10 @@ class SnowflakeService:
                     }
             except Exception as e:
                 error_msg = str(e)
-                # Skip logging duplicate errors
                 if error_msg not in errors:
                     errors.append(error_msg)
                 continue
         
-        # Provide helpful error message
         error_summary = errors[0] if errors else "Unknown error"
         return {
             "connected": False,
@@ -356,20 +409,21 @@ class SnowflakeService:
     ) -> Dict[str, Any]:
         """Connect using external browser (SSO/Okta) authentication."""
         try:
-            connect_params = {
-                "account": account,
-                "user": user,
-                "authenticator": "externalbrowser",
-                "warehouse": warehouse or "COMPUTE_WH",
-                "database": database or "ATLAN_MDLH",
-                "schema": schema or "PUBLIC",
-            }
-            
-            if role:
-                connect_params["role"] = role
-            
-            # This will open a browser for SSO login
-            self._connection = snowflake.connector.connect(**connect_params)
+            with self._connection_lock:
+                connect_params = {
+                    "account": account,
+                    "user": user,
+                    "authenticator": "externalbrowser",
+                    "warehouse": warehouse or "COMPUTE_WH",
+                    "database": database or "ATLAN_MDLH",
+                    "schema": schema or "PUBLIC",
+                }
+                
+                if role:
+                    connect_params["role"] = role
+                
+                self._connection = snowflake.connector.connect(**connect_params)
+                self._last_connection_check = datetime.utcnow()
             
             with self.get_cursor() as cursor:
                 cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE()")
@@ -391,9 +445,14 @@ class SnowflakeService:
     
     def disconnect(self):
         """Close the connection."""
-        if self._connection:
-            self._connection.close()
-            self._connection = None
+        with self._connection_lock:
+            if self._connection:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
+                self._connection = None
+                self._last_connection_check = None
     
     # ============ Metadata Methods ============
     
@@ -433,7 +492,6 @@ class SnowflakeService:
         safe_schema = self._validate_identifier(schema)
         tables = []
         with self.get_cursor() as cursor:
-            # Get tables
             cursor.execute(f"SHOW TABLES IN SCHEMA {safe_db}.{safe_schema}")
             for row in cursor.fetchall():
                 tables.append({
@@ -446,7 +504,6 @@ class SnowflakeService:
                     "owner": row.get("owner")
                 })
             
-            # Get views
             cursor.execute(f"SHOW VIEWS IN SCHEMA {safe_db}.{safe_schema}")
             for row in cursor.fetchall():
                 tables.append({
@@ -493,13 +550,11 @@ class SnowflakeService:
         limit: Optional[int] = None
     ) -> str:
         """Execute a query and return query_id."""
-        # Cleanup old results to prevent memory leak
-        self._cleanup_old_results()
-        
         query_id = str(uuid.uuid4())
         
-        # Store initial status (thread-safe)
+        # Initialize with lock held, cleanup, then release before execution
         with self._results_lock:
+            self._cleanup_old_results()
             self._query_results[query_id] = {
                 "status": QueryStatus.RUNNING,
                 "sql": sql,
@@ -512,10 +567,12 @@ class SnowflakeService:
                 "columns": [],
                 "rows": [],
                 "error_message": None,
-                "snowflake_query_id": None  # Track actual Snowflake query ID for cancellation
+                "snowflake_query_id": None
             }
+            # Move to end for LRU ordering
+            self._query_results.move_to_end(query_id)
         
-        # Check connection first
+        # Check connection (outside lock)
         if not self._connection:
             with self._results_lock:
                 self._query_results[query_id].update({
@@ -526,9 +583,7 @@ class SnowflakeService:
             return query_id
         
         try:
-            # Set context if specified - use standard cursor for consistent row format
             with self.get_cursor(dict_cursor=False) as cursor:
-                # Validate and quote identifiers for USE statements to prevent SQL injection
                 if warehouse:
                     safe_warehouse = self._validate_identifier(warehouse)
                     cursor.execute(f"USE WAREHOUSE {safe_warehouse}")
@@ -539,15 +594,13 @@ class SnowflakeService:
                     safe_schema = self._validate_identifier(schema)
                     cursor.execute(f"USE SCHEMA {safe_schema}")
                 
-                # Execute the query
                 cursor.execute(sql)
                 
-                # Store Snowflake's query ID for potential cancellation
                 sf_query_id = cursor.sfqid
                 with self._results_lock:
-                    self._query_results[query_id]["snowflake_query_id"] = sf_query_id
+                    if query_id in self._query_results:
+                        self._query_results[query_id]["snowflake_query_id"] = sf_query_id
                 
-                # Get column metadata
                 columns = []
                 if cursor.description:
                     columns = [
@@ -555,19 +608,17 @@ class SnowflakeService:
                         for col in cursor.description
                     ]
                 
-                # Fetch results (with optional limit to prevent OOM on large result sets)
-                effective_limit = limit or 10000  # Default max 10k rows
-                rows = cursor.fetchmany(effective_limit)
+                # Use explicit None check to allow limit=0 (though it would return nothing)
+                effective_limit = limit if limit is not None else 10000
+                rows = cursor.fetchmany(effective_limit) if effective_limit > 0 else []
                 
-                # Convert rows to serializable lists
                 processed_rows = []
                 for row in rows:
                     processed_row = []
                     for val in row:
-                        # Handle special types
                         if val is None:
                             processed_row.append(None)
-                        elif isinstance(val, (datetime,)):
+                        elif isinstance(val, datetime):
                             processed_row.append(val.isoformat())
                         elif isinstance(val, bytes):
                             processed_row.append(val.decode('utf-8', errors='replace'))
@@ -575,45 +626,48 @@ class SnowflakeService:
                             processed_row.append(val)
                     processed_rows.append(processed_row)
                 
-                # Update stored results (thread-safe)
                 with self._results_lock:
-                    self._query_results[query_id].update({
-                        "status": QueryStatus.SUCCESS,
-                        "completed_at": datetime.utcnow(),
-                        "row_count": len(processed_rows),
-                        "columns": columns,
-                        "rows": processed_rows
-                    })
+                    if query_id in self._query_results:
+                        self._query_results[query_id].update({
+                            "status": QueryStatus.SUCCESS,
+                            "completed_at": datetime.utcnow(),
+                            "row_count": len(processed_rows),
+                            "columns": columns,
+                            "rows": processed_rows
+                        })
                 
         except Exception as e:
             with self._results_lock:
-                self._query_results[query_id].update({
-                    "status": QueryStatus.FAILED,
-                    "completed_at": datetime.utcnow(),
-                    "error_message": str(e)
-                })
+                if query_id in self._query_results:
+                    self._query_results[query_id].update({
+                        "status": QueryStatus.FAILED,
+                        "completed_at": datetime.utcnow(),
+                        "error_message": str(e)
+                    })
         
         return query_id
     
     def get_query_status(self, query_id: str) -> Optional[Dict[str, Any]]:
         """Get status of a query."""
-        result = self._query_results.get(query_id)
-        if not result:
-            return None
-        
-        duration_ms = None
-        if result["started_at"] and result["completed_at"]:
-            duration_ms = int((result["completed_at"] - result["started_at"]).total_seconds() * 1000)
-        
-        return {
-            "query_id": query_id,
-            "status": result["status"],
-            "row_count": result["row_count"],
-            "execution_time_ms": duration_ms,
-            "error_message": result["error_message"],
-            "started_at": result["started_at"],
-            "completed_at": result["completed_at"]
-        }
+        with self._results_lock:
+            result = self._query_results.get(query_id)
+            if not result:
+                return None
+            
+            # Return a copy to avoid race conditions
+            duration_ms = None
+            if result["started_at"] and result["completed_at"]:
+                duration_ms = int((result["completed_at"] - result["started_at"]).total_seconds() * 1000)
+            
+            return {
+                "query_id": query_id,
+                "status": result["status"],
+                "row_count": result["row_count"],
+                "execution_time_ms": duration_ms,
+                "error_message": result["error_message"],
+                "started_at": result["started_at"],
+                "completed_at": result["completed_at"]
+            }
     
     def get_query_results(
         self,
@@ -622,25 +676,35 @@ class SnowflakeService:
         page_size: int = 100
     ) -> Optional[Dict[str, Any]]:
         """Get paginated results for a query."""
-        result = self._query_results.get(query_id)
-        if not result or result["status"] != QueryStatus.SUCCESS:
-            return None
-        
-        total_rows = len(result["rows"])
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-        
-        return {
-            "query_id": query_id,
-            "columns": result["columns"],
-            "rows": result["rows"][start_idx:end_idx],
-            "total_rows": total_rows,
-            "page": page,
-            "page_size": page_size,
-            "has_more": end_idx < total_rows
-        }
+        with self._results_lock:
+            result = self._query_results.get(query_id)
+            if not result or result["status"] != QueryStatus.SUCCESS:
+                return None
+            
+            total_rows = len(result["rows"])
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            
+            # Return copies of data
+            return {
+                "query_id": query_id,
+                "columns": list(result["columns"]),
+                "rows": list(result["rows"][start_idx:end_idx]),
+                "total_rows": total_rows,
+                "page": page,
+                "page_size": page_size,
+                "has_more": end_idx < total_rows
+            }
     
-    def cancel_query(self, query_id: str) -> Tuple[bool, Optional[str]]:
+    def cancel_query(self, query_id: str) -> bool:
+        """Cancel a running query. Returns True if cancelled, False otherwise.
+        
+        Note: For more detailed error info, use cancel_query_with_reason().
+        """
+        success, _ = self.cancel_query_with_reason(query_id)
+        return success
+    
+    def cancel_query_with_reason(self, query_id: str) -> Tuple[bool, Optional[str]]:
         """Cancel a running query. Returns (success, error_message)."""
         with self._results_lock:
             result = self._query_results.get(query_id)
@@ -653,21 +717,26 @@ class SnowflakeService:
             
             sf_query_id = result.get("snowflake_query_id")
             
-            # Try to cancel on Snowflake if we have the query ID
-            if sf_query_id and self._connection:
-                try:
-                    with self.get_cursor() as cursor:
-                        # Use SYSTEM$CANCEL_QUERY to actually cancel on Snowflake
-                        cursor.execute(f"SELECT SYSTEM$CANCEL_QUERY('{sf_query_id}')")
-                except Exception as e:
-                    # Log but continue - still mark as cancelled locally
-                    pass
-            
+            # Mark as cancelled immediately
             result["status"] = QueryStatus.CANCELLED
             result["completed_at"] = datetime.utcnow()
-            return True, None
+        
+        # Try to cancel on Snowflake (outside lock to avoid blocking)
+        if sf_query_id and self._connection:
+            try:
+                validated_sf_qid = self._validate_snowflake_query_id(sf_query_id)
+                with self.get_cursor() as cursor:
+                    # Use parameterized query to prevent SQL injection
+                    cursor.execute("SELECT SYSTEM$CANCEL_QUERY(%s)", (validated_sf_qid,))
+            except ValueError as e:
+                # Invalid query ID format - log but don't fail
+                pass
+            except Exception as e:
+                # Snowflake cancel failed - query is still marked cancelled locally
+                pass
+        
+        return True, None
 
 
 # Global service instance
 snowflake_service = SnowflakeService()
-

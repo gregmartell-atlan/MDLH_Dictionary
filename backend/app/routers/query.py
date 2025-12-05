@@ -118,7 +118,7 @@ async def get_query_results(
 @router.post("/{query_id}/cancel")
 async def cancel_query(query_id: str):
     """Cancel a running query."""
-    success, error = snowflake_service.cancel_query(query_id)
+    success, error = snowflake_service.cancel_query_with_reason(query_id)
     
     if not success:
         if error == "Query not found":
