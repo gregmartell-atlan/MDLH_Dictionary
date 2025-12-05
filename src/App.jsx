@@ -1137,12 +1137,141 @@ function PlayQueryButton({ onClick, hasQuery }) {
   );
 }
 
+// Default MDLH databases users can query
+const MDLH_DATABASES = [
+  { name: 'FIELD_METADATA', label: 'Field Metadata (atlan.atlan.com)' },
+  { name: 'MDLH_GOVERNANCE', label: 'MDLH Governance (demo-governance.atlan.com)' },
+  { name: 'MDLH_ATLAN_HOME', label: 'MDLH Atlan Home' },
+  { name: 'ATLAN_MDLH', label: 'Atlan MDLH' },
+];
+
+// Generate a context-aware example query for an entity
+function generateEntityQuery(entityName, tableName, database, options = {}) {
+  const db = database || 'FIELD_METADATA';
+  const table = tableName || `${entityName.toUpperCase()}_ENTITY`;
+  const limit = options.limit || 10;
+  
+  // Base query with USE and SELECT
+  let query = `-- Query ${entityName} entities from ${db}
+USE ${db};
+
+SELECT *
+FROM ${table}
+LIMIT ${limit};`;
+
+  // Add entity-specific enhancements
+  const entityLower = entityName.toLowerCase();
+  
+  if (entityLower.includes('column')) {
+    query = `-- Query Column entities with key attributes
+USE ${db};
+
+SELECT 
+    NAME,
+    TABLENAME,
+    DATATYPE,
+    DESCRIPTION,
+    USERDESCRIPTION,
+    CERTIFICATESTATUS,
+    CONNECTORNAME
+FROM ${table}
+WHERE STATUS = 'ACTIVE'
+ORDER BY TABLENAME, "ORDER"
+LIMIT ${limit};`;
+  } else if (entityLower.includes('table') && !entityLower.includes('partition')) {
+    query = `-- Query Table entities with popularity metrics
+USE ${db};
+
+SELECT 
+    NAME,
+    SCHEMANAME,
+    DATABASENAME,
+    QUERYCOUNT,
+    POPULARITYSCORE,
+    CERTIFICATESTATUS,
+    CONNECTORNAME
+FROM ${table}
+WHERE STATUS = 'ACTIVE'
+ORDER BY POPULARITYSCORE DESC NULLS LAST
+LIMIT ${limit};`;
+  } else if (entityLower.includes('glossary') && entityLower.includes('term')) {
+    query = `-- Query Glossary Terms with verification status
+USE ${db};
+
+SELECT 
+    NAME,
+    USERDESCRIPTION,
+    CERTIFICATESTATUS,
+    OWNERUSERS,
+    UPDATETIME
+FROM ${table}
+WHERE CERTIFICATESTATUS = 'VERIFIED'
+ORDER BY UPDATETIME DESC
+LIMIT ${limit};`;
+  } else if (entityLower.includes('schema')) {
+    query = `-- Query Schema entities
+USE ${db};
+
+SELECT 
+    NAME,
+    DATABASENAME,
+    CONNECTORNAME,
+    DESCRIPTION,
+    OWNERUSERS
+FROM ${table}
+WHERE STATUS = 'ACTIVE'
+LIMIT ${limit};`;
+  } else if (entityLower.includes('database')) {
+    query = `-- Query Database entities
+USE ${db};
+
+SELECT 
+    NAME,
+    CONNECTORNAME,
+    CONNECTIONNAME,
+    DESCRIPTION,
+    POPULARITYSCORE
+FROM ${table}
+WHERE STATUS = 'ACTIVE'
+ORDER BY POPULARITYSCORE DESC NULLS LAST
+LIMIT ${limit};`;
+  } else if (entityLower.includes('process') || entityLower.includes('lineage')) {
+    query = `-- Query Process/Lineage entities
+USE ${db};
+
+SELECT 
+    NAME,
+    TYPENAME,
+    INPUTS,
+    OUTPUTS,
+    CREATETIME
+FROM ${table}
+ORDER BY CREATETIME DESC
+LIMIT ${limit};`;
+  } else if (entityLower.includes('connection')) {
+    query = `-- Query Connection entities
+USE ${db};
+
+SELECT 
+    NAME,
+    CONNECTORNAME,
+    HOST,
+    CERTIFICATESTATUS,
+    ADMINUSERS
+FROM ${table}
+LIMIT ${limit};`;
+  }
+  
+  return query;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('core');
   const [search, setSearch] = useState('');
   const [showQueries, setShowQueries] = useState(false);
   const [highlightedQuery, setHighlightedQuery] = useState(null);
   const [editorQuery, setEditorQuery] = useState('');
+  const [selectedMDLHDatabase, setSelectedMDLHDatabase] = useState('FIELD_METADATA');
   const searchRef = useRef(null);
 
   // Keyboard shortcut: Cmd/Ctrl + K to focus search
@@ -1217,11 +1346,17 @@ export default function App() {
 
   // Open panel with highlighted query
   const openQueryForEntity = (entityName, tableName, exampleQuery) => {
-    // If entity has its own exampleQuery field (inline query from data), use that
-    if (exampleQuery) {
+    // Priority 1: Generate a context-aware query using selected database
+    if (tableName && tableName !== '(abstract)') {
+      const dynamicQuery = generateEntityQuery(entityName, tableName, selectedMDLHDatabase);
+      setHighlightedQuery(dynamicQuery);
+    } 
+    // Priority 2: Use inline exampleQuery if no table
+    else if (exampleQuery) {
       setHighlightedQuery(exampleQuery);
-    } else {
-      // Find related query from exampleQueries
+    } 
+    // Priority 3: Find related query from exampleQueries
+    else {
       const matchedQuery = findQueryForEntity(entityName, tableName);
       setHighlightedQuery(matchedQuery?.query || null);
     }
@@ -1331,6 +1466,24 @@ export default function App() {
               <Download size={14} />
               Export All
             </button>
+          </div>
+          
+          {/* Database Selector for Query Context */}
+          <div className="flex items-center gap-2 mt-4">
+            <Database size={14} className="text-blue-100" />
+            <span className="text-sm text-blue-100">Query Database:</span>
+            <select
+              value={selectedMDLHDatabase}
+              onChange={(e) => setSelectedMDLHDatabase(e.target.value)}
+              className="px-3 py-1.5 bg-white/20 text-white border border-white/30 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer appearance-none"
+              style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='white'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center', backgroundSize: '16px', paddingRight: '32px' }}
+            >
+              {MDLH_DATABASES.map(db => (
+                <option key={db.name} value={db.name} className="text-gray-900">
+                  {db.name}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
