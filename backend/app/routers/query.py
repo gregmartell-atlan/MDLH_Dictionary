@@ -11,7 +11,8 @@ from fastapi import APIRouter, HTTPException, Query as QueryParam, Header
 from app.models.schemas import (
     QueryRequest, QuerySubmitResponse, QueryStatusResponse,
     QueryResultsResponse, QueryHistoryResponse, QueryHistoryItem,
-    QueryStatus, CancelQueryResponse
+    QueryStatus, CancelQueryResponse,
+    PreflightRequest, PreflightResponse, TableCheckResult, TableSuggestion
 )
 from app.services.session import session_manager
 from app.database import query_history_db
@@ -72,6 +73,155 @@ def _split_sql_statements(sql: str) -> List[str]:
 def _count_statements(sql: str) -> int:
     """Count the number of SQL statements."""
     return len(_split_sql_statements(sql))
+
+
+def _extract_tables_from_sql(sql: str) -> List[Tuple[str, str, str]]:
+    """
+    Extract table references from SQL.
+    Returns list of (database, schema, table) tuples.
+    """
+    # Remove comments
+    clean_sql = re.sub(r'--[^\n]*', '', sql)
+    clean_sql = re.sub(r'/\*.*?\*/', '', clean_sql, flags=re.DOTALL)
+    
+    tables = []
+    
+    # Pattern for fully qualified: database.schema.table
+    full_pattern = r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)'
+    for match in re.finditer(full_pattern, clean_sql, re.IGNORECASE):
+        tables.append((match.group(1), match.group(2), match.group(3)))
+    
+    # Pattern for schema.table (no database)
+    partial_pattern = r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\.)'
+    for match in re.finditer(partial_pattern, clean_sql, re.IGNORECASE):
+        # Only add if not already captured as full reference
+        schema, table = match.group(1), match.group(2)
+        if not any(t[2].upper() == table.upper() for t in tables):
+            tables.append((None, schema, table))
+    
+    # Pattern for bare table name
+    bare_pattern = r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)(?!\.)'
+    keywords = {'SELECT', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'AS', 'ON', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS'}
+    for match in re.finditer(bare_pattern, clean_sql, re.IGNORECASE):
+        table = match.group(1)
+        if table.upper() not in keywords and not any(t[2].upper() == table.upper() for t in tables):
+            tables.append((None, None, table))
+    
+    return tables
+
+
+def _check_table_exists(cursor, database: str, schema: str, table: str) -> dict:
+    """Check if a table exists and get its row count."""
+    result = {
+        "exists": False,
+        "row_count": None,
+        "columns": [],
+        "error": None
+    }
+    
+    try:
+        # Try to get table info
+        fqn = f'"{database}"."{schema}"."{table}"'
+        cursor.execute(f"DESCRIBE TABLE {fqn}")
+        columns = [row[0] for row in cursor.fetchall()]
+        result["columns"] = columns
+        result["exists"] = True
+        
+        # Get approximate row count (fast)
+        cursor.execute(f"SELECT COUNT(*) FROM {fqn} LIMIT 1")
+        row = cursor.fetchone()
+        result["row_count"] = row[0] if row else 0
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower() or "not authorized" in error_msg.lower():
+            result["exists"] = False
+            result["error"] = "Table does not exist or not authorized"
+        else:
+            result["error"] = error_msg
+    
+    return result
+
+
+def _find_similar_tables(cursor, database: str, schema: str, target_table: str, limit: int = 10) -> List[dict]:
+    """Find similar tables that have data."""
+    similar = []
+    
+    try:
+        # Get all tables in the schema
+        cursor.execute(f'SHOW TABLES IN "{database}"."{schema}"')
+        tables = cursor.fetchall()
+        
+        target_upper = target_table.upper().replace('_ENTITY', '').replace('_', '')
+        
+        for row in tables:
+            table_name = row[1]  # name column
+            row_count = row[6] if len(row) > 6 and row[6] else 0  # row_count column
+            
+            # Skip empty tables
+            try:
+                row_count = int(row_count) if row_count else 0
+            except (ValueError, TypeError):
+                row_count = 0
+            
+            if row_count == 0:
+                continue
+            
+            # Calculate similarity
+            table_upper = table_name.upper().replace('_ENTITY', '').replace('_', '')
+            
+            # Exact match scores highest
+            if table_upper == target_upper:
+                score = 1.0
+                reason = "Exact match with data"
+            # Contains target
+            elif target_upper in table_upper or table_upper in target_upper:
+                score = 0.8
+                reason = f"Similar name, has {row_count:,} rows"
+            # Shared prefix (at least 4 chars)
+            elif len(target_upper) >= 4 and table_upper.startswith(target_upper[:4]):
+                score = 0.6
+                reason = f"Same category, has {row_count:,} rows"
+            # Entity table with data
+            elif table_name.upper().endswith('_ENTITY') and row_count > 0:
+                score = 0.3
+                reason = f"Entity table with {row_count:,} rows"
+            else:
+                continue
+            
+            similar.append({
+                "table_name": table_name,
+                "fully_qualified": f"{database}.{schema}.{table_name}",
+                "row_count": row_count,
+                "relevance_score": score,
+                "reason": reason
+            })
+        
+        # Sort by score descending, then by row_count
+        similar.sort(key=lambda x: (-x["relevance_score"], -x["row_count"]))
+        return similar[:limit]
+        
+    except Exception as e:
+        logger.warning(f"Failed to find similar tables: {e}")
+        return []
+
+
+def _generate_suggested_query(original_sql: str, replacements: dict) -> str:
+    """Generate a suggested query with table replacements."""
+    suggested = original_sql
+    
+    for original, replacement in replacements.items():
+        # Try different patterns
+        patterns = [
+            (rf'(FROM|JOIN)\s+{re.escape(original)}\b', rf'\1 {replacement}'),
+            (rf'(FROM|JOIN)\s+[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.{re.escape(original.split(".")[-1])}\b', rf'\1 {replacement}'),
+        ]
+        
+        for pattern, repl in patterns:
+            suggested = re.sub(pattern, repl, suggested, flags=re.IGNORECASE)
+    
+    return suggested
+
 
 VALID_STATUSES = {s.value for s in QueryStatus}
 
@@ -136,6 +286,118 @@ def _record_query_history(
         )
     except Exception as e:
         logger.error(f"Failed to record query history for {query_id}: {e}")
+
+
+@router.post("/preflight", response_model=PreflightResponse)
+async def preflight_check(
+    request: PreflightRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
+):
+    """
+    Check a query before execution.
+    
+    Validates tables exist, checks row counts, and suggests alternatives
+    if tables are empty or don't exist.
+    """
+    session = _get_session_or_401(x_session_id)
+    
+    # Default database/schema from request or session
+    default_db = request.database or session.database or "FIELD_METADATA"
+    default_schema = request.schema_name or session.schema or "PUBLIC"
+    
+    # Extract tables from SQL
+    tables = _extract_tables_from_sql(request.sql)
+    
+    if not tables:
+        return PreflightResponse(
+            valid=True,
+            message="No tables detected in query (might be a SHOW/DESCRIBE command)",
+            tables_checked=[],
+            suggestions=[],
+            issues=[]
+        )
+    
+    cursor = session.conn.cursor()
+    tables_checked = []
+    issues = []
+    suggestions = []
+    replacements = {}
+    
+    try:
+        for db, schema, table in tables:
+            # Resolve defaults
+            resolved_db = db or default_db
+            resolved_schema = schema or default_schema
+            fqn = f"{resolved_db}.{resolved_schema}.{table}"
+            
+            # Check table
+            check_result = _check_table_exists(cursor, resolved_db, resolved_schema, table)
+            
+            table_check = TableCheckResult(
+                table_name=table,
+                fully_qualified=fqn,
+                exists=check_result["exists"],
+                row_count=check_result["row_count"],
+                columns=check_result["columns"],
+                error=check_result["error"]
+            )
+            tables_checked.append(table_check)
+            
+            # Collect issues
+            if not check_result["exists"]:
+                issues.append(f"Table '{fqn}' does not exist or you don't have access")
+                
+                # Find alternatives
+                similar = _find_similar_tables(cursor, resolved_db, resolved_schema, table)
+                for s in similar:
+                    suggestions.append(TableSuggestion(**s))
+                    # Use first high-scoring suggestion for replacement
+                    if s["relevance_score"] >= 0.6 and fqn not in replacements:
+                        replacements[fqn] = s["fully_qualified"]
+                        
+            elif check_result["row_count"] == 0:
+                issues.append(f"Table '{fqn}' exists but is empty (0 rows)")
+                
+                # Find alternatives with data
+                similar = _find_similar_tables(cursor, resolved_db, resolved_schema, table)
+                for s in similar:
+                    suggestions.append(TableSuggestion(**s))
+                    # Suggest replacement for empty tables too
+                    if s["relevance_score"] >= 0.5 and fqn not in replacements:
+                        replacements[fqn] = s["fully_qualified"]
+        
+        cursor.close()
+        
+        # Generate suggested query if we have replacements
+        suggested_query = None
+        if replacements:
+            suggested_query = _generate_suggested_query(request.sql, replacements)
+        
+        # Build response message
+        if not issues:
+            message = f"All {len(tables_checked)} table(s) exist and have data"
+            valid = True
+        else:
+            message = f"Found {len(issues)} issue(s) with query"
+            valid = False
+        
+        return PreflightResponse(
+            valid=valid,
+            tables_checked=tables_checked,
+            issues=issues,
+            suggestions=suggestions,
+            suggested_query=suggested_query,
+            message=message
+        )
+        
+    except Exception as e:
+        logger.error(f"Preflight check failed: {e}")
+        cursor.close()
+        return PreflightResponse(
+            valid=False,
+            message=f"Preflight check failed: {str(e)}",
+            issues=[str(e)]
+        )
 
 
 @router.post("/execute", response_model=QuerySubmitResponse)

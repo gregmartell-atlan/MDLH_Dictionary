@@ -190,3 +190,41 @@ class CancelQueryResponse(BaseModel):
     """Response after cancelling a query."""
     message: str
     query_id: str
+
+
+# ============ Preflight Check Models ============
+
+class TableCheckResult(BaseModel):
+    """Result of checking a single table."""
+    table_name: str
+    fully_qualified: str
+    exists: bool
+    row_count: Optional[int] = None
+    columns: List[str] = []
+    error: Optional[str] = None
+
+
+class TableSuggestion(BaseModel):
+    """Suggested alternative table."""
+    table_name: str
+    fully_qualified: str
+    row_count: Optional[int] = None
+    relevance_score: float = 0.0  # 0-1, how relevant to original
+    reason: str = ""  # Why this is suggested
+
+
+class PreflightRequest(BaseModel):
+    """Request to check a query before execution."""
+    sql: str
+    database: Optional[str] = None
+    schema_name: Optional[str] = Field(None, alias="schema")
+
+
+class PreflightResponse(BaseModel):
+    """Response from preflight check."""
+    valid: bool
+    tables_checked: List[TableCheckResult] = []
+    issues: List[str] = []
+    suggestions: List[TableSuggestion] = []
+    suggested_query: Optional[str] = None
+    message: str = ""

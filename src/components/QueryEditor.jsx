@@ -8,12 +8,12 @@ import {
   Play, Square, Trash2, History, Settings, 
   Check, X, Loader2, Database, Clock,
   Wifi, WifiOff, PanelLeft, PanelLeftClose,
-  ChevronDown, Layers
+  ChevronDown, Layers, AlertTriangle, Lightbulb, Sparkles
 } from 'lucide-react';
 import SchemaExplorer from './SchemaExplorer';
 import ResultsTable from './ResultsTable';
 import ConnectionModal from './ConnectionModal';
-import { useConnection, useQuery, useQueryHistory, useMetadata } from '../hooks/useSnowflake';
+import { useConnection, useQuery, useQueryHistory, useMetadata, usePreflight } from '../hooks/useSnowflake';
 
 // Parse SQL to extract database/schema/table references
 function parseSqlContext(sql) {
@@ -250,6 +250,116 @@ function QueryHistoryPanel({ isOpen, onClose, history, onSelectQuery, onRefresh,
   );
 }
 
+// Preflight Warning Panel - shown when preflight finds issues
+function PreflightWarningPanel({ 
+  preflightResult, 
+  loading,
+  onUseSuggested, 
+  onExecuteAnyway, 
+  onDismiss 
+}) {
+  if (loading) {
+    return (
+      <div className="p-4 bg-blue-50 border-b border-blue-200">
+        <div className="flex items-center gap-2 text-blue-600">
+          <Loader2 size={16} className="animate-spin" />
+          <span className="text-sm font-medium">Checking query...</span>
+        </div>
+      </div>
+    );
+  }
+  
+  if (!preflightResult || preflightResult.valid) return null;
+  
+  const { issues, suggestions, suggested_query, tables_checked } = preflightResult;
+  
+  return (
+    <div className="p-4 bg-amber-50 border-b border-amber-200">
+      <div className="flex items-start gap-3">
+        <AlertTriangle size={20} className="text-amber-500 flex-shrink-0 mt-0.5" />
+        
+        <div className="flex-1 min-w-0">
+          <h4 className="font-medium text-amber-800 mb-2">Query Issues Detected</h4>
+          
+          {/* Issues list */}
+          <ul className="text-sm text-amber-700 space-y-1 mb-3">
+            {issues?.map((issue, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span className="text-amber-400">•</span>
+                <span>{issue}</span>
+              </li>
+            ))}
+          </ul>
+          
+          {/* Suggestions */}
+          {suggestions?.length > 0 && (
+            <div className="mb-3">
+              <div className="flex items-center gap-1.5 text-sm font-medium text-amber-800 mb-2">
+                <Lightbulb size={14} />
+                <span>Tables with data you can query:</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {suggestions.slice(0, 8).map((s, i) => (
+                  <span 
+                    key={i}
+                    className="inline-flex items-center gap-1 px-2 py-1 bg-white rounded border border-amber-200 text-xs"
+                    title={s.reason}
+                  >
+                    <Database size={12} className="text-amber-500" />
+                    <span className="font-mono text-amber-700">{s.table_name}</span>
+                    {s.row_count > 0 && (
+                      <span className="text-amber-500">({s.row_count.toLocaleString()} rows)</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Suggested query */}
+          {suggested_query && (
+            <div className="bg-white rounded-lg border border-amber-200 p-3 mb-3">
+              <div className="flex items-center gap-1.5 text-sm font-medium text-green-700 mb-2">
+                <Sparkles size={14} />
+                <span>Suggested query that will return results:</span>
+              </div>
+              <pre className="text-xs text-gray-700 bg-gray-50 p-2 rounded overflow-x-auto max-h-24">
+                {suggested_query.substring(0, 500)}{suggested_query.length > 500 ? '...' : ''}
+              </pre>
+            </div>
+          )}
+          
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 mt-3">
+            {suggested_query && (
+              <button
+                onClick={onUseSuggested}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium"
+              >
+                <Sparkles size={14} />
+                Run Suggested Query
+              </button>
+            )}
+            <button
+              onClick={onExecuteAnyway}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded text-sm font-medium"
+            >
+              <Play size={14} />
+              Run Anyway
+            </button>
+            <button
+              onClick={onDismiss}
+              className="px-3 py-1.5 text-gray-600 hover:text-gray-800 text-sm"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function QueryEditor({ initialQuery = '', onClose }) {
   const editorRef = useRef(null);
   const [sql, setSql] = useState(initialQuery);
@@ -269,11 +379,15 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
   const { executeQuery, results, loading: queryLoading, error: queryError, clearResults } = useQuery();
   const { history, fetchHistory, loading: historyLoading } = useQueryHistory();
   const { fetchDatabases, fetchSchemas, fetchTables } = useMetadata();
+  const { preflightResult, loading: preflightLoading, runPreflight, clearPreflight } = usePreflight();
   const [connectionStatus, setConnectionStatus] = useState(null);
   
   // State for error recovery / alternative suggestions
   const [alternatives, setAlternatives] = useState(null);
   const [alternativesLoading, setAlternativesLoading] = useState(false);
+  
+  // State for preflight warnings
+  const [showPreflightWarning, setShowPreflightWarning] = useState(false);
   
   // Load databases when connected
   const loadDatabases = useCallback(async () => {
@@ -373,13 +487,41 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
     editor.focus();
   };
   
-  // Execute query
-  const handleExecute = useCallback(async () => {
+  // Run preflight check on query
+  const handlePreflight = useCallback(async (queryText) => {
+    const db = selectedDatabase || connStatus?.database;
+    const schema = selectedSchema || connStatus?.schema;
+    
+    const result = await runPreflight(queryText, { database: db, schema });
+    
+    if (result && !result.valid && result.suggestions?.length > 0) {
+      setShowPreflightWarning(true);
+    }
+    
+    return result;
+  }, [selectedDatabase, selectedSchema, connStatus, runPreflight]);
+  
+  // Execute query with optional preflight
+  const handleExecute = useCallback(async (skipPreflight = false) => {
     const queryText = sql.trim();
     if (!queryText) return;
     
-    // Clear previous alternatives
+    // Clear previous state
     setAlternatives(null);
+    clearPreflight();
+    setShowPreflightWarning(false);
+    
+    // Run preflight check first (unless skipped)
+    if (!skipPreflight) {
+      const preflight = await handlePreflight(queryText);
+      
+      // If preflight found issues and has suggestions, show warning instead of executing
+      if (preflight && !preflight.valid && preflight.suggested_query) {
+        console.log('[Query] Preflight found issues, showing suggestions');
+        setShowPreflightWarning(true);
+        return; // Don't execute, let user review suggestions
+      }
+    }
     
     // Use selected database/schema, fallback to connection defaults
     await executeQuery(queryText, {
@@ -390,7 +532,40 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
     
     // Refresh history after execution
     fetchHistory();
-  }, [sql, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory]);
+  }, [sql, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory, handlePreflight, clearPreflight]);
+  
+  // Execute the suggested query from preflight
+  const handleExecuteSuggested = useCallback(async () => {
+    if (preflightResult?.suggested_query) {
+      setSql(preflightResult.suggested_query);
+      setShowPreflightWarning(false);
+      clearPreflight();
+      
+      // Execute the suggested query (skip preflight since we just ran it)
+      setTimeout(async () => {
+        await executeQuery(preflightResult.suggested_query, {
+          database: selectedDatabase || connStatus?.database,
+          schema: selectedSchema || connStatus?.schema,
+          warehouse: connStatus?.warehouse
+        });
+        fetchHistory();
+      }, 100);
+    }
+  }, [preflightResult, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory, clearPreflight]);
+  
+  // Force execute anyway (ignore preflight warnings)
+  const handleExecuteAnyway = useCallback(async () => {
+    setShowPreflightWarning(false);
+    clearPreflight();
+    
+    await executeQuery(sql.trim(), {
+      database: selectedDatabase || connStatus?.database,
+      schema: selectedSchema || connStatus?.schema,
+      warehouse: connStatus?.warehouse
+    });
+    
+    fetchHistory();
+  }, [sql, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory, clearPreflight]);
   
   // Search for alternative tables when query fails
   // Dynamically parses the SQL to extract database/schema context
@@ -724,16 +899,33 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
           </div>
           
           {/* Results */}
-          <div className="h-1/2 overflow-hidden">
-            <ResultsTable
-              results={results}
-              loading={queryLoading}
-              error={queryError}
-              onSearchAlternatives={handleSearchAlternatives}
-              onSelectAlternative={handleSelectAlternative}
-              alternatives={alternatives}
-              alternativesLoading={alternativesLoading}
-            />
+          <div className="h-1/2 overflow-hidden flex flex-col">
+            {/* Preflight Warning */}
+            {(showPreflightWarning || preflightLoading) && (
+              <PreflightWarningPanel
+                preflightResult={preflightResult}
+                loading={preflightLoading}
+                onUseSuggested={handleExecuteSuggested}
+                onExecuteAnyway={handleExecuteAnyway}
+                onDismiss={() => {
+                  setShowPreflightWarning(false);
+                  clearPreflight();
+                }}
+              />
+            )}
+            
+            {/* Results Table */}
+            <div className="flex-1 overflow-hidden">
+              <ResultsTable
+                results={results}
+                loading={queryLoading}
+                error={queryError}
+                onSearchAlternatives={handleSearchAlternatives}
+                onSelectAlternative={handleSelectAlternative}
+                alternatives={alternatives}
+                alternativesLoading={alternativesLoading}
+              />
+            </div>
           </div>
         </div>
       </div>

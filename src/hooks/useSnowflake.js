@@ -206,6 +206,73 @@ export function useQuery() {
 }
 
 // =============================================================================
+// Preflight Check Hook
+// =============================================================================
+
+export function usePreflight() {
+  const [preflightResult, setPreflightResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const getSessionId = () => {
+    const stored = sessionStorage.getItem(SESSION_KEY);
+    if (stored) {
+      try {
+        return JSON.parse(stored).sessionId;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  const runPreflight = useCallback(async (sql, options = {}) => {
+    const sessionId = getSessionId();
+    if (!sessionId) {
+      return { valid: false, message: 'Not connected' };
+    }
+
+    setLoading(true);
+    setPreflightResult(null);
+
+    try {
+      const response = await fetch(`${API_URL}/api/query/preflight`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-ID': sessionId
+        },
+        body: JSON.stringify({
+          sql,
+          database: options.database,
+          schema_name: options.schema
+        })
+      });
+
+      if (response.status === 401) {
+        sessionStorage.removeItem(SESSION_KEY);
+        return { valid: false, message: 'Session expired' };
+      }
+
+      const data = await response.json();
+      setPreflightResult(data);
+      return data;
+    } catch (err) {
+      const error = { valid: false, message: err.message, issues: [err.message] };
+      setPreflightResult(error);
+      return error;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const clearPreflight = useCallback(() => {
+    setPreflightResult(null);
+  }, []);
+
+  return { preflightResult, loading, runPreflight, clearPreflight };
+}
+
+// =============================================================================
 // Query History Hook
 // =============================================================================
 
