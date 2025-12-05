@@ -200,8 +200,12 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
   const { status: connStatus, testConnection, loading: connLoading } = useConnection();
   const { executeQuery, results, loading: queryLoading, error: queryError, clearResults } = useQuery();
   const { history, fetchHistory, loading: historyLoading } = useQueryHistory();
-  const { fetchDatabases, fetchSchemas } = useMetadata();
+  const { fetchDatabases, fetchSchemas, fetchTables } = useMetadata();
   const [connectionStatus, setConnectionStatus] = useState(null);
+  
+  // State for error recovery / alternative suggestions
+  const [alternatives, setAlternatives] = useState(null);
+  const [alternativesLoading, setAlternativesLoading] = useState(false);
   
   // Load databases when connected
   const loadDatabases = useCallback(async () => {
@@ -306,6 +310,9 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
     const queryText = sql.trim();
     if (!queryText) return;
     
+    // Clear previous alternatives
+    setAlternatives(null);
+    
     // Use selected database/schema, fallback to connection defaults
     await executeQuery(queryText, {
       database: selectedDatabase || connStatus?.database,
@@ -315,6 +322,96 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
     
     // Refresh history after execution
     fetchHistory();
+  }, [sql, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory]);
+  
+  // Search for alternative tables when query fails
+  const handleSearchAlternatives = useCallback(async (objectName, objectType = 'table') => {
+    setAlternativesLoading(true);
+    setAlternatives(null);
+    
+    try {
+      const db = selectedDatabase || connStatus?.database;
+      const schema = selectedSchema || connStatus?.schema;
+      
+      // Fetch all tables in the current schema
+      const tables = await fetchTables(db, schema);
+      
+      if (!tables || tables.length === 0) {
+        setAlternatives([]);
+        return;
+      }
+      
+      // Filter to find similar tables
+      const searchTerm = objectName.toUpperCase()
+        .replace('_ENTITY', '')
+        .replace('ATLAS', '');
+      
+      const similar = tables
+        .map(t => t.name || t)
+        .filter(name => {
+          const upperName = name.toUpperCase();
+          // Exact match (shouldn't happen, but check)
+          if (upperName === objectName.toUpperCase()) return false;
+          // Contains the key part
+          if (upperName.includes(searchTerm)) return true;
+          // Ends with _ENTITY
+          if (upperName.endsWith('_ENTITY')) {
+            const baseName = upperName.replace('_ENTITY', '');
+            if (searchTerm.includes(baseName) || baseName.includes(searchTerm)) return true;
+          }
+          return false;
+        })
+        .sort((a, b) => {
+          // Prioritize exact base name matches
+          const aBase = a.toUpperCase().replace('_ENTITY', '');
+          const bBase = b.toUpperCase().replace('_ENTITY', '');
+          const searchBase = searchTerm;
+          
+          if (aBase === searchBase) return -1;
+          if (bBase === searchBase) return 1;
+          return a.length - b.length; // Shorter names first
+        });
+      
+      setAlternatives(similar);
+    } catch (err) {
+      console.error('Failed to search alternatives:', err);
+      setAlternatives([]);
+    } finally {
+      setAlternativesLoading(false);
+    }
+  }, [selectedDatabase, selectedSchema, connStatus, fetchTables]);
+  
+  // Select an alternative and re-run the query
+  const handleSelectAlternative = useCallback((alternativeTable, originalTable) => {
+    // Replace the original table name with the alternative in the SQL
+    const db = selectedDatabase || connStatus?.database;
+    const schema = selectedSchema || connStatus?.schema;
+    
+    // Create regex to find and replace the table name
+    const patterns = [
+      new RegExp(`(FROM|JOIN)\\s+([\\w.]*\\.)?${originalTable}\\b`, 'gi'),
+      new RegExp(`(FROM|JOIN)\\s+${originalTable}\\b`, 'gi'),
+    ];
+    
+    let newSql = sql;
+    for (const pattern of patterns) {
+      const replacement = `$1 ${db}.${schema}.${alternativeTable}`;
+      newSql = newSql.replace(pattern, replacement);
+    }
+    
+    // Update SQL and execute
+    setSql(newSql);
+    setAlternatives(null);
+    
+    // Execute with slight delay to let state update
+    setTimeout(() => {
+      executeQuery(newSql, {
+        database: db,
+        schema: schema,
+        warehouse: connStatus?.warehouse
+      });
+      fetchHistory();
+    }, 100);
   }, [sql, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory]);
   
   // Insert text at cursor
@@ -496,6 +593,10 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
               results={results}
               loading={queryLoading}
               error={queryError}
+              onSearchAlternatives={handleSearchAlternatives}
+              onSelectAlternative={handleSelectAlternative}
+              alternatives={alternatives}
+              alternativesLoading={alternativesLoading}
             />
           </div>
         </div>

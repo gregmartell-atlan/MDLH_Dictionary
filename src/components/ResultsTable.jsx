@@ -11,8 +11,94 @@ import {
 } from '@tanstack/react-table';
 import { 
   ArrowUpDown, ArrowUp, ArrowDown, Download, Copy, Check,
-  ChevronLeft, ChevronRight, Loader2, AlertCircle
+  ChevronLeft, ChevronRight, Loader2, AlertCircle, Search, Wand2, Play
 } from 'lucide-react';
+
+// Parse error message to extract the missing table name
+function parseErrorForMissingTable(error) {
+  if (!error) return null;
+  
+  // Pattern: Object 'TABLE_NAME' does not exist
+  const match1 = error.match(/Object\s+'([^']+)'\s+does not exist/i);
+  if (match1) return match1[1];
+  
+  // Pattern: Table 'TABLE_NAME' does not exist
+  const match2 = error.match(/Table\s+'([^']+)'\s+does not exist/i);
+  if (match2) return match2[1];
+  
+  // Pattern: invalid identifier 'COLUMN_NAME'
+  const match3 = error.match(/invalid identifier\s+'([^']+)'/i);
+  if (match3) return { type: 'column', name: match3[1] };
+  
+  // Pattern: Schema 'SCHEMA' does not exist
+  const match4 = error.match(/Schema\s+'([^']+)'\s+does not exist/i);
+  if (match4) return { type: 'schema', name: match4[1] };
+  
+  return null;
+}
+
+// Component to show alternative suggestions
+function AlternativeSuggestions({ 
+  missingObject, 
+  alternatives, 
+  loading, 
+  onSearch, 
+  onSelectAlternative 
+}) {
+  if (!missingObject) return null;
+  
+  const objectName = typeof missingObject === 'string' ? missingObject : missingObject.name;
+  const objectType = typeof missingObject === 'object' ? missingObject.type : 'table';
+  
+  return (
+    <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+      <div className="flex items-center gap-2 text-blue-700 font-medium mb-2">
+        <Wand2 size={16} />
+        <span>Can't find: {objectName}</span>
+      </div>
+      
+      {!alternatives && !loading && (
+        <button
+          onClick={() => onSearch(objectName, objectType)}
+          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+        >
+          <Search size={14} />
+          Find similar {objectType}s in warehouse
+        </button>
+      )}
+      
+      {loading && (
+        <div className="flex items-center gap-2 text-blue-600 text-sm">
+          <Loader2 size={14} className="animate-spin" />
+          Searching for alternatives...
+        </div>
+      )}
+      
+      {alternatives && alternatives.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-sm text-blue-600">Found {alternatives.length} similar {objectType}(s):</p>
+          <div className="flex flex-wrap gap-2">
+            {alternatives.slice(0, 10).map((alt, i) => (
+              <button
+                key={i}
+                onClick={() => onSelectAlternative(alt, objectName)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-blue-300 rounded-lg text-sm font-mono text-blue-700 hover:bg-blue-100 hover:border-blue-400"
+              >
+                <Play size={12} />
+                {alt}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-blue-500 mt-2">Click to run query with this {objectType} instead</p>
+        </div>
+      )}
+      
+      {alternatives && alternatives.length === 0 && (
+        <p className="text-sm text-blue-600">No similar {objectType}s found. Try a different database/schema.</p>
+      )}
+    </div>
+  );
+}
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
@@ -39,9 +125,17 @@ export default function ResultsTable({
   loading, 
   error,
   onPageChange,
-  onExport
+  onExport,
+  // New props for error recovery
+  onSearchAlternatives,
+  onSelectAlternative,
+  alternatives,
+  alternativesLoading
 }) {
   const [sorting, setSorting] = useState([]);
+  
+  // Parse error to find missing object
+  const missingObject = useMemo(() => parseErrorForMissingTable(error), [error]);
   
   // Build columns from result metadata
   // Handles both string columns ["col1", "col2"] and object columns [{name: "col1"}, {name: "col2"}]
@@ -145,11 +239,22 @@ export default function ResultsTable({
   // Error state
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full bg-white">
-        <div className="text-center max-w-md">
+      <div className="flex items-center justify-center h-full bg-white p-4">
+        <div className="text-center max-w-lg">
           <AlertCircle size={32} className="mx-auto text-red-500 mb-2" />
           <p className="text-red-600 font-medium">Query Failed</p>
-          <p className="text-gray-500 text-sm mt-1">{error}</p>
+          <p className="text-gray-500 text-sm mt-1 font-mono bg-gray-100 p-2 rounded">{error}</p>
+          
+          {/* Alternative suggestions for missing objects */}
+          {onSearchAlternatives && (
+            <AlternativeSuggestions
+              missingObject={missingObject}
+              alternatives={alternatives}
+              loading={alternativesLoading}
+              onSearch={onSearchAlternatives}
+              onSelectAlternative={onSelectAlternative}
+            />
+          )}
         </div>
       </div>
     );
