@@ -7,12 +7,13 @@ import Editor from '@monaco-editor/react';
 import { 
   Play, Square, Trash2, History, Settings, 
   Check, X, Loader2, Database, Clock,
-  Wifi, WifiOff, PanelLeft, PanelLeftClose
+  Wifi, WifiOff, PanelLeft, PanelLeftClose,
+  ChevronDown, Layers
 } from 'lucide-react';
 import SchemaExplorer from './SchemaExplorer';
 import ResultsTable from './ResultsTable';
 import ConnectionModal from './ConnectionModal';
-import { useConnection, useQuery, useQueryHistory } from '../hooks/useSnowflake';
+import { useConnection, useQuery, useQueryHistory, useMetadata } from '../hooks/useSnowflake';
 
 function ConnectionBadge({ status, onConnect, loading }) {
   if (loading) {
@@ -45,6 +46,87 @@ function ConnectionBadge({ status, onConnect, loading }) {
       <Wifi size={12} />
       <span>{status.warehouse || 'Connected'}</span>
     </button>
+  );
+}
+
+// Database/Schema Selector Dropdown
+function ContextSelector({ 
+  label, 
+  icon: Icon, 
+  value, 
+  options, 
+  onChange, 
+  loading,
+  placeholder = 'Select...'
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm hover:border-gray-300 hover:bg-gray-50 min-w-[140px]"
+      >
+        <Icon size={14} className="text-gray-500" />
+        <span className="truncate max-w-[120px] text-gray-700">
+          {value || placeholder}
+        </span>
+        <ChevronDown size={14} className={`text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      
+      {isOpen && (
+        <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-80 overflow-hidden">
+          <div className="p-2 border-b border-gray-100">
+            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+              {label}
+            </div>
+          </div>
+          
+          <div className="overflow-y-auto max-h-64">
+            {loading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 size={16} className="animate-spin text-gray-400" />
+              </div>
+            ) : options.length === 0 ? (
+              <div className="text-center py-4 text-gray-400 text-sm">
+                No options available
+              </div>
+            ) : (
+              options.map((option) => (
+                <button
+                  key={option.name}
+                  onClick={() => {
+                    onChange(option.name);
+                    setIsOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-blue-50 ${
+                    value === option.name ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
+                  }`}
+                >
+                  <Icon size={14} className={value === option.name ? 'text-blue-500' : 'text-gray-400'} />
+                  <span className="truncate">{option.name}</span>
+                  {value === option.name && (
+                    <Check size={14} className="ml-auto text-blue-500" />
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -107,10 +189,56 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
   const [showHistory, setShowHistory] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
   
+  // Database/Schema context state
+  const [selectedDatabase, setSelectedDatabase] = useState('');
+  const [selectedSchema, setSelectedSchema] = useState('');
+  const [databases, setDatabases] = useState([]);
+  const [schemas, setSchemas] = useState([]);
+  const [loadingDatabases, setLoadingDatabases] = useState(false);
+  const [loadingSchemas, setLoadingSchemas] = useState(false);
+  
   const { status: connStatus, testConnection, loading: connLoading } = useConnection();
   const { executeQuery, results, loading: queryLoading, error: queryError, clearResults } = useQuery();
   const { history, fetchHistory, loading: historyLoading } = useQueryHistory();
+  const { fetchDatabases, fetchSchemas } = useMetadata();
   const [connectionStatus, setConnectionStatus] = useState(null);
+  
+  // Load databases when connected
+  const loadDatabases = useCallback(async () => {
+    setLoadingDatabases(true);
+    try {
+      const dbs = await fetchDatabases();
+      setDatabases(dbs || []);
+    } catch (err) {
+      console.error('Failed to load databases:', err);
+    } finally {
+      setLoadingDatabases(false);
+    }
+  }, [fetchDatabases]);
+  
+  // Load schemas when database changes
+  const loadSchemas = useCallback(async (database) => {
+    if (!database) {
+      setSchemas([]);
+      return;
+    }
+    setLoadingSchemas(true);
+    try {
+      const schemaList = await fetchSchemas(database);
+      setSchemas(schemaList || []);
+    } catch (err) {
+      console.error('Failed to load schemas:', err);
+    } finally {
+      setLoadingSchemas(false);
+    }
+  }, [fetchSchemas]);
+  
+  // Handle database selection
+  const handleDatabaseChange = useCallback((database) => {
+    setSelectedDatabase(database);
+    setSelectedSchema(''); // Reset schema when database changes
+    loadSchemas(database);
+  }, [loadSchemas]);
   
   // Try to connect on mount (will fail gracefully if no env config)
   useEffect(() => {
@@ -119,6 +247,17 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
       // If not connected, show modal automatically
       if (!status?.connected) {
         setShowConnectionModal(true);
+      } else {
+        // Load databases if connected
+        loadDatabases();
+        // Set default database/schema from connection
+        if (status?.database) {
+          setSelectedDatabase(status.database);
+          loadSchemas(status.database);
+        }
+        if (status?.schema) {
+          setSelectedSchema(status.schema);
+        }
       }
     });
     fetchHistory();
@@ -128,6 +267,18 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
   const handleConnectionSuccess = (status) => {
     setConnectionStatus(status);
     setShowConnectionModal(false);
+    
+    // Load databases after successful connection
+    loadDatabases();
+    
+    // Set default database/schema from connection
+    if (status?.database) {
+      setSelectedDatabase(status.database);
+      loadSchemas(status.database);
+    }
+    if (status?.schema) {
+      setSelectedSchema(status.schema);
+    }
   };
   
   // Update SQL when initialQuery changes
@@ -155,15 +306,16 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
     const queryText = sql.trim();
     if (!queryText) return;
     
+    // Use selected database/schema, fallback to connection defaults
     await executeQuery(queryText, {
-      database: connStatus?.database,
-      schema: connStatus?.schema,
+      database: selectedDatabase || connStatus?.database,
+      schema: selectedSchema || connStatus?.schema,
       warehouse: connStatus?.warehouse
     });
     
     // Refresh history after execution
     fetchHistory();
-  }, [sql, connStatus, executeQuery, fetchHistory]);
+  }, [sql, selectedDatabase, selectedSchema, connStatus, executeQuery, fetchHistory]);
   
   // Insert text at cursor
   const handleInsertText = useCallback((text) => {
@@ -256,6 +408,30 @@ export default function QueryEditor({ initialQuery = '', onClose }) {
         </div>
         
         <div className="flex items-center gap-3">
+          {/* Database Selector */}
+          <ContextSelector
+            label="Databases"
+            icon={Database}
+            value={selectedDatabase}
+            options={databases}
+            onChange={handleDatabaseChange}
+            loading={loadingDatabases}
+            placeholder="Database"
+          />
+          
+          {/* Schema Selector */}
+          <ContextSelector
+            label="Schemas"
+            icon={Layers}
+            value={selectedSchema}
+            options={schemas}
+            onChange={setSelectedSchema}
+            loading={loadingSchemas}
+            placeholder="Schema"
+          />
+          
+          <div className="h-4 w-px bg-gray-300" />
+          
           <ConnectionBadge 
             status={connectionStatus} 
             onConnect={() => setShowConnectionModal(true)} 
