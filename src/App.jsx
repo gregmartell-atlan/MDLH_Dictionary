@@ -71,6 +71,10 @@ import {
   fetchTableColumns
 } from './utils/tableDiscovery';
 import { preValidateAllQueries } from './utils/queryHelpers';
+import { isDemoMode, DEMO_DATABASE, DEMO_SCHEMA, DEMO_TABLES } from './data/demoData';
+
+// Check if we're in demo mode (GitHub Pages / no backend)
+const IS_DEMO = isDemoMode();
 
 // Build the 30-day recursive lineage query for a specific fully-qualified object
 const buildLineagePreviewQuery = (targetFqn) => {
@@ -899,8 +903,8 @@ export default function App() {
   const [editorQuery, setEditorQuery] = useState('');
   const [selectedEntity, setSelectedEntity] = useState(null);
   const [showRecommendations, setShowRecommendations] = useState(false);
-  const [selectedMDLHDatabase, setSelectedMDLHDatabase] = useState('FIELD_METADATA');
-  const [selectedMDLHSchema, setSelectedMDLHSchema] = useState('PUBLIC');
+  const [selectedMDLHDatabase, setSelectedMDLHDatabase] = useState(IS_DEMO ? DEMO_DATABASE : 'FIELD_METADATA');
+  const [selectedMDLHSchema, setSelectedMDLHSchema] = useState(IS_DEMO ? DEMO_SCHEMA : 'PUBLIC');
   const searchRef = useRef(null);
   
   // State for table discovery and validation
@@ -1638,6 +1642,17 @@ export default function App() {
     <ErrorBoundary showDetails={process.env.NODE_ENV === 'development'}>
     <SystemConfigProvider>
     <div className="min-h-screen bg-white text-gray-900">
+      {/* Demo Mode Banner */}
+      {IS_DEMO && (
+        <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white px-4 py-2 text-center text-sm font-medium">
+          <span className="inline-flex items-center gap-2">
+            <Sparkles size={16} />
+            <span>Demo Mode - Explore the MDLH Dictionary interface with sample data</span>
+            <span className="ml-2 px-2 py-0.5 bg-white/20 rounded text-xs">No backend required</span>
+          </span>
+        </div>
+      )}
+
       {/* Navigation Bar - DuckDB style: clean white, minimal */}
       <nav className="border-b border-gray-200 bg-white sticky top-0 z-30">
         <div className="max-w-full mx-auto px-6 py-3 flex items-center justify-between">

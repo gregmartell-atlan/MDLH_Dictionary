@@ -9,8 +9,19 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { createLogger } from '../utils/logger';
 import { TIMEOUTS, CONNECTION_CONFIG } from '../data/constants';
 import { getCachedSamples, cacheSamples, PRESCAN_STRATEGIES } from '../services/prescanService';
+import {
+  isDemoMode,
+  DEMO_DATABASE,
+  DEMO_SCHEMA,
+  DEMO_SAMPLE_ENTITIES,
+  DEMO_LINEAGE_DATA,
+  DEMO_QUERY_RESULTS,
+  DEMO_CONNECTION_STATUS,
+  DEMO_TABLES,
+} from '../data/demoData';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const IS_DEMO = isDemoMode();
 const SESSION_KEY = 'snowflake_session';
 const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds default timeout
 const MAX_RETRIES = 3; // Max retries for 503 errors
@@ -141,13 +152,43 @@ async function fetchWithRetry(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS,
 // =============================================================================
 
 export function useConnection() {
-  const [status, setStatus] = useState({ connected: false, unreachable: false });
+  // Demo mode: Return mock connected status without backend
+  const [status, setStatus] = useState(() => {
+    if (IS_DEMO) {
+      connectionLog.info('🎭 Demo mode active - using mock connection');
+      return { connected: true, unreachable: false, isDemoMode: true };
+    }
+    return { connected: false, unreachable: false };
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const testConnectionRef = useRef(null);
   const pendingTestRef = useRef(null); // Promise mutex - prevents race conditions
   const consecutiveStatusTimeoutsRef = useRef(0); // Track consecutive timeouts
   const abortControllerRef = useRef(null); // For cancelling stale requests
+
+  // Demo mode: Skip backend calls entirely
+  if (IS_DEMO) {
+    return {
+      status: { connected: true, unreachable: false, isDemoMode: true },
+      loading: false,
+      error: null,
+      testConnection: async () => ({ connected: true, isDemoMode: true }),
+      connect: async () => ({
+        success: true,
+        database: DEMO_DATABASE,
+        schema: DEMO_SCHEMA,
+        isDemoMode: true,
+      }),
+      disconnect: async () => {},
+      getStoredSession: () => ({
+        sessionId: 'demo-session',
+        database: DEMO_DATABASE,
+        schema: DEMO_SCHEMA,
+        isDemoMode: true,
+      }),
+    };
+  }
 
   // Get session from storage
   const getStoredSession = useCallback(() => {
@@ -447,6 +488,54 @@ export function useQuery(connectionStatus = null) {
   const backendUnreachable = connectionStatus?.unreachable === true;
 
   const executeQuery = useCallback(async (sql, options = {}) => {
+    // Demo mode: Return mock results based on query
+    if (IS_DEMO) {
+      queryLog.info('🎭 Demo mode - returning mock results for query', { sqlPreview: sql.substring(0, 50) });
+      setLoading(true);
+
+      // Simulate network delay for realism
+      await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 500));
+
+      // Match query to mock results
+      const upperSql = sql.toUpperCase().trim();
+      let mockResult = null;
+
+      if (upperSql.includes('SHOW TABLES')) {
+        mockResult = DEMO_QUERY_RESULTS['SHOW TABLES'];
+      } else if (upperSql.includes('TABLE_ENTITY')) {
+        mockResult = DEMO_QUERY_RESULTS['SELECT * FROM TABLE_ENTITY'];
+      } else if (upperSql.includes('COLUMN_ENTITY')) {
+        mockResult = {
+          columns: ['GUID', 'NAME', 'TYPENAME', 'TABLE_NAME', 'DATA_TYPE'],
+          rows: DEMO_SAMPLE_ENTITIES.columns.map(c => [c.GUID, c.NAME, c.TYPENAME, c.TABLE_NAME, c.DATA_TYPE]),
+          rowCount: DEMO_SAMPLE_ENTITIES.columns.length,
+        };
+      } else if (upperSql.includes('PROCESS_ENTITY')) {
+        mockResult = {
+          columns: ['GUID', 'NAME', 'TYPENAME', 'INPUTS', 'OUTPUTS'],
+          rows: DEMO_SAMPLE_ENTITIES.processes.map(p => [p.GUID, p.NAME, p.TYPENAME, JSON.stringify(p.INPUTS), JSON.stringify(p.OUTPUTS)]),
+          rowCount: DEMO_SAMPLE_ENTITIES.processes.length,
+        };
+      } else if (upperSql.includes('GLOSSARY')) {
+        mockResult = {
+          columns: ['GUID', 'NAME', 'TYPENAME', 'DESCRIPTION'],
+          rows: DEMO_SAMPLE_ENTITIES.terms.map(t => [t.GUID, t.NAME, t.TYPENAME, t.DESCRIPTION]),
+          rowCount: DEMO_SAMPLE_ENTITIES.terms.length,
+        };
+      } else {
+        // Generic demo response
+        mockResult = {
+          columns: ['RESULT'],
+          rows: [['Demo mode: Query executed successfully (no real data)']],
+          rowCount: 1,
+        };
+      }
+
+      setResults(mockResult);
+      setLoading(false);
+      return mockResult;
+    }
+
     // Early exit if backend is known to be unreachable
     if (backendUnreachable) {
       queryLog.warn('executeQuery() - backend unreachable, aborting');
@@ -1162,6 +1251,17 @@ const sampleLog = createLogger('useSampleEntities');
  * instead of placeholders like <GUID>.
  */
 export function useSampleEntities() {
+  // Demo mode: Return pre-populated sample entities immediately
+  if (IS_DEMO) {
+    sampleLog.info('🎭 Demo mode - using mock sample entities');
+    return {
+      samples: DEMO_SAMPLE_ENTITIES,
+      loadSamples: async () => {
+        sampleLog.info('🎭 Demo mode - loadSamples() is a no-op');
+      },
+    };
+  }
+
   const [samples, setSamples] = useState({
     tables: [],      // Sample TABLE_ENTITY rows with guids
     columns: [],     // Sample COLUMN_ENTITY rows with guids

@@ -20,6 +20,9 @@ import {
   transformLineageResultsToGraph,
   autoDetectLineage,
 } from '../services/lineageService';
+import { isDemoMode, DEMO_LINEAGE_DATA } from '../data/demoData';
+
+const IS_DEMO = isDemoMode();
 
 // Lineage cache with TTL to avoid redundant queries
 const LINEAGE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -72,6 +75,21 @@ export {
  * @returns {Object} Lineage data and controls
  */
 export function useLineageData(executeQuery, isConnected, database, schema, currentQuery = '') {
+  // Demo mode: Return mock lineage data
+  if (IS_DEMO) {
+    return {
+      lineageData: DEMO_LINEAGE_DATA,
+      loading: false,
+      error: null,
+      currentTable: 'FACT_ORDERS',
+      currentEntity: 'FACT_ORDERS',
+      isPending: false,
+      refetch: () => {},
+      fetchForEntity: async () => DEMO_LINEAGE_DATA,
+      fetchFromQuery: async () => DEMO_LINEAGE_DATA,
+    };
+  }
+
   const [lineageData, setLineageData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
