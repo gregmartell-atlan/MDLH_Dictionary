@@ -1,5 +1,8 @@
 import React, { useState, useMemo, useCallback, memo, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronRight, ArrowRight, ZoomIn, ZoomOut, Maximize2, Move } from 'lucide-react';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('LineageRail');
 
 /**
  * LineageRail - OpenLineage-compliant lineage visualization
@@ -276,14 +279,32 @@ const ProcessRow = memo(function ProcessRow({ proc, idx }) {
 
 export function LineageRail({ nodes, edges, title = 'Lineage', metadata, rawProcesses, onNodeClick }) {
   const [showRawData, setShowRawData] = useState(false);
+  const renderStartTime = useRef(performance.now());
+
+  // Log render performance on mount/update
+  useEffect(() => {
+    const renderTime = Math.round(performance.now() - renderStartTime.current);
+    log.info('📊 LineageRail render complete', {
+      renderTimeMs: renderTime,
+      nodeCount: nodes?.length || 0,
+      edgeCount: edges?.length || 0,
+      title
+    });
+  }, [nodes, edges, title]);
 
   // Track if click-through is enabled
   const isClickable = typeof onNodeClick === 'function';
 
-  if (!nodes?.length) return null;
+  if (!nodes?.length) {
+    log.debug('LineageRail - no nodes to render');
+    return null;
+  }
+
+  log.debug('LineageRail - starting render', { nodeCount: nodes.length, edgeCount: edges?.length || 0 });
 
   // Memoize position map for O(1) lookups instead of O(n) finds
   const nodePositions = useMemo(() => {
+    const start = performance.now();
     const posMap = new Map();
     nodes.forEach(n => {
       posMap.set(n.id, {
@@ -291,6 +312,7 @@ export function LineageRail({ nodes, edges, title = 'Lineage', metadata, rawProc
         y: n.row * ROW_HEIGHT + 12
       });
     });
+    log.debug('nodePositions computed', { durationMs: Math.round(performance.now() - start), nodeCount: nodes.length });
     return posMap;
   }, [nodes]);
 

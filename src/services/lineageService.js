@@ -1,21 +1,27 @@
 /**
  * Intelligent Lineage Service
- * 
+ *
  * OpenLineage-compliant implementation for MDLH metadata
- * 
+ *
  * OpenLineage Concepts:
  * - Dataset: A data asset with namespace + name (tables, views, dashboards, reports)
  * - Job: A process that transforms data (ETL, queries, pipelines)
  * - Lineage: Jobs with input[] → output[] Datasets
- * 
+ *
  * This service provides:
  * 1. Entity-agnostic lineage fetching (works with any asset type)
  * 2. Intelligent graph building from PROCESS_ENTITY relationships
  * 3. Interactive exploration support
  * 4. Query-aware lineage detection
- * 
+ *
+ * Performance logging enabled - check console for [MDLH][Lineage] entries
+ *
  * @see https://openlineage.io/docs/spec/
  */
+
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('Lineage');
 
 // Entity tables in MDLH
 const ENTITY_TABLES = [
@@ -162,8 +168,11 @@ export class LineageService {
   async findEntity(entityName) {
     if (!entityName) return null;
 
+    const endTimer = log.time(`findEntity("${entityName}")`);
+
     // Run all entity table queries in PARALLEL
     const queries = ENTITY_TABLES.map(async (entityTable) => {
+      const tableTimer = log.time(`findEntity query: ${entityTable}`);
       try {
         const sql = `
           SELECT guid, name, qualifiedname, typename
@@ -173,6 +182,8 @@ export class LineageService {
         `;
 
         const result = await this.executeQuery(sql);
+        tableTimer({ found: result?.rows?.length > 0, table: entityTable });
+
         if (result?.rows?.length) {
           const row = normalizeRow(result.rows[0], result.columns);
           return {
@@ -185,6 +196,7 @@ export class LineageService {
         }
         return null;
       } catch (err) {
+        tableTimer({ error: err.message, table: entityTable });
         // Table might not exist, continue to next
         return null;
       }
@@ -192,7 +204,9 @@ export class LineageService {
 
     // Wait for all queries and return first non-null result
     const results = await Promise.all(queries);
-    return results.find(r => r !== null) || null;
+    const found = results.find(r => r !== null) || null;
+    endTimer({ found: !!found, checkedTables: ENTITY_TABLES.length });
+    return found;
   }
   
   /**
@@ -243,14 +257,20 @@ export class LineageService {
    * @returns {Promise<Object>} Lineage graph data
    */
   async getLineage(entityNameOrGuid) {
+    const endTimer = log.time(`getLineage("${entityNameOrGuid}")`);
+    log.info('Starting lineage fetch', { entityNameOrGuid });
+
     // First, find the entity
+    const findEntityTimer = log.time('getLineage: find entity');
     let entity = await this.findEntity(entityNameOrGuid);
     if (!entity) {
       // Try as GUID
       entity = await this.findEntityByGuid(entityNameOrGuid);
     }
-    
+    findEntityTimer({ found: !!entity });
+
     if (!entity) {
+      endTimer({ error: 'Entity not found' });
       return {
         error: `Entity "${entityNameOrGuid}" not found in MDLH metadata`,
         nodes: [],
@@ -258,17 +278,26 @@ export class LineageService {
         rawProcesses: [],
       };
     }
-    
+
+    log.info('Entity found', { name: entity.name, guid: entity.guid, type: entity.typeName });
+
     // Fetch upstream and downstream processes in PARALLEL for better performance
     // Upstream: where this entity is in OUTPUTS (something produced this entity)
     // Downstream: where this entity is in INPUTS (something consumes this entity)
+    const processTimer = log.time('getLineage: fetch processes (parallel)');
     const [upstreamProcesses, downstreamProcesses] = await Promise.all([
       this.getProcesses(entity.guid, 'OUTPUTS'),
       this.getProcesses(entity.guid, 'INPUTS'),
     ]);
+    processTimer({ upstream: upstreamProcesses.length, downstream: downstreamProcesses.length });
 
     // Build the graph
-    return this.buildGraph(entity, upstreamProcesses, downstreamProcesses);
+    const graphTimer = log.time('getLineage: build graph');
+    const result = this.buildGraph(entity, upstreamProcesses, downstreamProcesses);
+    graphTimer({ nodes: result.nodes.length, edges: result.edges.length });
+
+    endTimer({ nodes: result.nodes.length, edges: result.edges.length, processes: result.rawProcesses.length });
+    return result;
   }
   
   /**

@@ -8,6 +8,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { createLogger } from '../utils/logger';
 import { TIMEOUTS, CONNECTION_CONFIG } from '../data/constants';
+import { getCachedSamples, cacheSamples, PRESCAN_STRATEGIES } from '../services/prescanService';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const SESSION_KEY = 'snowflake_session';
@@ -1174,7 +1175,7 @@ export function useSampleEntities() {
   /**
    * Fetch sample rows from an entity table
    * @param {string} database - Database name
-   * @param {string} schema - Schema name  
+   * @param {string} schema - Schema name
    * @param {string} tableName - Table to sample from
    * @param {number} limit - Max rows to fetch
    * @returns {Promise<Array>} Sample rows
@@ -1183,14 +1184,16 @@ export function useSampleEntities() {
     const sessionId = getSessionId();
     if (!sessionId) return [];
 
+    const endTimer = sampleLog.time(`fetchSampleRows("${tableName}")`);
+
     try {
       // ALWAYS order by POPULARITYSCORE to get the most relevant/popular entities first
       // This ensures we populate queries with real, high-quality GUIDs
-      const sql = `SELECT * FROM "${database}"."${schema}"."${tableName}" 
-                   WHERE GUID IS NOT NULL 
-                   ORDER BY POPULARITYSCORE DESC NULLS LAST 
+      const sql = `SELECT * FROM "${database}"."${schema}"."${tableName}"
+                   WHERE GUID IS NOT NULL
+                   ORDER BY POPULARITYSCORE DESC NULLS LAST
                    LIMIT ${limit}`;
-      
+
       const response = await fetchWithTimeout(
         `${API_URL}/api/query/execute`,
         {
@@ -1222,12 +1225,18 @@ export function useSampleEntities() {
         10000
       );
       
-      if (!resultsRes.ok) return [];
-      
+      if (!resultsRes.ok) {
+        endTimer({ status: 'results-failed', table: tableName });
+        return [];
+      }
+
       const resultsData = await resultsRes.json();
-      return resultsData.rows || [];
+      const rows = resultsData.rows || [];
+      endTimer({ status: 'success', table: tableName, rowCount: rows.length });
+      return rows;
     } catch (err) {
       sampleLog.debug(`Failed to sample ${tableName}`, { error: err.message });
+      endTimer({ status: 'error', table: tableName, error: err.message });
       return [];
     }
   }, []);
@@ -1263,20 +1272,41 @@ export function useSampleEntities() {
   /**
    * Load sample entities from all discovered entity tables
    * SMART: Uses actual discovered tables, not hardcoded names
+   * OPTIMIZED: Checks sessionStorage cache first for faster loads
    * @param {string} database - Database name (e.g., FIELD_METADATA)
    * @param {string} schema - Schema name (e.g., PUBLIC)
    * @param {Set<string>} discoveredTables - Set of discovered table names
+   * @param {Object} options - { useCache: true, cacheType: 'session' }
    */
-  const loadSamples = useCallback(async (database, schema, discoveredTables) => {
+  const loadSamples = useCallback(async (database, schema, discoveredTables, options = {}) => {
+    const { useCache = true, cacheType = 'session' } = options;
+
     if (!database || !schema || !discoveredTables || discoveredTables.size === 0) {
       sampleLog.debug('loadSamples() - no tables to sample');
       return;
     }
 
-    sampleLog.info('loadSamples() - fetching sample entities', { 
-      database, 
-      schema, 
-      tableCount: discoveredTables.size 
+    // Check cache first for faster loads
+    if (useCache) {
+      const cached = getCachedSamples(cacheType, database, schema);
+      if (cached) {
+        sampleLog.info('⚡ loadSamples() - CACHE HIT, skipping fetch', { database, schema });
+        setSamples({
+          ...cached,
+          loaded: true,
+          loading: false,
+          fromCache: true,
+        });
+        return;
+      }
+    }
+
+    const endTimer = sampleLog.time('loadSamples() - TOTAL');
+    sampleLog.info('🚀 loadSamples() - START fetching sample entities', {
+      database,
+      schema,
+      tableCount: discoveredTables.size,
+      cacheEnabled: useCache
     });
 
     setSamples(prev => ({ ...prev, loading: true }));
@@ -1346,7 +1376,7 @@ export function useSampleEntities() {
       })
     );
 
-    setSamples({
+    const samplesData = {
       tables: results.tables || [],
       tablesTable: results.tablesTable || null,
       columns: results.columns || [],
@@ -1358,18 +1388,39 @@ export function useSampleEntities() {
       glossaries: results.glossaries || [],
       glossariesTable: results.glossariesTable || null,
       loaded: true,
-      loading: false
+      loading: false,
+      fromCache: false,
+    };
+
+    setSamples(samplesData);
+
+    // Cache the results for faster subsequent loads
+    if (useCache) {
+      cacheSamples(cacheType, database, schema, samplesData);
+    }
+
+    const totalSamples = (results.tables?.length || 0) + (results.columns?.length || 0) +
+                         (results.processes?.length || 0) + (results.terms?.length || 0) +
+                         (results.glossaries?.length || 0);
+
+    endTimer({
+      totalSamples,
+      tables: results.tables?.length || 0,
+      columns: results.columns?.length || 0,
+      processes: results.processes?.length || 0,
+      terms: results.terms?.length || 0,
+      glossaries: results.glossaries?.length || 0,
+      cached: useCache
     });
 
-    sampleLog.info('loadSamples() - complete', {
-      tables: results.tables?.length || 0,
+    sampleLog.info('✅ loadSamples() - COMPLETE', {
+      totalSamples,
       tablesTable: results.tablesTable,
-      columns: results.columns?.length || 0,
       columnsTable: results.columnsTable,
-      processes: results.processes?.length || 0,
       processesTable: results.processesTable,
-      terms: results.terms?.length || 0,
-      glossaries: results.glossaries?.length || 0
+      termsTable: results.termsTable,
+      glossariesTable: results.glossariesTable,
+      cached: useCache
     });
 
   }, [fetchSampleRows, findMatchingTable]);
