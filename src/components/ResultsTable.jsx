@@ -7,7 +7,7 @@
  * - Early return in detectMetadataResults
  */
 
-import React, { useMemo, useState, useCallback, memo } from 'react';
+import React, { useMemo, useState, useCallback, memo, useRef, useDeferredValue } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -19,6 +19,7 @@ import {
   ChevronLeft, ChevronRight, Loader2, AlertCircle, Search, Wand2, Play,
   Table as TableIcon, Plus, GitBranch, ChevronDown, ArrowRight
 } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { EntityRowActions, isEntityRow, buildEntityFromRow } from './EntityActions';
 import { isLineageQueryResult, transformLineageResultsToGraph } from '../services/lineageService';
 import { LineageRail } from './lineage/LineageRail';
@@ -220,9 +221,12 @@ const TableRow = memo(function TableRow({ row, rowIndex, isSelected, onRowSelect
   );
 });
 
-function ResultsTableInner({ 
-  results, 
-  loading, 
+// Row height constant for virtualization
+const ROW_HEIGHT = 35;
+
+function ResultsTableInner({
+  results,
+  loading,
   error,
   onPageChange,
   onExport,
@@ -242,6 +246,14 @@ function ResultsTableInner({
 }) {
   const [sorting, setSorting] = useState([]);
   const [copiedValue, setCopiedValue] = useState(null);
+
+  // Ref for virtual scroll container
+  const tableContainerRef = useRef(null);
+
+  // Use useDeferredValue for large datasets - keeps UI responsive during updates
+  // This defers updates to result data so typing/interactions remain snappy
+  const deferredResults = useDeferredValue(results);
+  const isStale = results !== deferredResults;
   
   // Parse error to find missing object
   const missingObject = useMemo(() => parseErrorForMissingTable(error), [error]);
@@ -412,7 +424,22 @@ function ResultsTableInner({
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
-  
+
+  // Get all rows for virtualization
+  const { rows: tableRows } = table.getRowModel();
+
+  // TanStack Virtual - only render visible rows for performance
+  // Critical for 1000+ row datasets - renders only visible rows + overscan buffer
+  const rowVirtualizer = useVirtualizer({
+    count: tableRows.length,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 10, // Render 10 extra rows above/below viewport
+  });
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const totalSize = rowVirtualizer.getTotalSize();
+
   const exportToCSV = () => {
     if (!results?.columns || !results?.rows) return;
     
@@ -602,10 +629,14 @@ function ResultsTableInner({
         </div>
       )}
       
-      {/* Table */}
-      <div className="flex-1 overflow-auto">
+      {/* Table with virtualization */}
+      <div
+        ref={tableContainerRef}
+        className={`flex-1 overflow-auto ${isStale ? 'opacity-70' : ''}`}
+        style={{ contain: 'strict' }}
+      >
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 sticky top-0">
+          <thead className="bg-gray-50 sticky top-0 z-10">
             {table.getHeaderGroups().map(headerGroup => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map(header => (
@@ -621,16 +652,37 @@ function ResultsTableInner({
               </tr>
             ))}
           </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row, rowIndex) => (
-              <TableRow
-                key={row.id}
-                row={row}
-                rowIndex={rowIndex}
-                isSelected={selectedRowIndex === rowIndex}
-                onRowSelect={onRowSelect}
+          <tbody
+            style={{
+              height: `${totalSize}px`,
+              position: 'relative',
+            }}
+          >
+            {/* Spacer for rows before viewport */}
+            {virtualRows.length > 0 && virtualRows[0].start > 0 && (
+              <tr style={{ height: `${virtualRows[0].start}px` }} />
+            )}
+            {/* Render only visible rows */}
+            {virtualRows.map(virtualRow => {
+              const row = tableRows[virtualRow.index];
+              return (
+                <TableRow
+                  key={row.id}
+                  row={row}
+                  rowIndex={virtualRow.index}
+                  isSelected={selectedRowIndex === virtualRow.index}
+                  onRowSelect={onRowSelect}
+                />
+              );
+            })}
+            {/* Spacer for rows after viewport */}
+            {virtualRows.length > 0 && (
+              <tr
+                style={{
+                  height: `${totalSize - (virtualRows[virtualRows.length - 1]?.end || 0)}px`,
+                }}
               />
-            ))}
+            )}
           </tbody>
         </table>
       </div>

@@ -10,7 +10,7 @@
  * @see https://openlineage.io/docs/spec/
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useTransition } from 'react';
 import {
   LineageService,
   extractEntitiesFromSQL,
@@ -76,7 +76,11 @@ export function useLineageData(executeQuery, isConnected, database, schema, curr
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [currentEntity, setCurrentEntity] = useState(null);
-  
+
+  // React 18 useTransition for non-blocking UI updates
+  // isPending indicates if there's a pending non-blocking update
+  const [isPending, startTransition] = useTransition();
+
   // Debounce query changes
   const debounceRef = useRef(null);
   const lastQueryRef = useRef('');
@@ -100,9 +104,12 @@ export function useLineageData(executeQuery, isConnected, database, schema, curr
     if (!forceRefresh) {
       const cached = getCachedLineage(entityNameOrGuid);
       if (cached) {
-        setCurrentEntity(entityNameOrGuid);
-        setLineageData(cached);
-        setError(null);
+        // Use startTransition for non-blocking cache updates
+        startTransition(() => {
+          setCurrentEntity(entityNameOrGuid);
+          setLineageData(cached);
+          setError(null);
+        });
         return;
       }
     }
@@ -113,27 +120,31 @@ export function useLineageData(executeQuery, isConnected, database, schema, curr
     try {
       const result = await lineageService.getLineage(entityNameOrGuid);
 
-      if (result.error) {
-        setError(result.error);
-        setLineageData(null);
-      } else {
-        // Cache the result for future use
-        setCachedLineage(entityNameOrGuid, result);
+      // Use startTransition for non-blocking state updates
+      // This prevents UI freezing during complex graph rendering
+      startTransition(() => {
+        if (result.error) {
+          setError(result.error);
+          setLineageData(null);
+        } else {
+          // Cache the result for future use
+          setCachedLineage(entityNameOrGuid, result);
 
-        // Set error if no lineage found but entity exists
-        if (result.nodes?.length === 1 && result.rawProcesses?.length === 0) {
-          setError(`No lineage data found for "${entityNameOrGuid}". This asset may not have recorded lineage.`);
+          // Set error if no lineage found but entity exists
+          if (result.nodes?.length === 1 && result.rawProcesses?.length === 0) {
+            setError(`No lineage data found for "${entityNameOrGuid}". This asset may not have recorded lineage.`);
+          }
+
+          setLineageData(result);
         }
-
-        setLineageData(result);
-      }
+      });
     } catch (err) {
       setError(err.message || 'Failed to fetch lineage');
       setLineageData(null);
     } finally {
       setLoading(false);
     }
-  }, [isConnected, lineageService]);
+  }, [isConnected, lineageService, startTransition]);
 
   /**
    * Fetch lineage based on SQL query (auto-detect entities)
@@ -263,6 +274,9 @@ export function useLineageData(executeQuery, isConnected, database, schema, curr
     error,
     currentTable: currentEntity,
     currentEntity,
+    // React 18 concurrent feature: isPending indicates non-blocking update in progress
+    // When true, show skeleton/placeholder while graph is being prepared
+    isPending,
     // Methods
     refetch: () => {
       // Force refresh bypasses cache

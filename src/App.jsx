@@ -1,20 +1,27 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { Download, Copy, Check, Code2, X, Search, Command, Play, Loader2, Sparkles, ArrowLeft, Database, Snowflake, Wifi, WifiOff, ChevronDown, Zap, Layers } from 'lucide-react';
 import ErrorBoundary from './components/ErrorBoundary';
-import QueryEditor from './components/QueryEditor';
-import ShowMyWork from './components/ShowMyWork';
-import FlyoutQueryEditor from './components/FlyoutQueryEditor';
+// Core components loaded immediately
 import ConnectionModal from './components/ConnectionModal';
 import QueryPanelShell from './components/QueryPanelShell';
-import TestQueryLayout from './components/TestQueryLayout';
-import QueryLibraryLayout from './components/QueryLibraryLayout';
-import RecommendedQueries from './components/RecommendedQueries';
 import CategorySidebar from './components/CategorySidebar';
 import { CommandPalette } from './components/search/CommandPalette';
 import { Callout } from './components/ui/Callout';
 import { TabbedCodeCard } from './components/ui/TabbedCodeCard';
-import { LineageRail } from './components/lineage/LineageRail';
-import { LineagePanel } from './components/lineage/LineagePanel';
+
+// Lazy-loaded components - reduces initial bundle size
+// These are loaded on-demand when first needed
+const QueryEditor = lazy(() => import('./components/QueryEditor'));
+const ShowMyWork = lazy(() => import('./components/ShowMyWork'));
+const FlyoutQueryEditor = lazy(() => import('./components/FlyoutQueryEditor'));
+const TestQueryLayout = lazy(() => import('./components/TestQueryLayout'));
+const QueryLibraryLayout = lazy(() => import('./components/QueryLibraryLayout'));
+const RecommendedQueries = lazy(() => import('./components/RecommendedQueries'));
+
+// Lineage components - heavy with graph rendering, good candidates for lazy loading
+const LineageRail = lazy(() => import('./components/lineage/LineageRail').then(m => ({ default: m.LineageRail })));
+const LineagePanel = lazy(() => import('./components/lineage/LineagePanel').then(m => ({ default: m.LineagePanel })));
+
 import { useConnection, useSampleEntities, useQuery } from './hooks/useSnowflake';
 import { useLineageData } from './hooks/useLineageData';
 import { createSnowflakeLineageService } from './services/lineageService';
@@ -22,6 +29,14 @@ import { createLogger } from './utils/logger';
 import { buildSafeFQN, escapeStringValue } from './utils/queryHelpers';
 import { SystemConfigProvider } from './context/SystemConfigContext';
 import { useBackendInstanceGuard } from './hooks/useBackendInstanceGuard';
+
+// Loading fallback component for Suspense
+const LoadingFallback = ({ message = 'Loading...' }) => (
+  <div className="flex items-center justify-center p-8">
+    <Loader2 className="w-6 h-6 text-blue-500 animate-spin mr-2" />
+    <span className="text-gray-500">{message}</span>
+  </div>
+);
 
 // Scoped loggers for App
 const appLog = createLogger('App');
@@ -1890,17 +1905,19 @@ export default function App() {
 
         {/* Conditional Content: Query Editor or Data Table */}
         {activeTab === 'editor' ? (
-          <QueryEditor 
-            initialQuery={editorQuery} 
-            onOpenConnectionModal={() => setShowConnectionModal(true)}
-            globalDatabase={selectedMDLHDatabase}
-            globalSchema={selectedMDLHSchema}
-            onDatabaseChange={setSelectedMDLHDatabase}
-            onSchemaChange={setSelectedMDLHSchema}
-            discoveredTables={discoveredTables}
-            sampleEntities={sampleEntities}
-            onOpenLineagePanel={handleOpenLineagePanel}
-          />
+          <Suspense fallback={<LoadingFallback message="Loading query editor..." />}>
+            <QueryEditor
+              initialQuery={editorQuery}
+              onOpenConnectionModal={() => setShowConnectionModal(true)}
+              globalDatabase={selectedMDLHDatabase}
+              globalSchema={selectedMDLHSchema}
+              onDatabaseChange={setSelectedMDLHDatabase}
+              onSchemaChange={setSelectedMDLHSchema}
+              discoveredTables={discoveredTables}
+              sampleEntities={sampleEntities}
+              onOpenLineagePanel={handleOpenLineagePanel}
+            />
+          </Suspense>
         ) : (
           <>
             {/* Filter bar - availability toggle */}
@@ -2046,12 +2063,14 @@ export default function App() {
 
                                         {preview?.status === 'ready' && preview.graph?.nodes?.length > 0 && (
                                           <div className="border border-gray-100 rounded-lg overflow-hidden">
-                                            <LineageRail
-                                              nodes={preview.graph.nodes}
-                                              edges={preview.graph.edges}
-                                              metadata={preview.graph.metadata}
-                                              title="Lineage"
-                                            />
+                                            <Suspense fallback={<LoadingFallback message="Loading lineage..." />}>
+                                              <LineageRail
+                                                nodes={preview.graph.nodes}
+                                                edges={preview.graph.edges}
+                                                metadata={preview.graph.metadata}
+                                                title="Lineage"
+                                              />
+                                            </Suspense>
                                           </div>
                                         )}
 
@@ -2228,24 +2247,26 @@ export default function App() {
           </button>
         </header>
         <div className="flex-1 overflow-y-auto">
-          <LineagePanel
-            isConnected={isConnected}
-            database={selectedMDLHDatabase || DEFAULT_DATABASE}
-            schema={selectedMDLHSchema || DEFAULT_SCHEMA}
-            editorQuery={editorQuery}
-            lineageData={dynamicLineage}
-            loading={lineageLoading}
-            error={lineageError}
-            currentTable={selectedLineageEntity?.NAME || selectedLineageEntity?.name || lineageCurrentTable}
-            selectedEntity={selectedLineageEntity}
-            onRefresh={refetchLineage}
-            onNodeClick={handleLineageNodeClick}
-            lineageSource={lineageSource}
-            onSourceChange={handleLineageSourceChange}
-            snowflakeLineageData={snowflakeLineageData}
-            snowflakeLoading={snowflakeLineageLoading}
-            snowflakeError={snowflakeLineageError}
-          />
+          <Suspense fallback={<LoadingFallback message="Loading lineage panel..." />}>
+            <LineagePanel
+              isConnected={isConnected}
+              database={selectedMDLHDatabase || DEFAULT_DATABASE}
+              schema={selectedMDLHSchema || DEFAULT_SCHEMA}
+              editorQuery={editorQuery}
+              lineageData={dynamicLineage}
+              loading={lineageLoading}
+              error={lineageError}
+              currentTable={selectedLineageEntity?.NAME || selectedLineageEntity?.name || lineageCurrentTable}
+              selectedEntity={selectedLineageEntity}
+              onRefresh={refetchLineage}
+              onNodeClick={handleLineageNodeClick}
+              lineageSource={lineageSource}
+              onSourceChange={handleLineageSourceChange}
+              snowflakeLineageData={snowflakeLineageData}
+              snowflakeLoading={snowflakeLineageLoading}
+              snowflakeError={snowflakeLineageError}
+            />
+          </Suspense>
         </div>
       </QueryPanelShell>
 
@@ -2258,28 +2279,31 @@ export default function App() {
       />
       
       {/* Show My Work Modal */}
-      <ShowMyWork
-        isOpen={!!showMyWorkQuery}
-        onClose={() => {
-          setShowMyWorkQuery(null);
-          setShowMyWorkValidation(null);
-        }}
-        query={showMyWorkQuery}
-        validationResult={showMyWorkValidation}
-        onRunQuery={(sql) => {
-          openInEditor(sql);
-          setShowMyWorkQuery(null);
-          setShowMyWorkValidation(null);
-        }}
-        onRunSuggestedQuery={(sql) => {
-          openInEditor(sql);
-          setShowMyWorkQuery(null);
-          setShowMyWorkValidation(null);
-        }}
-      />
-      
+      <Suspense fallback={null}>
+        <ShowMyWork
+          isOpen={!!showMyWorkQuery}
+          onClose={() => {
+            setShowMyWorkQuery(null);
+            setShowMyWorkValidation(null);
+          }}
+          query={showMyWorkQuery}
+          validationResult={showMyWorkValidation}
+          onRunQuery={(sql) => {
+            openInEditor(sql);
+            setShowMyWorkQuery(null);
+            setShowMyWorkValidation(null);
+          }}
+          onRunSuggestedQuery={(sql) => {
+            openInEditor(sql);
+            setShowMyWorkQuery(null);
+            setShowMyWorkValidation(null);
+          }}
+        />
+      </Suspense>
+
       {/* Recommended Queries Panel */}
-      <RecommendedQueries
+      <Suspense fallback={null}>
+        <RecommendedQueries
         entity={selectedEntity}
         entityContext={{
           database: selectedMDLHDatabase,
@@ -2302,7 +2326,8 @@ export default function App() {
         availableTables={[...discoveredTables]}
         sampleEntities={sampleEntities}
       />
-      
+      </Suspense>
+
       {/* Command Palette (⌘K / Ctrl+K) */}
       <CommandPalette open={isCmdOpen} onOpenChange={setIsCmdOpen} />
     </div>
