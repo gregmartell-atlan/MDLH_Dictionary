@@ -1,1167 +1,301 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command, Terminal, Play, Loader2, Sparkles, Eye } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Download, Copy, Check, Code2, X, Search, Command, Play, Loader2, Sparkles, Eye, FlaskConical, ArrowLeft, Database, Snowflake, Settings, Wifi, WifiOff, ChevronDown, Zap, Layers, GitBranch } from 'lucide-react';
 import QueryEditor from './components/QueryEditor';
+import EntityBrowser from './components/EntityBrowser';
+import DiscoveryHome from './components/DiscoveryHome';
+import DiscoveryCards from './components/DiscoveryCards';
+import EntityPanel from './components/EntityPanel';
 import ShowMyWork from './components/ShowMyWork';
+import { EntityPanelProvider } from './context/EntityPanelContext';
+import ConnectionModal from './components/ConnectionModal';
+import QueryPanelShell from './components/QueryPanelShell';
+import TestQueryLayout from './components/TestQueryLayout';
+import QueryLibraryLayout from './components/QueryLibraryLayout';
+import RecommendedQueries from './components/RecommendedQueries';
+import { CommandPalette } from './components/search/CommandPalette';
+import { Callout } from './components/ui/Callout';
+import { TabbedCodeCard } from './components/ui/TabbedCodeCard';
+import { LineageRail } from './components/lineage/LineageRail';
+import { LineagePanel } from './components/lineage/LineagePanel';
+import { useConnection, useSampleEntities, useQuery } from './hooks/useSnowflake';
+import { useLineageData } from './hooks/useLineageData';
+import { createLogger } from './utils/logger';
+import { buildSafeFQN, escapeStringValue } from './utils/queryHelpers';
+import { SystemConfigProvider } from './context/SystemConfigContext';
+import { useBackendInstanceGuard } from './hooks/useBackendInstanceGuard';
 
-// API base URL for fetching metadata
+// Scoped loggers for App
+const appLog = createLogger('App');
+const uiLog = createLogger('UI');
+
+// Import data and utilities from extracted modules
+import { entities as data } from './data/entities';
+import { exampleQueries as staticExampleQueries, mergedExampleQueries as staticMergedQueries } from './data/exampleQueries';
+import { 
+  transformExampleQueries, 
+  filterQueriesByAvailability,
+  validateQueryTables,
+  getSuggestedAlternatives 
+} from './utils/dynamicExampleQueries';
+import { 
+  tabs, 
+  MDLH_DATABASES, 
+  MDLH_SCHEMAS, 
+  columns, 
+  colHeaders,
+  selectDropdownStyles,
+  DEFAULT_DATABASE,
+  DEFAULT_SCHEMA
+} from './data/constants';
+import {
+  discoverMDLHTables,
+  findAlternativeTable,
+  fixQueryForAvailableTables,
+  tableExists,
+  extractTableFromQuery,
+  getEntityTablesForCategory,
+  fetchTableColumns
+} from './utils/tableDiscovery';
+import { preValidateAllQueries } from './utils/queryHelpers';
+
+// Build the 30-day recursive lineage query for a specific fully-qualified object
+const buildLineagePreviewQuery = (targetFqn) => {
+  const safeTarget = escapeStringValue(targetFqn);
+  return `
+WITH RECURSIVE lineage_edges AS (
+    SELECT DISTINCT
+        src.value:objectName::STRING AS source_object,
+        tgt.value:objectName::STRING AS target_object
+    FROM SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY,
+        LATERAL FLATTEN(input => direct_objects_accessed) src,
+        LATERAL FLATTEN(input => objects_modified) tgt
+    WHERE src.value:objectName::STRING != tgt.value:objectName::STRING
+      AND query_start_time >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+),
+lineage_tree AS (
+    SELECT source_object, target_object, 1 AS depth
+    FROM lineage_edges
+    WHERE target_object = ${safeTarget}
+    
+    UNION ALL
+    
+    SELECT e.source_object, e.target_object, lt.depth + 1
+    FROM lineage_edges e
+    INNER JOIN lineage_tree lt ON e.target_object = lt.source_object
+    WHERE lt.depth < 10
+)
+SELECT source_object, target_object, MIN(depth) AS depth
+FROM lineage_tree
+GROUP BY source_object, target_object
+ORDER BY depth, target_object, source_object;
+  `.trim();
+};
+
+// Normalize rows (arrays or objects) to objects keyed by column names
+const normalizeResultRows = (rows, columns = []) => {
+  if (!Array.isArray(rows)) return [];
+  if (!Array.isArray(columns) || columns.length === 0) {
+    return rows.map((r) => (Array.isArray(r) ? {} : r));
+  }
+  return rows.map((row) => {
+    if (!Array.isArray(row)) return row;
+    return columns.reduce((acc, col, idx) => ({ ...acc, [col]: row[idx] }), {});
+  });
+};
+
+// Build a lightweight graph for LineageRail from the recursive lineage result set
+const buildLineagePreviewGraph = (result, focusFqn) => {
+  const rows = normalizeResultRows(result?.rows || [], result?.columns || []);
+  if (rows.length === 0) {
+    return { nodes: [], edges: [], metadata: { entityName: focusFqn } };
+  }
+
+  const maxDepth = Math.max(
+    ...rows.map((r) => Number(r.DEPTH || r.depth || 1)),
+    1
+  );
+  const maxColumns = 3; // compress wider trees into three rails
+  const focusCol = Math.min(maxDepth, maxColumns - 1);
+  const columnRows = {};
+  const nodeIdMap = new Map();
+  const nodes = [];
+  const edges = [];
+
+  const allocRow = (col) => {
+    columnRows[col] = columnRows[col] || 0;
+    return columnRows[col]++;
+  };
+
+  const addNode = (label, column, opts = {}) => {
+    const key = label?.toUpperCase() || label || '';
+    if (nodeIdMap.has(key)) return nodeIdMap.get(key);
+    const id = `node_${nodeIdMap.size}`;
+    const row = allocRow(column);
+    nodes.push({
+      id,
+      label,
+      column,
+      row,
+      type: opts.type || 'dataset',
+      typeName: opts.typeName || 'Table',
+      isMain: opts.isMain || false,
+    });
+    nodeIdMap.set(key, id);
+    return id;
+  };
+
+  // Main/focus node
+  addNode(focusFqn, focusCol, { isMain: true, typeName: 'Table' });
+
+  rows.forEach((raw) => {
+    const source = raw.SOURCE_OBJECT || raw.source_object;
+    const target = raw.TARGET_OBJECT || raw.target_object;
+    const depth = Number(raw.DEPTH || raw.depth || 1);
+
+    if (!source || !target) return;
+
+    const unclampedTargetCol = focusCol - (depth - 1);
+    const targetCol = Math.max(0, unclampedTargetCol);
+    const sourceCol = Math.max(0, targetCol - 1);
+
+    const targetId = addNode(target, targetCol, { typeName: 'Asset' });
+    const sourceId = addNode(source, sourceCol, { typeName: 'Asset' });
+
+    edges.push({ from: sourceId, to: targetId });
+  });
+
+  return {
+    nodes,
+    edges,
+    metadata: {
+      entityName: focusFqn,
+      upstreamCount: nodes.filter((n) => !n.isMain).length,
+      downstreamCount: 0,
+    },
+  };
+};
+
+// API base URL for backend calls
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// Cache for table columns (persisted during session)
-const columnCache = new Map();
+// Note: tabs, data, exampleQueries, columns, colHeaders, MDLH_DATABASES, MDLH_SCHEMAS 
+// are now imported from ./data/* modules
 
-// Cache for discovered tables (which tables actually exist)
-const discoveredTablesCache = {
-  tables: new Set(),
-  database: null,
-  schema: null,
-  lastDiscovery: null,
-};
+// Legacy local definitions removed - now using imports from data modules
+// See: src/data/entities.js, src/data/exampleQueries.js, src/data/constants.js
 
-// Discover which MDLH entity tables exist in the connected database
-async function discoverMDLHTables(database, schema) {
-  // Return cached if same context, has results, and is recent (within 5 minutes)
-  const cacheKey = `${database}.${schema}`;
-  const fiveMinutes = 5 * 60 * 1000;
-  if (
-    discoveredTablesCache.database === database &&
-    discoveredTablesCache.schema === schema &&
-    discoveredTablesCache.lastDiscovery &&
-    discoveredTablesCache.tables.size > 0 && // Only use cache if it has results
-    Date.now() - discoveredTablesCache.lastDiscovery < fiveMinutes
-  ) {
-    return discoveredTablesCache.tables;
-  }
-  
-  try {
-    const sessionData = sessionStorage.getItem('snowflake_session');
-    const sessionId = sessionData ? JSON.parse(sessionData).sessionId : null;
-    
-    if (!sessionId) {
-      console.log('No session - cannot discover tables');
-      return new Set();
-    }
-    
-    // Force refresh if previous attempt returned empty
-    const forceRefresh = discoveredTablesCache.tables.size === 0;
-    
-    // Fetch all tables in the schema
-    const response = await fetch(
-      `${API_BASE_URL}/api/metadata/tables?database=${database}&schema=${schema}&refresh=${forceRefresh}`,
-      { headers: { 'X-Session-ID': sessionId } }
-    );
-    
-    if (response.ok) {
-      const tables = await response.json();
-      const tableNames = new Set(tables.map(t => t.name?.toUpperCase() || t.toUpperCase()));
-      
-      // Update cache
-      discoveredTablesCache.tables = tableNames;
-      discoveredTablesCache.database = database;
-      discoveredTablesCache.schema = schema;
-      discoveredTablesCache.lastDiscovery = Date.now();
-      
-      console.log(`[Discovery] Found ${tableNames.size} tables in ${database}.${schema}`);
-      return tableNames;
-    }
-  } catch (err) {
-    console.error('Failed to discover tables:', err);
-  }
-  
-  return new Set();
+// ---------------------------------------------------------------------------
+// COMPONENT DEFINITIONS START HERE  
+// ---------------------------------------------------------------------------
+
+// Atlan Logo Icon
+function AtlanIcon({ size = 24, className = "" }) {
+  return (
+    <svg 
+      viewBox="0 0 32 32" 
+      width={size} 
+      height={size} 
+      className={className}
+    >
+      {/* Atlan "A" logomark */}
+      <defs>
+        <linearGradient id="atlan-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#3366FF" />
+          <stop offset="100%" stopColor="#5B8DEF" />
+        </linearGradient>
+      </defs>
+      <rect width="32" height="32" rx="6" fill="url(#atlan-gradient)" />
+      <path 
+        d="M16 6L8 26h4l1.5-4h5l1.5 4h4L16 6zm0 6l2 6h-4l2-6z" 
+        fill="white"
+      />
+    </svg>
+  );
 }
 
-// Find alternative table name if expected one doesn't exist
-function findAlternativeTable(expectedTable, discoveredTables) {
-  if (!expectedTable || discoveredTables.size === 0) return null;
+// Global connection status indicator - DuckDB style: clean, minimal
+function ConnectionIndicator({ status, loading, onClick, database, schema }) {
+  const isConnected = status?.connected;
+  const isUnreachable = status?.unreachable;
   
-  const expected = expectedTable.toUpperCase();
-  
-  // If exact match exists, return it
-  if (discoveredTables.has(expected)) return expected;
-  
-  // Try common variations
-  const variations = [
-    expected,
-    expected.replace('_ENTITY', ''),  // TABLE_ENTITY -> TABLE
-    expected + '_ENTITY',              // TABLE -> TABLE_ENTITY
-    expected.replace('ATLAS', ''),     // ATLASGLOSSARY -> GLOSSARY
-    'ATLAS' + expected,                // GLOSSARY -> ATLASGLOSSARY
-  ];
-  
-  for (const variation of variations) {
-    if (discoveredTables.has(variation)) return variation;
-  }
-  
-  // Try fuzzy match - find tables containing the key part
-  const keyPart = expected.replace('_ENTITY', '').replace('ATLAS', '');
-  for (const table of discoveredTables) {
-    if (table.includes(keyPart) && table.endsWith('_ENTITY')) {
-      return table;
-    }
-  }
-  
-  return null;
-}
-
-// Fix a query to use available tables
-function fixQueryForAvailableTables(sql, discoveredTables, database, schema) {
-  if (!sql || discoveredTables.size === 0) return { sql, fixed: false, changes: [] };
-  
-  const changes = [];
-  let fixedSql = sql;
-  
-  // Find all table references in the query (FROM/JOIN clauses)
-  const tablePattern = /(?:FROM|JOIN)\s+(?:[\w.]+\.)?(\w+_ENTITY)/gi;
-  let match;
-  
-  while ((match = tablePattern.exec(sql)) !== null) {
-    const originalTable = match[1].toUpperCase();
-    
-    if (!discoveredTables.has(originalTable)) {
-      const alternative = findAlternativeTable(originalTable, discoveredTables);
-      
-      if (alternative && alternative !== originalTable) {
-        // Replace the table name in the query
-        const fullRef = `${database}.${schema}.${alternative}`;
-        fixedSql = fixedSql.replace(
-          new RegExp(`(FROM|JOIN)\\s+(?:[\\w.]+\\.)?${match[1]}`, 'gi'),
-          `$1 ${fullRef}`
-        );
-        changes.push({ from: originalTable, to: alternative });
-      }
-    }
-  }
-  
-  return {
-    sql: fixedSql,
-    fixed: changes.length > 0,
-    changes
+  const getState = () => {
+    if (isUnreachable) return 'unreachable';
+    if (loading) return 'connecting';
+    if (isConnected) return 'connected';
+    return 'disconnected';
   };
-}
-
-// Get all entity tables referenced in a category's queries and data
-function getEntityTablesForCategory(category, dataForCategory, queriesForCategory) {
-  const tables = new Set();
+  const state = getState();
   
-  // From entity data
-  if (dataForCategory) {
-    dataForCategory.forEach(row => {
-      if (row.table && row.table !== '(abstract)') {
-        tables.add(row.table.toUpperCase());
+  // DuckDB-style: simple dot indicator + text
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+      title={
+        state === 'disconnected' ? 'Click to connect to Snowflake' :
+        state === 'connecting' ? 'Establishing connection...' :
+        state === 'connected' ? 'Connected – Click to manage' :
+        'API Unreachable – Click to retry'
       }
-    });
-  }
-  
-  // From queries
-  if (queriesForCategory) {
-    queriesForCategory.forEach(q => {
-      const match = q.query?.match(/FROM\s+(?:[\w.]+\.)?(\w+_ENTITY)/i);
-      if (match) tables.add(match[1].toUpperCase());
-    });
-  }
-  
-  return tables;
-}
-
-// Pre-validate all queries and return validation map
-function preValidateAllQueries(allQueries, discoveredTables, database, schema) {
-  const validationMap = new Map();
-  
-  Object.entries(allQueries).forEach(([category, queries]) => {
-    queries.forEach((q, index) => {
-      const queryId = `${category}-${index}`;
-      const tableName = extractTableFromQuery(q.query);
+    >
+      {/* Status dot */}
+      {state === 'connecting' ? (
+        <Loader2 size={12} className="animate-spin text-gray-400" />
+      ) : (
+        <span className={`w-2 h-2 rounded-full ${
+          state === 'connected' ? 'bg-emerald-500' :
+          state === 'unreachable' ? 'bg-red-500' :
+          'bg-gray-300'
+        }`} />
+      )}
       
-      if (!tableName) {
-        validationMap.set(queryId, { valid: null, tableName: null });
-        return;
-      }
+      {/* Label */}
+      <span className="hidden sm:inline">
+        {state === 'disconnected' && 'Connect'}
+        {state === 'connecting' && 'Connecting...'}
+        {state === 'connected' && (
+          <span className="font-mono text-xs">
+            {database || status?.database || 'DB'}.{schema || status?.schema || 'PUBLIC'}
+          </span>
+        )}
+        {state === 'unreachable' && 'Offline'}
+      </span>
       
-      const tableExists = discoveredTables.has(tableName.toUpperCase());
-      
-      if (tableExists) {
-        validationMap.set(queryId, { 
-          valid: true, 
-          tableName,
-          originalQuery: q.query
-        });
-      } else {
-        // Try to fix the query
-        const fixed = fixQueryForAvailableTables(q.query, discoveredTables, database, schema);
-        
-        if (fixed.fixed) {
-          validationMap.set(queryId, {
-            valid: true,
-            tableName: fixed.changes[0]?.to,
-            originalQuery: q.query,
-            fixedQuery: fixed.sql,
-            changes: fixed.changes,
-            autoFixed: true
-          });
-        } else {
-          validationMap.set(queryId, {
-            valid: false,
-            tableName,
-            originalQuery: q.query,
-            error: `Table ${tableName} not found in ${database}.${schema}`
-          });
-        }
-      }
-    });
-  });
-  
-  return validationMap;
+      <Snowflake size={14} className="text-gray-400" />
+    </button>
+  );
 }
 
-// Validate a query by running it with LIMIT 0 (fast check)
-async function validateQuery(sql, database, schema) {
-  try {
-    const sessionData = sessionStorage.getItem('snowflake_session');
-    const sessionId = sessionData ? JSON.parse(sessionData).sessionId : null;
-    
-    if (!sessionId) return { valid: false, error: 'Not connected' };
-    
-    // Modify query to add LIMIT 0 for fast validation (no data transfer)
-    let testSql = sql.trim();
-    // Remove existing LIMIT clause and add LIMIT 0
-    testSql = testSql.replace(/LIMIT\s+\d+\s*;?\s*$/i, '');
-    testSql = testSql.replace(/;?\s*$/, '') + ' LIMIT 0;';
-    
-    const response = await fetch(`${API_BASE_URL}/api/query/execute`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Session-ID': sessionId,
-      },
-      body: JSON.stringify({
-        sql: testSql,
-        database,
-        schema,
-        timeout: 10,
-      }),
-    });
-    
-    const result = await response.json();
-    
-    if (result.status === 'COMPLETED' || result.status === 'completed') {
-      return { valid: true, columns: result.columns };
-    } else {
-      return { valid: false, error: result.error_message || result.error || 'Query failed' };
-    }
-  } catch (err) {
-    return { valid: false, error: err.message };
-  }
+// Banner component for displaying unreachable API warning
+function UnreachableBanner({ onRetry }) {
+  return (
+    <div className="bg-gray-50 border-b border-gray-200 px-6 py-3">
+      <div className="flex items-center justify-between max-w-full">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-gray-100 rounded-lg">
+            <WifiOff size={18} className="text-gray-600" />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-gray-800 font-mono">
+              MDLH API is not responding
+            </div>
+            <div className="text-xs text-gray-600">
+              Your Snowflake session may still be valid, but the MDLH service cannot be reached.
+            </div>
+          </div>
+        </div>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            className="ml-4 px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-xl transition-colors flex-shrink-0"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
-
-// Check if a table exists (fast check using discovered tables)
-function tableExists(tableName, discoveredTables) {
-  if (!tableName || tableName === '(abstract)') return false;
-  return discoveredTables.has(tableName.toUpperCase());
-}
-
-// Extract table name from a query
-function extractTableFromQuery(sql) {
-  const match = sql.match(/FROM\s+(?:[\w.]+\.)?(\w+_ENTITY)/i);
-  return match ? match[1].toUpperCase() : null;
-}
-
-const tabs = [
-  { id: 'core', label: 'Core', icon: Table },
-  { id: 'glossary', label: 'Glossary', icon: BookOpen },
-  { id: 'datamesh', label: 'Data Mesh', icon: Boxes },
-  { id: 'relational', label: 'Relational DB', icon: Database },
-  { id: 'queries', label: 'Query Org', icon: FolderTree },
-  { id: 'bi', label: 'BI Tools', icon: BarChart3 },
-  { id: 'dbt', label: 'dbt', icon: GitBranch },
-  { id: 'storage', label: 'Object Storage', icon: Cloud },
-  { id: 'orchestration', label: 'Orchestration', icon: Workflow },
-  { id: 'governance', label: 'Governance', icon: Shield },
-  { id: 'ai', label: 'AI/ML', icon: Bot },
-  { id: 'editor', label: 'Query Editor', icon: Terminal, isEditor: true },
-];
-
-const data = {
-  core: [
-    { entity: 'Referenceable', table: '(abstract)', description: 'Root of all entity types', keyAttributes: 'guid, qualifiedName', relationships: 'Base for all', notes: 'Not directly queryable' },
-    { entity: 'Asset', table: '(abstract)', description: 'Base class for all assets', keyAttributes: 'name, description, ownerUsers, ownerGroups, certificateStatus, announcementType, createTime, updateTime, createdBy, updatedBy', relationships: 'Extends Referenceable', notes: 'Not directly queryable' },
-    { entity: 'Catalog', table: '(abstract)', description: 'Base for technical/data assets', keyAttributes: 'connectionQualifiedName, connectorType', relationships: 'Extends Asset', notes: 'Parent for SQL, BI, dbt, etc.' },
-    { entity: 'Connection', table: 'CONNECTION_ENTITY', description: 'Configured connection to data source', keyAttributes: 'connectorName, category, host, port, adminRoles, adminGroups, adminUsers', relationships: 'Contains databases, schemas', notes: 'Root of connector hierarchy' },
-    { entity: 'Process', table: 'PROCESS_ENTITY', description: 'Transformation/lineage process', keyAttributes: 'inputs, outputs, sql, code, columnProcesses', relationships: 'Links assets in lineage', notes: 'Table-level lineage' },
-    { entity: 'ColumnProcess', table: 'COLUMNPROCESS_ENTITY', description: 'Column-level lineage process', keyAttributes: 'inputs, outputs', relationships: 'Links columns in lineage', notes: 'Column-level lineage' },
-    { entity: 'BIProcess', table: 'BIPROCESS_ENTITY', description: 'BI-specific transformation', keyAttributes: 'inputs, outputs', relationships: 'BI tool lineage', notes: 'Extends Process' },
-    { entity: 'SparkJob', table: 'SPARKJOB_ENTITY', description: 'Apache Spark job', keyAttributes: 'sparkRunVersion, sparkRunOpenLineageState', relationships: 'Spark lineage', notes: 'OpenLineage integration' },
-  ],
-  glossary: [
-    { entity: 'AtlasGlossary', table: 'ATLASGLOSSARY_ENTITY', description: 'Business glossary container', keyAttributes: 'name, shortDescription, longDescription, language, usage', relationships: 'Contains terms & categories', qualifiedNamePattern: 'Generated hash', exampleQuery: "SELECT GUID, NAME FROM ATLASGLOSSARY_ENTITY" },
-    { entity: 'AtlasGlossaryTerm', table: 'ATLASGLOSSARYTERM_ENTITY', description: 'Business term with definition', keyAttributes: 'name, shortDescription, longDescription, examples, usage, abbreviation, anchor', relationships: 'anchor (glossary), categories, assignedEntities, seeAlso, synonyms, antonyms', qualifiedNamePattern: 'Generated hash', exampleQuery: "SELECT NAME, USERDESCRIPTION FROM ATLASGLOSSARYTERM_ENTITY WHERE CERTIFICATESTATUS='VERIFIED'" },
-    { entity: 'AtlasGlossaryCategory', table: 'ATLASGLOSSARYCATEGORY_ENTITY', description: 'Hierarchical grouping of terms', keyAttributes: 'name, shortDescription, longDescription, anchor', relationships: 'anchor (glossary), parentCategory, childrenCategories, terms', qualifiedNamePattern: 'Generated hash', exampleQuery: "SELECT NAME, PARENTCATEGORY FROM ATLASGLOSSARYCATEGORY_ENTITY" },
-  ],
-  datamesh: [
-    { entity: 'DataDomain', table: 'DATADOMAIN_ENTITY', description: 'Business domain grouping', keyAttributes: 'name, description, parentDomainQualifiedName, superDomainQualifiedName', relationships: 'dataProducts, parentDomain, subDomains', qualifiedNamePattern: 'default/domain/<lowerCamelCaseName>', exampleQuery: "SELECT NAME, USERDESCRIPTION FROM DATADOMAIN_ENTITY" },
-    { entity: 'DataProduct', table: 'DATAPRODUCT_ENTITY', description: 'Self-contained data product', keyAttributes: 'name, description, dataProductStatus, dataProductCriticality, dataProductSensitivity, dataProductVisibility, dataProductAssetsDSL, dataProductScore', relationships: 'dataDomain, inputPorts, outputPorts, dataContractLatest', qualifiedNamePattern: '<parentDomainQN>/product/<name>', exampleQuery: "SELECT NAME, DATAPRODUCTSTATUS FROM DATAPRODUCT_ENTITY WHERE DATAPRODUCTSTATUS='Active'" },
-    { entity: 'DataContract', table: 'DATACONTRACT_ENTITY', description: 'Formal data specification', keyAttributes: 'dataContractSpec, dataContractVersion, certificateStatus, dataContractAssetGuid', relationships: 'dataContractAsset, dataContractNextVersion', qualifiedNamePattern: 'Generated', exampleQuery: "SELECT DATACONTRACTVERSION, CERTIFICATESTATUS FROM DATACONTRACT_ENTITY" },
-  ],
-  relational: [
-    { entity: 'Database', table: 'DATABASE_ENTITY', description: 'Database container', keyAttributes: 'name, schemaCount, connectionQualifiedName', relationships: 'schemas, connection', qualifiedNamePattern: 'default/<connector>/<epoch>/<db_name>', hierarchy: 'Connection → Database' },
-    { entity: 'Schema', table: 'SCHEMA_ENTITY', description: 'Namespace within database', keyAttributes: 'name, tableCount, viewCount, databaseQualifiedName', relationships: 'tables, views, database', qualifiedNamePattern: '.../<db_name>/<schema_name>', hierarchy: 'Database → Schema' },
-    { entity: 'Table', table: 'TABLE_ENTITY', description: 'Database table', keyAttributes: 'name, rowCount, columnCount, sizeBytes, partitionStrategy, schemaQualifiedName', relationships: 'columns, partitions, queries, schema', qualifiedNamePattern: '.../<schema>/<table_name>', hierarchy: 'Schema → Table' },
-    { entity: 'View', table: 'VIEW_ENTITY', description: 'Database view', keyAttributes: 'name, columnCount, definition, schemaQualifiedName', relationships: 'columns, queries, schema', qualifiedNamePattern: '.../<schema>/<view_name>', hierarchy: 'Schema → View' },
-    { entity: 'MaterialisedView', table: 'MATERIALISEDVIEW_ENTITY', description: 'Materialized/cached view', keyAttributes: 'name, definition, refreshMode, staleness', relationships: 'columns, schema', qualifiedNamePattern: '.../<schema>/<mv_name>', hierarchy: 'Schema → MaterialisedView' },
-    { entity: 'Column', table: 'COLUMN_ENTITY', description: 'Table/view column', keyAttributes: 'name, dataType, maxLength, precision, scale, isPrimaryKey, isForeignKey, isNullable, isPartition, order', relationships: 'table/view, foreignKeyTo', qualifiedNamePattern: '.../<table>/<column_name>', hierarchy: 'Table/View → Column' },
-    { entity: 'TablePartition', table: 'TABLEPARTITION_ENTITY', description: 'Partition of partitioned table', keyAttributes: 'name, partitionList, partitionStrategy', relationships: 'columns, parentTable', qualifiedNamePattern: '.../<table>/<partition>', hierarchy: 'Table → Partition' },
-    { entity: 'Procedure', table: 'PROCEDURE_ENTITY', description: 'Stored procedure', keyAttributes: 'name, definition, schemaQualifiedName', relationships: 'schema', qualifiedNamePattern: '.../<schema>/<proc_name>', hierarchy: 'Schema → Procedure' },
-    { entity: 'Function', table: 'FUNCTION_ENTITY', description: 'User-defined function', keyAttributes: 'name, definition, schemaQualifiedName', relationships: 'schema', qualifiedNamePattern: '.../<schema>/<func_name>', hierarchy: 'Schema → Function' },
-    { entity: 'SnowflakeDynamicTable', table: 'SNOWFLAKEDYNAMICTABLE_ENTITY', description: 'Snowflake dynamic table', keyAttributes: 'name, definition, refreshMode', relationships: 'columns, schema', qualifiedNamePattern: 'Snowflake-specific', hierarchy: 'Schema → DynamicTable' },
-    { entity: 'SnowflakePipe', table: 'SNOWFLAKEPIPE_ENTITY', description: 'Snowpipe ingestion', keyAttributes: 'name, definition, snowflakePipeNotificationChannelName', relationships: 'schema', qualifiedNamePattern: 'Snowflake-specific', hierarchy: 'Schema → Pipe' },
-    { entity: 'SnowflakeStream', table: 'SNOWFLAKESTREAM_ENTITY', description: 'CDC stream', keyAttributes: 'name, snowflakeStreamType, snowflakeStreamSourceType', relationships: 'schema', qualifiedNamePattern: 'Snowflake-specific', hierarchy: 'Schema → Stream' },
-    { entity: 'SnowflakeTag', table: 'SNOWFLAKETAG_ENTITY', description: 'Native Snowflake tag', keyAttributes: 'name, tagAllowedValues', relationships: 'schema, taggedAssets', qualifiedNamePattern: 'Snowflake-specific', hierarchy: 'Schema → Tag' },
-  ],
-  queries: [
-    { entity: 'Namespace', table: '(abstract)', description: 'Base for organizational containers', keyAttributes: 'name, childrenQueries, childrenFolders', relationships: 'Base for Collection/Folder', hierarchy: 'Abstract parent', notes: 'Not directly queryable' },
-    { entity: 'Collection', table: 'COLLECTION_ENTITY', description: 'Top-level query collection', keyAttributes: 'name, description, icon, iconType, adminUsers, adminGroups, viewerUsers, viewerGroups', relationships: 'childrenFolders, childrenQueries', hierarchy: 'Root container', notes: 'Atlan Insights collections' },
-    { entity: 'Folder', table: 'FOLDER_ENTITY', description: 'Query folder within collection', keyAttributes: 'name, parentQualifiedName, collectionQualifiedName', relationships: 'parentFolder, childrenFolders, childrenQueries', hierarchy: 'Collection → Folder', notes: 'Can nest folders' },
-    { entity: 'Query', table: 'QUERY_ENTITY', description: 'Saved SQL query', keyAttributes: 'name, rawQuery, defaultSchemaQualifiedName, defaultDatabaseQualifiedName, variablesSchemaBase64, isVisualQuery', relationships: 'parentFolder/collection, visualBuilderSchemaBase64', hierarchy: 'Folder/Collection → Query', notes: 'Saved queries in Insights' },
-  ],
-  bi: [
-    { entity: 'TableauSite', table: 'TABLEAUSITE_ENTITY', description: 'Tableau site', keyAttributes: 'name, siteQualifiedName', relationships: 'projects', connector: 'Tableau', hierarchy: 'Root' },
-    { entity: 'TableauProject', table: 'TABLEAUPROJECT_ENTITY', description: 'Tableau project', keyAttributes: 'name, isTopLevelProject', relationships: 'site, workbooks, datasources', connector: 'Tableau', hierarchy: 'Site → Project' },
-    { entity: 'TableauWorkbook', table: 'TABLEAUWORKBOOK_ENTITY', description: 'Tableau workbook', keyAttributes: 'name, projectQualifiedName', relationships: 'project, dashboards, worksheets', connector: 'Tableau', hierarchy: 'Project → Workbook' },
-    { entity: 'TableauDashboard', table: 'TABLEAUDASHBOARD_ENTITY', description: 'Tableau dashboard', keyAttributes: 'name, workbookQualifiedName', relationships: 'workbook, worksheets', connector: 'Tableau', hierarchy: 'Workbook → Dashboard' },
-    { entity: 'TableauDatasource', table: 'TABLEAUDATASOURCE_ENTITY', description: 'Tableau data source', keyAttributes: 'name, hasExtracts', relationships: 'project, fields, upstreamTables', connector: 'Tableau', hierarchy: 'Project → Datasource' },
-    { entity: 'TableauCalculatedField', table: 'TABLEAUCALCULATEDFIELD_ENTITY', description: 'Tableau calculated field', keyAttributes: 'name, formula, workbookQualifiedName', relationships: 'workbook, datasource', connector: 'Tableau', hierarchy: 'Workbook → CalculatedField' },
-    { entity: 'PowerBIWorkspace', table: 'POWERBIWORKSPACE_ENTITY', description: 'Power BI workspace', keyAttributes: 'name, webUrl', relationships: 'reports, dashboards, datasets', connector: 'Power BI', hierarchy: 'Root' },
-    { entity: 'PowerBIReport', table: 'POWERBIREPORT_ENTITY', description: 'Power BI report', keyAttributes: 'name, webUrl, workspaceQualifiedName', relationships: 'workspace, pages, dataset', connector: 'Power BI', hierarchy: 'Workspace → Report' },
-    { entity: 'PowerBIDataset', table: 'POWERBIDATASET_ENTITY', description: 'Power BI dataset', keyAttributes: 'name, workspaceQualifiedName', relationships: 'workspace, tables, measures', connector: 'Power BI', hierarchy: 'Workspace → Dataset' },
-    { entity: 'PowerBIMeasure', table: 'POWERBIMEASURE_ENTITY', description: 'Power BI measure', keyAttributes: 'name, powerBIMeasureExpression, table', relationships: 'dataset, table', connector: 'Power BI', hierarchy: 'Dataset → Measure' },
-    { entity: 'LookerProject', table: 'LOOKERPROJECT_ENTITY', description: 'Looker project', keyAttributes: 'name', relationships: 'models, explores', connector: 'Looker', hierarchy: 'Root' },
-    { entity: 'LookerModel', table: 'LOOKERMODEL_ENTITY', description: 'Looker model', keyAttributes: 'name, projectName', relationships: 'project, explores, views', connector: 'Looker', hierarchy: 'Project → Model' },
-    { entity: 'LookerExplore', table: 'LOOKEREXPLORE_ENTITY', description: 'Looker explore', keyAttributes: 'name, modelName, connectionName', relationships: 'model, fields', connector: 'Looker', hierarchy: 'Model → Explore' },
-    { entity: 'LookerDashboard', table: 'LOOKERDASHBOARD_ENTITY', description: 'Looker dashboard', keyAttributes: 'name, folderName', relationships: 'folder, tiles', connector: 'Looker', hierarchy: 'Folder → Dashboard' },
-    { entity: 'MetabaseDashboard', table: 'METABASEDASHBOARD_ENTITY', description: 'Metabase dashboard', keyAttributes: 'name, collectionQualifiedName', relationships: 'collection, questions', connector: 'Metabase', hierarchy: 'Collection → Dashboard' },
-    { entity: 'MetabaseQuestion', table: 'METABASEQUESTION_ENTITY', description: 'Metabase question/chart', keyAttributes: 'name, queryType', relationships: 'collection, dashboards', connector: 'Metabase', hierarchy: 'Collection → Question' },
-    { entity: 'SigmaDataElement', table: 'SIGMADATAELEMENT_ENTITY', description: 'Sigma data element', keyAttributes: 'name, guid', relationships: 'workbook, dataset', connector: 'Sigma', hierarchy: 'Workbook → DataElement' },
-  ],
-  dbt: [
-    { entity: 'DbtModel', table: 'DBTMODEL_ENTITY', description: 'dbt model (transformation)', keyAttributes: 'name, dbtAlias, dbtMaterialization, dbtModelSqlAssets, dbtCompiledSQL, dbtRawSQL', relationships: 'columns, sources, tests, metrics', qualifiedNamePattern: 'dbt-specific', notes: 'Links to SQL table/view' },
-    { entity: 'DbtModelColumn', table: 'DBTMODELCOLUMN_ENTITY', description: 'Column in dbt model', keyAttributes: 'name, dbtModelQualifiedName, dataType', relationships: 'dbtModel, sqlColumn', qualifiedNamePattern: 'dbt-specific', notes: 'Links to SQL column' },
-    { entity: 'DbtSource', table: 'DBTSOURCE_ENTITY', description: 'dbt source definition', keyAttributes: 'name, dbtSourceFreshnessCriteria', relationships: 'sqlAsset, dbtTests', qualifiedNamePattern: 'dbt-specific', notes: 'References source table' },
-    { entity: 'DbtTest', table: 'DBTTEST_ENTITY', description: 'dbt test (schema/data)', keyAttributes: 'name, dbtTestState, dbtTestStatus, dbtTestCompiledSQL', relationships: 'dbtModel, dbtSource', qualifiedNamePattern: 'dbt-specific', notes: 'Test results' },
-    { entity: 'DbtMetric', table: 'DBTMETRIC_ENTITY', description: 'dbt metric (semantic layer)', keyAttributes: 'name, dbtMetricType, dbtMetricFilters', relationships: 'dbtModel, columns', qualifiedNamePattern: 'dbt-specific', notes: 'Semantic layer metric' },
-    { entity: 'DbtTag', table: 'DBTTAG_ENTITY', description: 'dbt meta tag', keyAttributes: 'name, dbtTagValue', relationships: 'taggedAssets', qualifiedNamePattern: 'dbt-specific', notes: 'Tags from dbt meta' },
-    { entity: 'DbtProcess', table: 'DBTPROCESS_ENTITY', description: 'dbt lineage process', keyAttributes: 'inputs, outputs, dbtProcessJobStatus', relationships: 'dbtModel inputs/outputs', qualifiedNamePattern: 'dbt-specific', notes: 'Model-level lineage' },
-    { entity: 'DbtColumnProcess', table: 'DBTCOLUMNPROCESS_ENTITY', description: 'dbt column lineage', keyAttributes: 'inputs, outputs', relationships: 'column inputs/outputs', qualifiedNamePattern: 'dbt-specific', notes: 'Column-level lineage' },
-  ],
-  storage: [
-    { entity: 'S3Bucket', table: 'S3BUCKET_ENTITY', description: 'AWS S3 bucket', keyAttributes: 'name, s3BucketArn, awsRegion, s3ObjectCount', relationships: 's3Objects, connection', connector: 'AWS S3', hierarchy: 'Connection → Bucket' },
-    { entity: 'S3Object', table: 'S3OBJECT_ENTITY', description: 'AWS S3 object', keyAttributes: 'name, s3ObjectKey, s3ObjectSize, s3ObjectContentType, s3ObjectLastModifiedTime', relationships: 's3Bucket', connector: 'AWS S3', hierarchy: 'Bucket → Object' },
-    { entity: 'ADLSAccount', table: 'ADLSACCOUNT_ENTITY', description: 'Azure ADLS account', keyAttributes: 'name, adlsAccountQualifiedName', relationships: 'adlsContainers, connection', connector: 'Azure ADLS', hierarchy: 'Connection → Account' },
-    { entity: 'ADLSContainer', table: 'ADLSCONTAINER_ENTITY', description: 'Azure ADLS container', keyAttributes: 'name, adlsContainerUrl', relationships: 'adlsAccount, adlsObjects', connector: 'Azure ADLS', hierarchy: 'Account → Container' },
-    { entity: 'ADLSObject', table: 'ADLSOBJECT_ENTITY', description: 'Azure ADLS object', keyAttributes: 'name, adlsObjectUrl, adlsObjectSize, adlsObjectContentType', relationships: 'adlsContainer', connector: 'Azure ADLS', hierarchy: 'Container → Object' },
-    { entity: 'GCSBucket', table: 'GCSBUCKET_ENTITY', description: 'Google Cloud Storage bucket', keyAttributes: 'name, gcsBucketName, gcsObjectCount', relationships: 'gcsObjects, connection', connector: 'GCS', hierarchy: 'Connection → Bucket' },
-    { entity: 'GCSObject', table: 'GCSOBJECT_ENTITY', description: 'Google Cloud Storage object', keyAttributes: 'name, gcsObjectKey, gcsObjectSize, gcsObjectContentType', relationships: 'gcsBucket', connector: 'GCS', hierarchy: 'Bucket → Object' },
-  ],
-  orchestration: [
-    { entity: 'AirflowDag', table: 'AIRFLOWDAG_ENTITY', description: 'Airflow DAG', keyAttributes: 'name, airflowDagSchedule, airflowDagScheduleInterval', relationships: 'airflowTasks, connection', connector: 'Airflow', hierarchy: 'Connection → DAG' },
-    { entity: 'AirflowTask', table: 'AIRFLOWTASK_ENTITY', description: 'Airflow task within DAG', keyAttributes: 'name, airflowTaskOperatorClass, airflowTaskSql', relationships: 'airflowDag, inputAssets, outputAssets', connector: 'Airflow', hierarchy: 'DAG → Task' },
-    { entity: 'AdfPipeline', table: 'ADFPIPELINE_ENTITY', description: 'Azure Data Factory pipeline', keyAttributes: 'name, adfPipelineAnnotations', relationships: 'adfActivities, adfDatasets', connector: 'ADF', hierarchy: 'Connection → Pipeline' },
-    { entity: 'AdfActivity', table: 'ADFACTIVITY_ENTITY', description: 'ADF pipeline activity', keyAttributes: 'name, adfActivityType', relationships: 'adfPipeline', connector: 'ADF', hierarchy: 'Pipeline → Activity' },
-    { entity: 'AdfDataflow', table: 'ADFDATAFLOW_ENTITY', description: 'ADF data flow', keyAttributes: 'name', relationships: 'adfPipeline, adfDatasets', connector: 'ADF', hierarchy: 'Pipeline → Dataflow' },
-    { entity: 'AdfDataset', table: 'ADFDATASET_ENTITY', description: 'ADF dataset', keyAttributes: 'name, adfDatasetAnnotations', relationships: 'adfLinkedService, adfActivities', connector: 'ADF', hierarchy: 'Connection → Dataset' },
-    { entity: 'AdfLinkedservice', table: 'ADFLINKEDSERVICE_ENTITY', description: 'ADF linked service', keyAttributes: 'name, adfLinkedserviceAnnotations', relationships: 'adfDatasets', connector: 'ADF', hierarchy: 'Connection → LinkedService' },
-    { entity: 'MatillionGroup', table: 'MATILLIONGROUP_ENTITY', description: 'Matillion group', keyAttributes: 'name', relationships: 'matillionProjects', connector: 'Matillion', hierarchy: 'Connection → Group' },
-    { entity: 'MatillionProject', table: 'MATILLIONPROJECT_ENTITY', description: 'Matillion project', keyAttributes: 'name', relationships: 'matillionGroup, matillionJobs', connector: 'Matillion', hierarchy: 'Group → Project' },
-    { entity: 'MatillionJob', table: 'MATILLIONJOB_ENTITY', description: 'Matillion job', keyAttributes: 'name, matillionJobType', relationships: 'matillionProject, matillionComponents', connector: 'Matillion', hierarchy: 'Project → Job' },
-    { entity: 'FivetranConnector', table: 'FIVETRANCONNECTOR_ENTITY', description: 'Fivetran connector', keyAttributes: 'name, fivetranConnectorSyncFrequency, fivetranConnectorSyncPaused', relationships: 'connection', connector: 'Fivetran', hierarchy: 'Connection → Connector' },
-  ],
-  governance: [
-    { entity: 'Tag (Classification)', table: 'TAG_RELATIONSHIP', description: 'Classification tag for assets', keyAttributes: 'tagName, propagate, restrictPropagationThroughLineage', relationships: 'entityGuid (linked asset)', notes: 'Use TAG_RELATIONSHIP to find tagged assets' },
-    { entity: 'CustomMetadata', table: 'CUSTOMMETADATA_RELATIONSHIP', description: 'Custom metadata attributes', keyAttributes: 'entityGuid, attributeDisplayName, attributeValue', relationships: 'entityGuid (linked asset)', notes: 'Join with entity tables on guid' },
-    { entity: 'SnowflakeTag', table: 'SNOWFLAKETAG_ENTITY', description: 'Native Snowflake tag', keyAttributes: 'name, tagAllowedValues', relationships: 'taggedAssets', notes: 'Synced from Snowflake' },
-    { entity: 'DatabricksUnityCatalogTag', table: 'DATABRICKSUNITYCATALOGTAG_ENTITY', description: 'Databricks Unity Catalog tag', keyAttributes: 'name', relationships: 'taggedAssets', notes: 'Synced from Databricks' },
-    { entity: 'BigqueryTag', table: 'BIGQUERYTAG_ENTITY', description: 'BigQuery policy tag', keyAttributes: 'name', relationships: 'taggedAssets', notes: 'Synced from BigQuery' },
-    { entity: 'Persona', table: 'PERSONA_ENTITY', description: 'Access control persona', keyAttributes: 'name, personaGroups, personaUsers', relationships: 'policies', notes: 'Defines what users can see/do' },
-    { entity: 'Purpose', table: 'PURPOSE_ENTITY', description: 'Data access purpose', keyAttributes: 'name, purposeTags', relationships: 'policies', notes: 'Purpose-based access control' },
-    { entity: 'BusinessPolicy', table: 'BUSINESSPOLICY_ENTITY', description: 'Data governance policy', keyAttributes: 'name, businessPolicyType, businessPolicyValiditySchedule', relationships: 'governedAssets, businessPolicyLogs', notes: 'Policy definitions' },
-    { entity: 'BusinessPolicyLog', table: 'BUSINESSPOLICYLOG_ENTITY', description: 'Policy execution log', keyAttributes: 'businessPolicyLogMessage, businessPolicyLogTimestamp', relationships: 'businessPolicy', notes: 'Audit trail' },
-  ],
-  ai: [
-    { entity: 'AIModel', table: 'AIMODEL_ENTITY', description: 'AI/ML model', keyAttributes: 'name, aiModelStatus, aiModelVersion, aiModelType', relationships: 'aiApplications, datasets (via Process)', notes: 'Model governance' },
-    { entity: 'AIApplication', table: 'AIAPPLICATION_ENTITY', description: 'Application using AI models', keyAttributes: 'name, aiApplicationVersion, aiApplicationDevelopmentStage', relationships: 'aiModels', notes: 'App-level AI governance' },
-  ],
-};
-
-// Example queries organized by category
-const exampleQueries = {
-  core: [
-    {
-      title: '✓ Verify Database Access',
-      description: 'Check which MDLH databases you have access to before querying',
-      query: `-- List all databases you can access
-SHOW DATABASES;
-
--- Check tables in a specific database
-SHOW TABLES IN FIELD_METADATA.PUBLIC;
-
--- Verify a specific table exists
-SELECT COUNT(*) as row_count 
-FROM FIELD_METADATA.PUBLIC.TABLE_ENTITY 
-LIMIT 1;`
-    },
-    {
-      title: 'List All MDLH Tables',
-      description: 'Discover available entity tables in the current database',
-      query: `SHOW TABLES IN SCHEMA;`
-    },
-    {
-      title: 'Explore Catalog Integrations',
-      description: 'View configured catalog integrations',
-      query: `SHOW CATALOG INTEGRATIONS;
-DESCRIBE CATALOG INTEGRATION <integration_name>;`
-    },
-    {
-      title: 'Switch MDLH Environment',
-      description: 'Select which MDLH database to query',
-      query: `-- Choose your MDLH environment
-USE FIELD_METADATA;      -- For atlan.atlan.com
-USE MDLH_GOVERNANCE;     -- For demo-governance.atlan.com
-USE MDLH_ATLAN_HOME;     -- For home tenant`
-    },
-    {
-      title: 'Time Travel Query',
-      description: 'Query historical data using Iceberg time travel',
-      query: `-- Query data from a specific timestamp
-SELECT *
-FROM ATLASGLOSSARY_ENTITY
-AT(TIMESTAMP => '2025-07-22 12:00:00'::timestamp_tz)
-LIMIT 10;
-
--- View snapshot history for a table
-SELECT *
-FROM TABLE(INFORMATION_SCHEMA.ICEBERG_TABLE_SNAPSHOT_REFRESH_HISTORY(
-  TABLE_NAME => 'ATLASGLOSSARY_ENTITY'
-));`
-    },
-    {
-      title: 'Downstream Lineage (No Limit)',
-      description: 'Find ALL downstream assets from a source - no recursion limit',
-      query: `-- GET DOWNSTREAM ASSETS - NO DISTANCE, NO RECURSION LIMIT
--- Warning: May be slow for assets with extensive lineage
-WITH RECURSIVE lineage_cte (guid) AS (
-    -- Anchor: Start with your source GUID
-    SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid
-
-    UNION ALL
-    
-    -- Recursive: Find all downstream dependencies
-    SELECT outputs_flat.value::VARCHAR
-    FROM lineage_cte AS L
-    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
-    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
-)
-SELECT DISTINCT
-    COALESCE(T.name, V.name, SGELEM.name) AS entity_name,
-    L.guid AS entity_guid,
-    CASE
-        WHEN T.name IS NOT NULL THEN 'TABLE'
-        WHEN V.name IS NOT NULL THEN 'VIEW'
-        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
-        ELSE 'UNKNOWN'
-    END AS entity_type
-FROM lineage_cte AS L
-LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
-LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
-LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
-ORDER BY entity_name ASC;`
-    },
-    {
-      title: 'Downstream Lineage (With Limit)',
-      description: 'Find downstream assets with recursion depth limit and distance tracking',
-      query: `-- GET DOWNSTREAM ASSETS - WITH DISTANCE AND RECURSION LIMIT
-WITH RECURSIVE lineage_cte (guid, level) AS (
-    -- Anchor: Start with your source GUID
-    SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid, 0 AS level
-
-    UNION ALL
-    
-    -- Recursive: Find downstream, increment level each step
-    SELECT outputs_flat.value::VARCHAR, L.level + 1
-    FROM lineage_cte AS L
-    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
-    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
-    WHERE L.level < 5  -- Stop at 5 hops
-)
-SELECT DISTINCT
-    COALESCE(T.name, V.name, SF.name, SGELEM.name) AS entity_name,
-    L.guid AS entity_guid,
-    CASE
-        WHEN T.name IS NOT NULL THEN 'TABLE'
-        WHEN V.name IS NOT NULL THEN 'VIEW'
-        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
-        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
-        ELSE 'UNKNOWN'
-    END AS entity_type,
-    L.level AS distance
-FROM lineage_cte AS L
-LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
-LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
-LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
-LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
-WHERE L.level > 0  -- Exclude the starting asset
-ORDER BY distance ASC;`
-    },
-    {
-      title: 'Upstream Lineage (With Distance)',
-      description: 'Find all upstream sources with distance tracking',
-      query: `-- GET UPSTREAM ASSETS - WITH DISTANCE AND RECURSION LIMIT
-WITH RECURSIVE lineage_cte (guid, level) AS (
-    -- Anchor: Start with your target GUID
-    SELECT '<YOUR_TARGET_GUID>'::VARCHAR AS guid, 0 AS level
-
-    UNION ALL
-    
-    -- Recursive: Find upstream by joining on OUTPUTS
-    SELECT inputs_flat.value::VARCHAR, L.level + 1
-    FROM lineage_cte AS L
-    -- Note: Join on OUTPUTS to go upstream
-    JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR
-    , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat
-    WHERE L.level < 5  -- Stop at 5 hops
-)
-SELECT DISTINCT
-    COALESCE(T.name, V.name, SF.name) AS entity_name,
-    L.guid AS entity_guid,
-    CASE
-        WHEN T.name IS NOT NULL THEN 'TABLE'
-        WHEN V.name IS NOT NULL THEN 'VIEW'
-        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
-        ELSE 'UNKNOWN'
-    END AS entity_type,
-    L.level AS distance
-FROM lineage_cte AS L
-LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
-LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
-LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
-WHERE L.level > 0  -- Exclude starting asset
-ORDER BY distance ASC;`
-    },
-    {
-      title: 'Bidirectional Lineage',
-      description: 'Get both upstream and downstream lineage with positive/negative distance',
-      query: `-- BIDIRECTIONAL LINEAGE - Both upstream and downstream
--- Positive distance = downstream, Negative = upstream
-WITH RECURSIVE downstream_cte (guid, level) AS (
-    SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level
-    UNION ALL
-    SELECT outputs_flat.value::VARCHAR, L.level + 1
-    FROM downstream_cte AS L
-    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR
-    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat
-    WHERE L.level < 5
-),
-upstream_cte (guid, level) AS (
-    SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level
-    UNION ALL
-    SELECT inputs_flat.value::VARCHAR, L.level - 1  -- Negative for upstream
-    FROM upstream_cte AS L
-    JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR
-    , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat
-    WHERE L.level > -5
-),
-combined_lineage AS (
-    SELECT * FROM downstream_cte
-    UNION ALL
-    SELECT * FROM upstream_cte
-)
-SELECT DISTINCT
-    COALESCE(T.name, V.name, SF.name, SGELEM.name) AS entity_name,
-    L.guid AS entity_guid,
-    CASE
-        WHEN T.name IS NOT NULL THEN 'TABLE'
-        WHEN V.name IS NOT NULL THEN 'VIEW'
-        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'
-        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'
-        ELSE 'UNKNOWN'
-    END AS entity_type,
-    L.level AS distance  -- Negative = upstream, Positive = downstream
-FROM combined_lineage AS L
-LEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid
-LEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid
-LEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid
-LEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid
-WHERE L.level != 0  -- Exclude starting asset
-ORDER BY distance ASC;`
-    },
-  ],
-  glossary: [
-    {
-      title: 'List All Glossaries',
-      description: 'View all business glossaries in your tenant with creator info',
-      query: `-- First, see all Glossaries in your Atlan tenant
-SELECT
-  NAME,
-  GUID,
-  CREATEDBY
-FROM ATLASGLOSSARY_ENTITY;
-
--- Note the GUID of the glossary you want to explore
--- You'll use it in subsequent queries with ARRAY_CONTAINS`
-    },
-    {
-      title: 'Terms with Categories (Full Detail)',
-      description: 'List glossary terms with their parent glossaries and categories resolved to names',
-      query: `-- Comprehensive query to resolve term relationships
-WITH glossary_lookup AS (
-    SELECT GUID AS glossary_guid, NAME AS glossary_name
-    FROM GLOSSARY_ENTITY
-),
-category_lookup AS (
-    SELECT GUID AS category_guid, NAME AS category_name
-    FROM GLOSSARYCATEGORY_ENTITY
-),
-term_anchors AS (
-    SELECT TERM.GUID AS term_guid,
-           anchor_elem.value::STRING AS glossary_guid
-    FROM GLOSSARYTERM_ENTITY TERM,
-         LATERAL FLATTEN(input => TERM.ANCHOR) AS anchor_elem
-),
-term_categories AS (
-    SELECT TERM.GUID AS term_guid,
-           category_elem.value::STRING AS category_guid
-    FROM GLOSSARYTERM_ENTITY TERM,
-         LATERAL FLATTEN(input => TERM.CATEGORIES) AS category_elem
-),
-term_glossary_names AS (
-    SELECT TA.term_guid,
-           LISTAGG(GL.glossary_name, ', ') WITHIN GROUP (ORDER BY GL.glossary_name) AS glossaries
-    FROM term_anchors TA
-    LEFT JOIN glossary_lookup GL ON TA.glossary_guid = GL.glossary_guid
-    GROUP BY TA.term_guid
-),
-term_category_names AS (
-    SELECT TC.term_guid,
-           LISTAGG(CL.category_name, ', ') WITHIN GROUP (ORDER BY CL.category_name) AS categories
-    FROM term_categories TC
-    LEFT JOIN category_lookup CL ON TC.category_guid = CL.category_guid
-    GROUP BY TC.term_guid
-)
-SELECT
-    T.NAME,
-    T.USERDESCRIPTION,
-    TG.glossaries AS GLOSSARIES,
-    TC.categories AS CATEGORIES,
-    T.GUID
-FROM GLOSSARYTERM_ENTITY T
-LEFT JOIN term_glossary_names TG ON T.GUID = TG.term_guid
-LEFT JOIN term_category_names TC ON T.GUID = TC.term_guid
-LIMIT 100;`
-    },
-    {
-      title: 'Terms by Glossary GUID',
-      description: 'Get all terms belonging to a specific glossary',
-      query: `SELECT GUID, NAME, USERDESCRIPTION
-FROM ATLASGLOSSARYTERM_ENTITY
-WHERE ARRAY_CONTAINS('<GLOSSARY_GUID>', ANCHOR);`
-    },
-    {
-      title: 'Terms by Creator',
-      description: 'Find all terms created by a specific user',
-      query: `SELECT GUID, NAME
-FROM ATLASGLOSSARYTERM_ENTITY
-WHERE CREATEDBY = '<username>';`
-    },
-    {
-      title: 'Certificate Status Distribution',
-      description: 'Count terms by certification status',
-      query: `SELECT CERTIFICATESTATUS, COUNT(GUID) as term_count
-FROM ATLASGLOSSARYTERM_ENTITY
-GROUP BY CERTIFICATESTATUS;`
-    },
-    {
-      title: 'Find Duplicate Terms (Jaro-Winkler)',
-      description: 'Identify similar terms across glossaries using fuzzy matching',
-      query: `WITH core_terms AS (
-  SELECT NAME AS core_name, GUID AS core_guid,
-         USERDESCRIPTION AS core_description
-  FROM ATLASGLOSSARYTERM_ENTITY
-  WHERE ARRAY_CONTAINS('<CORE_GLOSSARY_GUID>', ANCHOR)
-),
-non_core_terms AS (
-  SELECT NAME AS non_core_name, GUID AS non_core_guid,
-         USERDESCRIPTION AS non_core_description,
-         ANCHOR AS non_core_anchor_guid
-  FROM ATLASGLOSSARYTERM_ENTITY
-  WHERE NOT(ARRAY_CONTAINS('<CORE_GLOSSARY_GUID>', ANCHOR))
-),
-glossary_lookup AS (
-  SELECT GUID AS glossary_guid, NAME AS glossary_name
-  FROM ATLASGLOSSARY_ENTITY
-)
-SELECT DISTINCT
-  T1.core_name AS source_of_truth_name,
-  T2.non_core_name AS potential_duplicate_name,
-  T3.glossary_name AS duplicate_glossary,
-  JAROWINKLER_SIMILARITY(T1.core_name, T2.non_core_name) AS similarity_score
-FROM core_terms T1
-JOIN non_core_terms T2
-  ON JAROWINKLER_SIMILARITY(T1.core_name, T2.non_core_name) >= 95
-  AND T1.core_guid != T2.non_core_guid
-JOIN glossary_lookup T3
-  ON ARRAY_CONTAINS(T3.glossary_guid, T2.non_core_anchor_guid)
-ORDER BY similarity_score DESC;`
-    },
-    {
-      title: 'Find Substring Duplicates',
-      description: 'Find terms where one name contains another',
-      query: `WITH standardized_terms AS (
-  SELECT NAME AS original_term_name, GUID AS term_guid,
-         USERDESCRIPTION AS term_description,
-         LOWER(REGEXP_REPLACE(NAME, '[ _-]', '', 1, 0)) AS standardized_name
-  FROM ATLASGLOSSARYTERM_ENTITY
-)
-SELECT DISTINCT
-  t1.original_term_name AS potential_duplicate_1_name,
-  t2.original_term_name AS potential_duplicate_2_name,
-  t1.term_guid AS potential_duplicate_1_guid,
-  t2.term_guid AS potential_duplicate_2_guid
-FROM standardized_terms t1
-JOIN standardized_terms t2
-  ON t1.standardized_name LIKE '%' || t2.standardized_name || '%'
-  AND LENGTH(t1.standardized_name) > LENGTH(t2.standardized_name)
-  AND t1.term_guid != t2.term_guid
-ORDER BY potential_duplicate_1_name;`
-    },
-  ],
-  datamesh: [
-    {
-      title: 'List Data Domains',
-      description: 'View all data domains and their hierarchy',
-      query: `SELECT NAME, USERDESCRIPTION, PARENTDOMAINQUALIFIEDNAME
-FROM DATADOMAIN_ENTITY
-ORDER BY NAME;`
-    },
-    {
-      title: 'Active Data Products',
-      description: 'Find all active data products with their status',
-      query: `SELECT NAME, DATAPRODUCTSTATUS, DATAPRODUCTCRITICALITY
-FROM DATAPRODUCT_ENTITY
-WHERE DATAPRODUCTSTATUS = 'Active'
-ORDER BY DATAPRODUCTCRITICALITY DESC;`
-    },
-    {
-      title: 'Data Contracts Overview',
-      description: 'View data contract versions and certification status',
-      query: `SELECT DATACONTRACTVERSION, CERTIFICATESTATUS, DATACONTRACTASSETGUID
-FROM DATACONTRACT_ENTITY
-ORDER BY DATACONTRACTVERSION DESC;`
-    },
-  ],
-  relational: [
-    {
-      title: 'Basic Table Exploration',
-      description: 'View table metadata with row counts and sizes',
-      query: `SELECT NAME, ROWCOUNT, COLUMNCOUNT, SIZEBYTES, POPULARITYSCORE
-FROM TABLE_ENTITY
-WHERE SIZEBYTES IS NOT NULL
-ORDER BY SIZEBYTES DESC
-LIMIT 100;`
-    },
-    {
-      title: 'Full Column Metadata Export',
-      description: 'Comprehensive column-level metadata with tags and custom metadata as JSON arrays',
-      query: `-- Column-Level Metadata Query with Aggregated Custom Metadata and Tags
-WITH FILTERED_COLUMNS AS (
-    SELECT GUID
-    FROM COLUMN_ENTITY
-    WHERE CONNECTORNAME IN ('glue', 'snowflake')
-),
--- Aggregate Custom Metadata for each column as JSON
-CM_AGG AS (
-    SELECT
-        CM.ENTITYGUID,
-        ARRAY_AGG(
-            DISTINCT OBJECT_CONSTRUCT(
-                'set_name', SETDISPLAYNAME,
-                'field_name', ATTRIBUTEDISPLAYNAME,
-                'field_value', ATTRIBUTEVALUE
-            )
-        ) AS CUSTOM_METADATA_JSON
-    FROM CUSTOMMETADATA_RELATIONSHIP CM
-    JOIN FILTERED_COLUMNS FC ON CM.ENTITYGUID = FC.GUID
-    GROUP BY CM.ENTITYGUID
-),
--- Aggregate Tags for each column as JSON
-TR_AGG AS (
-    SELECT
-        TR.ENTITYGUID,
-        '[' || LISTAGG(
-            OBJECT_CONSTRUCT('name', TR.TAGNAME, 'value', TR.TAGVALUE)::STRING, ','
-        ) WITHIN GROUP (ORDER BY TR.TAGNAME) || ']' AS TAG_JSON
-    FROM TAG_RELATIONSHIP TR
-    JOIN FILTERED_COLUMNS FC ON TR.ENTITYGUID = FC.GUID
-    GROUP BY TR.ENTITYGUID
-)
-SELECT
-    -- Asset Identifiers
-    COL.NAME AS COL_NAME,
-    COL.QUALIFIEDNAME AS COL_QUALIFIEDNAME,
-    COL.GUID AS COL_GUID,
-    COL.DESCRIPTION AS COL_DESCRIPTION,
-    COL.USERDESCRIPTION AS COL_USERDESCRIPTION,
-    COL.CONNECTORNAME, COL.CONNECTIONNAME,
-    COL.DATABASENAME, COL.SCHEMANAME, COL.TABLENAME,
-    -- Source Attributes
-    COL.DATATYPE, COL.SUBDATATYPE,
-    COL."ORDER" AS COL_ORDER,
-    COL.ISPARTITION, COL.ISPRIMARY, COL.ISNULLABLE,
-    COL.PRECISION, COL.MAXLENGTH,
-    -- Atlan Metrics
-    COL.STATUS, COL.HASLINEAGE, COL.POPULARITYSCORE,
-    COL.QUERYCOUNT, COL.QUERYUSERCOUNT,
-    -- Tags & Custom Metadata
-    TR_AGG.TAG_JSON AS COL_TAGS,
-    CM_AGG.CUSTOM_METADATA_JSON AS COL_CUSTOM_METADATA,
-    -- Enrichment
-    COL.CERTIFICATESTATUS, COL.MEANINGS,
-    COL.OWNERUSERS, COL.OWNERGROUPS
-FROM COLUMN_ENTITY COL
-LEFT JOIN CM_AGG ON COL.GUID = CM_AGG.ENTITYGUID
-LEFT JOIN TR_AGG ON COL.GUID = TR_AGG.ENTITYGUID
-WHERE COL.CONNECTORNAME IN ('glue', 'snowflake')
-LIMIT 100;`
-    },
-    {
-      title: 'Tables Without Descriptions',
-      description: 'Find tables missing documentation',
-      query: `SELECT
-  SUM(CASE WHEN DESCRIPTION IS NOT NULL THEN 1 ELSE 0 END) "WITH DESCRIPTIONS",
-  SUM(CASE WHEN DESCRIPTION IS NULL THEN 1 ELSE 0 END) "WITHOUT DESCRIPTIONS"
-FROM TABLE_ENTITY;`
-    },
-    {
-      title: 'Storage Reclamation Analysis',
-      description: 'Find large tables by size and popularity for storage optimization',
-      query: `-- STORAGE RECLAMATION ANALYSIS
--- Show the largest tables and their popularity scores
--- Use this to identify large, unused tables for cleanup
-SELECT
-  NAME,
-  ROWCOUNT,
-  COLUMNCOUNT,
-  SIZEBYTES,
-  POPULARITYSCORE
-FROM TABLE_ENTITY
-WHERE SIZEBYTES IS NOT NULL
-ORDER BY SIZEBYTES DESC;
-
--- Calculate total storage used by unpopular tables
-SELECT SUM(SIZEBYTES) as bytes_in_unpopular_tables
-FROM TABLE_ENTITY
-WHERE POPULARITYSCORE < 0.05;`
-    },
-    {
-      title: 'Most Popular Tables',
-      description: 'Find tables with highest query counts',
-      query: `SELECT NAME, QUERYCOUNT, POPULARITYSCORE, COLUMNCOUNT
-FROM TABLE_ENTITY
-ORDER BY QUERYCOUNT DESC
-LIMIT 20;`
-    },
-    {
-      title: 'Frequent Column Updaters',
-      description: 'Find users who update columns most frequently - useful for identifying power users',
-      query: `-- POPULARITY ANALYSIS
--- Shows users who update Columns most frequently in Atlan
--- Useful for identifying power users and data stewards
-SELECT
-  UPDATEDBY,
-  TO_TIMESTAMP(MAX(UPDATETIME)/1000) AS LASTUPDATE,
-  COUNT(*) AS UPDATECOUNT
-FROM COLUMN_ENTITY
-GROUP BY UPDATEDBY
-ORDER BY UPDATECOUNT DESC;`
-    },
-    {
-      title: 'Table-Column Join',
-      description: 'Get column details with parent table information',
-      query: `SELECT tbl.name AS table_name,
-       col.name AS column_name,
-       col.datatype,
-       TO_TIMESTAMP(col.updatetime/1000) AS column_updated,
-       tbl.rowcount
-FROM COLUMN_ENTITY col
-JOIN TABLE_ENTITY tbl ON col."TABLE"[0] = tbl.guid
-LIMIT 50;`
-    },
-    {
-      title: 'Find Column by GUID',
-      description: 'Get parent table for a specific column',
-      query: `SELECT name AS table_name, rowcount
-FROM TABLE_ENTITY
-WHERE ARRAY_CONTAINS('<COLUMN_GUID>', columns);`
-    },
-    {
-      title: 'Untagged Tables',
-      description: 'Find tables without any classification tags',
-      query: `SELECT GUID, QUALIFIEDNAME, COLUMNCOUNT, ROWCOUNT
-FROM TABLE_ENTITY
-WHERE ASSETTAGS = '[]';`
-    },
-    {
-      title: 'Inactive Tables',
-      description: 'Find tables with inactive status',
-      query: `SELECT GUID, QUALIFIEDNAME, COLUMNCOUNT, ROWCOUNT, QUERYCOUNT
-FROM TABLE_ENTITY
-WHERE STATUS = 'INACTIVE';
-
--- Status distribution
-SELECT STATUS, COUNT(*)
-FROM TABLE_ENTITY
-GROUP BY STATUS;`
-    },
-  ],
-  queries: [
-    {
-      title: 'List Collections',
-      description: 'View all Insights collections',
-      query: `SELECT * FROM COLLECTION_ENTITY;`
-    },
-    {
-      title: 'Collection Hierarchy',
-      description: 'See folders within collections',
-      query: `SELECT c.NAME as collection_name, f.NAME as folder_name
-FROM COLLECTION_ENTITY c
-LEFT JOIN FOLDER_ENTITY f ON f.COLLECTIONQUALIFIEDNAME = c.QUALIFIEDNAME;`
-    },
-  ],
-  bi: [
-    {
-      title: 'Tableau Calculated Field Duplicates',
-      description: 'Find potential duplicate calculated fields by name',
-      query: `WITH standardized_metrics AS (
-  SELECT NAME AS original_metric_name, GUID AS metric_guid,
-         FORMULA AS original_formula,
-         LOWER(REGEXP_REPLACE(NAME, '[ _-]', '', 1, 0)) AS standardized_name
-  FROM TABLEAUCALCULATEDFIELD_ENTITY
-)
-SELECT DISTINCT
-  t1.original_metric_name AS duplicate_1_name,
-  t1.metric_guid AS duplicate_1_guid,
-  t1.original_formula AS duplicate_1_formula,
-  t2.original_metric_name AS duplicate_2_name,
-  t2.metric_guid AS duplicate_2_guid,
-  t2.original_formula AS duplicate_2_formula
-FROM standardized_metrics t1
-JOIN standardized_metrics t2
-  ON t1.standardized_name LIKE '%' || t2.standardized_name || '%'
-  AND LENGTH(t1.standardized_name) > LENGTH(t2.standardized_name)
-  AND t1.metric_guid != t2.metric_guid
-ORDER BY duplicate_1_name;`
-    },
-    {
-      title: 'Tableau Formula Duplicates',
-      description: 'Find calculated fields with identical formulas',
-      query: `WITH standardized_metrics AS (
-  SELECT NAME AS metric_name, GUID AS metric_guid, FORMULA AS original_formula,
-         LOWER(REGEXP_REPLACE(FORMULA, '[ _\\[\\]]', '', 1, 0)) AS standardized_formula
-  FROM TABLEAUCALCULATEDFIELD_ENTITY
-)
-SELECT standardized_formula,
-       COUNT(*) AS number_of_metrics,
-       LISTAGG(metric_guid, ', ') WITHIN GROUP (ORDER BY metric_guid) AS all_guids,
-       LISTAGG(metric_name, ', ') WITHIN GROUP (ORDER BY metric_name) AS all_names
-FROM standardized_metrics
-GROUP BY standardized_formula
-HAVING COUNT(*) > 1
-ORDER BY number_of_metrics DESC;`
-    },
-    {
-      title: 'Power BI Measure Duplicates',
-      description: 'Find measures with same name across tables',
-      query: `SELECT
-  t1.NAME "MEASURE 1 NAME",
-  t1.GUID "MEASURE 1 GUID",
-  t1.POWERBIMEASUREEXPRESSION "MEASURE 1 EXPRESSION",
-  t2.NAME "MEASURE 2 NAME",
-  t2.GUID "MEASURE 2 GUID",
-  t2.POWERBIMEASUREEXPRESSION "MEASURE 2 EXPRESSION",
-  t1."TABLE" "COMMON TABLE"
-FROM POWERBIMEASURE_ENTITY t1
-JOIN POWERBIMEASURE_ENTITY t2
-  ON t1.NAME = t2.NAME
-  AND GET(t1."TABLE", 0) = GET(t2."TABLE", 0)
-WHERE t1.GUID < t2.GUID
-ORDER BY "MEASURE 1 NAME";`
-    },
-    {
-      title: 'Power BI Measures by Popularity',
-      description: 'Find most popular Power BI measures',
-      query: `SELECT NAME, POPULARITYSCORE, POWERBIMEASUREEXPRESSION
-FROM POWERBIMEASURE_ENTITY
-ORDER BY POPULARITYSCORE DESC
-LIMIT 20;`
-    },
-    {
-      title: 'Tables with Measures',
-      description: 'Find Power BI tables that have measures',
-      query: `SELECT * FROM POWERBITABLE_ENTITY
-WHERE POWERBITABLEMEASURECOUNT > 0;`
-    },
-  ],
-  dbt: [
-    {
-      title: 'dbt Job Status Summary',
-      description: 'Count models by job status',
-      query: `SELECT dbtJobStatus, COUNT(*)
-FROM DBTMODELCOLUMN_ENTITY
-GROUP BY dbtJobStatus;
-
-SELECT assetDbtJobStatus, COUNT(*)
-FROM TABLE_ENTITY
-GROUP BY assetDbtJobStatus;`
-    },
-    {
-      title: 'dbt Models Overview',
-      description: 'View dbt models with materialization type',
-      query: `SELECT NAME, DBTALIAS, DBTMATERIALIZATION, DBTRAWSQL
-FROM DBTMODEL_ENTITY
-LIMIT 50;`
-    },
-  ],
-  storage: [
-    {
-      title: 'S3 Bucket Overview',
-      description: 'List S3 buckets with object counts',
-      query: `SELECT NAME, S3BUCKETARN, AWSREGION, S3OBJECTCOUNT
-FROM S3BUCKET_ENTITY
-ORDER BY S3OBJECTCOUNT DESC;`
-    },
-  ],
-  orchestration: [
-    {
-      title: 'Airflow DAGs',
-      description: 'List all Airflow DAGs with schedules',
-      query: `SELECT NAME, AIRFLOWDAGSCHEDULE, AIRFLOWDAGSCHEDULEINTERVAL
-FROM AIRFLOWDAG_ENTITY;`
-    },
-    {
-      title: 'Workflow Entities',
-      description: 'View all workflow definitions',
-      query: `SELECT * FROM WORKFLOW_ENTITY;`
-    },
-  ],
-  governance: [
-    {
-      title: 'Most Popular Tags',
-      description: 'Find most frequently used classification tags',
-      query: `SELECT TAGNAME, COUNT(TAGNAME) as usage_count
-FROM TAG_RELATIONSHIP
-GROUP BY TAGNAME
-ORDER BY usage_count DESC;`
-    },
-    {
-      title: 'Tagged Tables',
-      description: 'List all tables with their assigned tags',
-      query: `-- Get all tables that have tags and their tag names
--- Useful for auditing tag coverage
-SELECT
-  TB.GUID,
-  TB.NAME AS TABLENAME,
-  TG.TAGNAME
-FROM TABLE_ENTITY TB
-JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
-WHERE TB.NAME IS NOT NULL;`
-    },
-    {
-      title: 'Untagged Tables (Compliance)',
-      description: 'Find tables without tags for compliance - includes creator and database for notification',
-      query: `-- TAG COMPLIANCE USE CASE
--- Some companies require all tables to have a tag
--- (e.g., specifying data retention period).
--- Tables without tags may be flagged for deletion.
-
--- Find all untagged tables with creator info for follow-up:
-SELECT DISTINCT
-  TB.GUID,
-  TB.NAME AS TABLENAME,
-  TB.CREATEDBY,
-  TB.DATABASEQUALIFIEDNAME
-FROM TABLE_ENTITY TB
-LEFT JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
-WHERE TG.TAGNAME IS NULL;
-
--- Use this to notify creators to add required tags`
-    },
-    {
-      title: 'Custom Metadata Query',
-      description: 'Find assets with specific custom metadata values',
-      query: `SELECT col.guid, col.name AS column_name,
-       cm.attributedisplayname, cm.attributevalue
-FROM COLUMN_ENTITY col
-JOIN CUSTOMMETADATA_RELATIONSHIP cm ON col.guid = cm.entityguid
-WHERE attributedisplayname = 'Cost Center Attribution'
-  AND attributevalue = 'COGS';`
-    },
-    {
-      title: 'Custom Metadata Overview',
-      description: 'Explore all custom metadata attributes',
-      query: `SELECT DISTINCT attributedisplayname, attributevalue, COUNT(*)
-FROM CUSTOMMETADATA_RELATIONSHIP
-GROUP BY attributedisplayname, attributevalue
-ORDER BY COUNT(*) DESC;`
-    },
-    {
-      title: 'Assets with Tags (Join Pattern)',
-      description: 'List assets with their tags using JOIN pattern',
-      query: `-- Pattern for listing any asset type with tags
-SELECT
-  TB.GUID,
-  TB.NAME AS TABLENAME,
-  TG.TAGNAME
-FROM TABLE_ENTITY TB
-JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID
-WHERE TB.NAME IS NOT NULL;
-
--- Same pattern works for columns, views, etc.
--- Just replace TABLE_ENTITY with the entity type you need`
-    },
-  ],
-  ai: [
-    {
-      title: 'AI Models Overview',
-      description: 'List all AI/ML models with status',
-      query: `SELECT NAME, AIMODELSTATUS, AIMODELVERSION, AIMODELTYPE
-FROM AIMODEL_ENTITY
-ORDER BY AIMODELVERSION DESC;`
-    },
-  ],
-};
-
-const columns = {
-  core: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'notes'],
-  glossary: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'qualifiedNamePattern', 'exampleQuery'],
-  datamesh: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'qualifiedNamePattern', 'exampleQuery'],
-  relational: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'qualifiedNamePattern', 'hierarchy'],
-  queries: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'hierarchy', 'notes'],
-  bi: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'connector', 'hierarchy'],
-  dbt: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'qualifiedNamePattern', 'notes'],
-  storage: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'connector', 'hierarchy'],
-  orchestration: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'connector', 'hierarchy'],
-  governance: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'notes'],
-  ai: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'notes'],
-};
-
-const colHeaders = {
-  entity: 'Entity Type',
-  table: 'MDLH Table',
-  description: 'Description',
-  keyAttributes: 'Key Attributes',
-  relationships: 'Relationships',
-  qualifiedNamePattern: 'qualifiedName Pattern',
-  hierarchy: 'Hierarchy',
-  connector: 'Connector',
-  notes: 'Notes',
-  exampleQuery: 'Example Query',
-};
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
@@ -1198,6 +332,7 @@ function CopyButton({ text }) {
   );
 }
 
+
 // Inline copy button for table cells
 function CellCopyButton({ text }) {
   const [copied, setCopied] = useState(false);
@@ -1224,7 +359,7 @@ function CellCopyButton({ text }) {
   );
 }
 
-// Slide-out Query Panel
+// Slide-out Query Panel - Now uses extracted shell + layout components
 function QueryPanel({ 
   isOpen, 
   onClose, 
@@ -1237,397 +372,102 @@ function QueryPanel({
   isConnected = false,
   batchValidationResults = new Map(),
   onShowMyWork = null,
-  isBatchValidating = false
+  isBatchValidating = false,
+  selectedDatabase = '',
+  selectedSchema = '',
+  queryValidationMap = new Map(),
+  onValidateAll = null,
+  onOpenConnectionModal = null
 }) {
-  const panelRef = useRef(null);
-  const highlightedRef = useRef(null);
+  // State for test query mode - shows embedded editor
+  const [testQueryMode, setTestQueryMode] = useState(null); // { query, title }
   
-  // Helper to check if a query's table is available
-  const getTableAvailability = (query) => {
-    if (!isConnected || discoveredTables.size === 0) return null;
-    const tableName = extractTableFromQuery(query);
-    if (!tableName) return null;
-    return discoveredTables.has(tableName.toUpperCase());
-  };
+  // Track if there are unsaved changes in the flyout editor
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   
-  // Sort queries: validated first, then unavailable last
-  const sortedQueries = [...queries].sort((a, b) => {
-    const aAvailable = getTableAvailability(a.query);
-    const bAvailable = getTableAvailability(b.query);
-    if (aAvailable === true && bAvailable !== true) return -1;
-    if (bAvailable === true && aAvailable !== true) return 1;
-    if (aAvailable === false && bAvailable !== false) return 1;
-    if (bAvailable === false && aAvailable !== false) return -1;
-    return 0;
-  });
-
-  // Close on escape key
+  // Reset test mode and unsaved changes when panel closes
   useEffect(() => {
-    const handleEscape = (e) => {
-      if (e.key === 'Escape' && isOpen) {
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, onClose]);
-
-  // Close on click outside
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (panelRef.current && !panelRef.current.contains(e.target) && isOpen) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen, onClose]);
-
-  // Scroll to highlighted query when panel opens
-  useEffect(() => {
-    if (isOpen && highlightedQuery && highlightedRef.current) {
-      setTimeout(() => {
-        highlightedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 350);
+    if (!isOpen) {
+      setTestQueryMode(null);
+      setHasUnsavedChanges(false);
     }
-  }, [isOpen, highlightedQuery]);
+  }, [isOpen]);
+  
+  // Handler for test query action
+  const handleTestQuery = useCallback((query, title) => {
+    uiLog.info('Enter Test Query mode', { title, queryPreview: query.substring(0, 50) });
+    setTestQueryMode({ query, title });
+    setHasUnsavedChanges(false);
+  }, []);
+  
+  // Handler to open in full editor
+  const handleOpenFullEditor = useCallback((sql) => {
+    uiLog.info('Open Full Editor from flyout', { sqlPreview: sql.substring(0, 50) });
+    onRunInEditor(sql);
+    onClose();
+  }, [onRunInEditor, onClose]);
+  
+  // Handler for back button in test mode
+  const handleBackFromTest = useCallback(() => {
+    uiLog.info('Back from Test Query mode');
+    setTestQueryMode(null);
+    setHasUnsavedChanges(false);
+  }, []);
+  
+  // Handler for close - check for unsaved changes
+  const handleBeforeClose = useCallback(() => {
+    // Only block if in test mode with unsaved changes
+    if (testQueryMode && hasUnsavedChanges) {
+      return true; // Block close, show confirmation
+    }
+    return false;
+  }, [testQueryMode, hasUnsavedChanges]);
+  
+  // Handle SQL changes from the flyout editor
+  const handleSqlChange = useCallback((sql, initialQuery) => {
+    setHasUnsavedChanges(sql !== initialQuery);
+  }, []);
 
   return (
-    <>
-      {/* Backdrop */}
-      <div 
-        className={`fixed inset-0 bg-black/30 backdrop-blur-sm z-40 transition-opacity duration-300 ${
-          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-      />
-      
-      {/* Panel */}
-      <div 
-        ref={panelRef}
-        className={`fixed top-0 right-0 h-full w-full max-w-2xl bg-white border-l border-gray-200 shadow-2xl z-50 transform transition-transform duration-300 ease-out ${
-          isOpen ? 'translate-x-0' : 'translate-x-full'
-        }`}
-      >
-        {/* Panel Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-[#3366FF]">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-white/20 rounded-lg">
-              <Code2 size={20} className="text-white" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-white">Example Queries</h2>
-              <p className="text-sm text-blue-100">{categoryLabel} • {queries.length} queries</p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-white/20 text-white transition-colors"
-            title="Close (Esc)"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        {/* Panel Content */}
-        <div className="overflow-y-auto h-[calc(100%-80px)] p-4 space-y-3 bg-gray-50">
-          {/* Connection status banner */}
-          {isConnected && discoveredTables.size > 0 && (
-            <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200 mb-4">
-              <Check size={16} className="text-green-600" />
-              <span className="text-sm text-green-700">
-                <strong>{discoveredTables.size} tables</strong> discovered • Validated queries show <span className="inline-flex items-center gap-1 px-1 bg-green-100 rounded text-green-700 text-xs font-medium"><Check size={10} />Ready</span>
-              </span>
-            </div>
-          )}
-          
-          {!isConnected && (
-            <div className="flex items-center gap-2 p-3 bg-gray-100 rounded-lg border border-gray-200 mb-4">
-              <Database size={16} className="text-gray-500" />
-              <span className="text-sm text-gray-600">
-                Connect to Snowflake (Query Editor tab) to validate which tables exist
-              </span>
-            </div>
-          )}
-          
-          {/* Loading indicators */}
-          {isLoading && (
-            <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200 mb-4">
-              <Loader2 size={16} className="animate-spin text-blue-600" />
-              <span className="text-sm text-blue-700">Fetching table columns from Snowflake...</span>
-            </div>
-          )}
-          
-          {isBatchValidating && (
-            <div className="flex items-center gap-2 p-3 bg-purple-50 rounded-lg border border-purple-200 mb-4">
-              <Loader2 size={16} className="animate-spin text-purple-600" />
-              <span className="text-sm text-purple-700">Testing queries & finding alternatives...</span>
-            </div>
-          )}
-          
-          {/* Show highlighted inline query at top if it's not in the main queries */}
-          {highlightedQuery && !queries.some(q => q.query === highlightedQuery) && (
-            <div ref={highlightedRef}>
-              <div className="mb-4 pb-4 border-b border-gray-200">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">
-                  {highlightedQuery.includes('Connect to Snowflake') ? '⚠️ Not Connected' : '✨ Smart Query'}
-                </p>
-                <QueryCard 
-                  title="Entity Query" 
-                  description={highlightedQuery.includes('Connect to Snowflake') 
-                    ? "Connect to Snowflake for intelligent column selection" 
-                    : "Query generated with real column metadata"} 
-                  query={highlightedQuery}
-                  tableAvailable={getTableAvailability(highlightedQuery)} 
-                  defaultExpanded={true}
-                  onRunInEditor={onRunInEditor}
-                  onShowMyWork={onShowMyWork}
-                />
-              </div>
-            </div>
-          )}
-          
-          {queries.length > 0 ? (
-            <>
-              {highlightedQuery && !queries.some(q => q.query === highlightedQuery) && (
-                <p className="text-xs text-gray-500 uppercase tracking-wider font-medium">More {categoryLabel} Queries</p>
-              )}
-              {sortedQueries.map((q, i) => {
-                const isHighlighted = highlightedQuery && q.query === highlightedQuery;
-                const tableAvailable = getTableAvailability(q.query);
-                const isAutoFixed = q.validation?.autoFixed;
-                const batchResult = batchValidationResults.get(`core_${i}`);
-                
-                return (
-                  <div key={q.queryId || i} ref={isHighlighted ? highlightedRef : null}>
-                    <QueryCard 
-                      title={isAutoFixed ? `${q.title} (Auto-Fixed)` : q.title}
-                      description={isAutoFixed 
-                        ? `${q.description} • Table changed: ${q.validation.changes.map(c => `${c.from} → ${c.to}`).join(', ')}`
-                        : q.description
-                      }
-                      query={q.query} 
-                      defaultExpanded={isHighlighted}
-                      onRunInEditor={onRunInEditor}
-                      tableAvailable={tableAvailable}
-                      validated={q.validation?.valid}
-                      autoFixed={isAutoFixed}
-                      validationResult={batchResult}
-                      onShowMyWork={onShowMyWork}
-                    />
-                  </div>
-                );
-              })}
-            </>
-          ) : !highlightedQuery ? (
-            <div className="text-center py-16">
-              <Code2 size={48} className="mx-auto text-gray-300 mb-3" />
-              <p className="text-gray-600 font-medium">No queries available</p>
-              <p className="text-gray-400 text-sm mt-1">Queries for this category are coming soon</p>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </>
-  );
-}
-
-function QueryCard({ 
-  title, 
-  description, 
-  query, 
-  defaultExpanded = false, 
-  onRunInEditor, 
-  validated = null, 
-  tableAvailable = null, 
-  autoFixed = false,
-  validationResult = null,  // Full validation result with suggestions
-  onShowMyWork = null       // Callback to open Show My Work modal
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  
-  // Determine status for visual feedback
-  const isValidated = validated === true || tableAvailable === true || validationResult?.status === 'success';
-  const isUnavailable = tableAvailable === false || validationResult?.status === 'error';
-  const isEmpty = validationResult?.status === 'empty';
-  const isAutoFixed = autoFixed;
-  const hasSuggestion = validationResult?.suggested_query;
-  const rowCount = validationResult?.row_count;
-  const sampleData = validationResult?.sample_data;
-  
-  return (
-    <div className={`bg-white rounded-xl border overflow-hidden transition-all duration-200 ${
-      expanded 
-        ? isValidated 
-          ? 'border-green-400 shadow-lg' 
-          : 'border-[#3366FF] shadow-lg'
-        : isUnavailable || isEmpty
-          ? 'border-orange-200 shadow-sm hover:shadow-md hover:border-orange-300 opacity-90'
-          : 'border-gray-200 shadow-sm hover:shadow-md hover:border-gray-300'
-    }`}>
-      <div 
-        className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${
-            isValidated ? 'bg-green-100' : (isUnavailable || isEmpty) ? 'bg-orange-100' : 'bg-[#3366FF]/10'
-          }`}>
-            {isValidated ? (
-              <Check size={18} className="text-green-600" />
-            ) : (isUnavailable || isEmpty) ? (
-              hasSuggestion ? <Sparkles size={18} className="text-orange-500" /> : <X size={18} className="text-orange-500" />
-            ) : (
-              <Code2 size={18} className="text-[#3366FF]" />
-            )}
-          </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h4 className="font-semibold text-gray-900 text-sm">{title}</h4>
-              {isAutoFixed && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-medium rounded-full">
-                  🔧 Fixed
-                </span>
-              )}
-              {isValidated && !isAutoFixed && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-medium rounded-full">
-                  <Check size={10} /> {rowCount ? `${rowCount.toLocaleString()} rows` : 'Ready'}
-                </span>
-              )}
-              {isEmpty && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-medium rounded-full">
-                  ⚠️ Empty table
-                </span>
-              )}
-              {isUnavailable && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[10px] font-medium rounded-full">
-                  Table Missing
-                </span>
-              )}
-              {hasSuggestion && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-medium rounded-full">
-                  <Sparkles size={10} /> Alternative available
-                </span>
-              )}
-            </div>
-            <p className="text-gray-500 text-xs mt-0.5">{description}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Show My Work button */}
-          {onShowMyWork && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onShowMyWork(query, validationResult);
-              }}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-100 hover:bg-purple-200 text-purple-700 border border-purple-200"
-              title="Learn how this query works"
-            >
-              <Eye size={10} />
-              Show Work
-            </button>
-          )}
-          <CopyButton text={query} />
-          {onRunInEditor && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                // If there's a suggested query that works better, offer to run it
-                if (hasSuggestion && (isUnavailable || isEmpty)) {
-                  onRunInEditor(validationResult.suggested_query);
-                } else {
-                  onRunInEditor(query);
-                }
-              }}
-              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${
-                isValidated 
-                  ? 'bg-green-500 hover:bg-green-600 text-white'
-                  : hasSuggestion
-                    ? 'bg-purple-500 hover:bg-purple-600 text-white'
-                    : (isUnavailable || isEmpty)
-                      ? 'bg-orange-400 hover:bg-orange-500 text-white'
-                      : 'bg-emerald-500 hover:bg-emerald-600 text-white'
-              }`}
-              title={
-                isValidated ? "✓ Run validated query" : 
-                hasSuggestion ? "Run suggested alternative" :
-                (isUnavailable || isEmpty) ? "Table may not have data" : 
-                "Open in Query Editor"
-              }
-            >
-              {hasSuggestion && !isValidated ? <Sparkles size={10} /> : <Play size={10} />}
-              {hasSuggestion && !isValidated ? 'Run Alt' : 'Run'}
-            </button>
-          )}
-          <div className={`w-6 h-6 flex items-center justify-center rounded-full bg-gray-100 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}>
-            <span className="text-gray-500 text-xs">▶</span>
-          </div>
-        </div>
-      </div>
-      {expanded && (
-        <div className="border-t border-gray-100 p-4 bg-gray-50">
-          {/* Sample data preview if available */}
-          {isValidated && sampleData && sampleData.length > 0 && (
-            <div className="mb-4">
-              <h5 className="text-xs font-medium text-gray-600 mb-2">📊 Sample Results ({rowCount?.toLocaleString()} total rows)</h5>
-              <div className="overflow-x-auto bg-white rounded border border-gray-200">
-                <table className="w-full text-[10px]">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      {Object.keys(sampleData[0]).slice(0, 6).map((col, i) => (
-                        <th key={i} className="px-2 py-1 text-left font-medium text-gray-600 border-b">
-                          {col}
-                        </th>
-                      ))}
-                      {Object.keys(sampleData[0]).length > 6 && (
-                        <th className="px-2 py-1 text-left text-gray-400 border-b">...</th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sampleData.slice(0, 3).map((row, rowIdx) => (
-                      <tr key={rowIdx} className="hover:bg-blue-50">
-                        {Object.values(row).slice(0, 6).map((val, colIdx) => (
-                          <td key={colIdx} className="px-2 py-1 border-b border-gray-100 max-w-[150px] truncate">
-                            {val !== null && val !== undefined ? String(val) : <span className="text-gray-300">null</span>}
-                          </td>
-                        ))}
-                        {Object.keys(row).length > 6 && (
-                          <td className="px-2 py-1 text-gray-300 border-b border-gray-100">...</td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-          
-          {/* Suggested query if original fails */}
-          {hasSuggestion && (isUnavailable || isEmpty) && (
-            <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
-              <div className="flex items-center gap-2 mb-2">
-                <Sparkles size={14} className="text-purple-500" />
-                <span className="text-xs font-medium text-purple-700">
-                  Suggested alternative ({validationResult.suggested_query_result?.row_count?.toLocaleString() || '?'} rows):
-                </span>
-              </div>
-              <pre className="text-[10px] text-purple-800 font-mono bg-white p-2 rounded overflow-x-auto">
-                {validationResult.suggested_query}
-              </pre>
-            </div>
-          )}
-          
-          {/* Original query */}
-          <div>
-            <h5 className="text-xs font-medium text-gray-600 mb-2">SQL Query</h5>
-            <pre className="text-xs text-gray-800 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed p-4 bg-white rounded-lg border border-gray-200">
-              {query}
-            </pre>
-          </div>
-        </div>
+    <QueryPanelShell 
+      isOpen={isOpen} 
+      onClose={onClose}
+      onBeforeClose={handleBeforeClose}
+    >
+      {testQueryMode ? (
+        <TestQueryLayout
+          testQueryMode={testQueryMode}
+          onBack={handleBackFromTest}
+          onClose={onClose}
+          onOpenFullEditor={handleOpenFullEditor}
+          selectedDatabase={selectedDatabase}
+          selectedSchema={selectedSchema}
+          onSqlChange={handleSqlChange}
+          availableTables={[...discoveredTables]}
+        />
+      ) : (
+        <QueryLibraryLayout
+          categoryLabel={categoryLabel}
+          onClose={onClose}
+          queries={queries}
+          highlightedQuery={highlightedQuery}
+          onRunInEditor={onRunInEditor}
+          isLoading={isLoading}
+          discoveredTables={discoveredTables}
+          isConnected={isConnected}
+          batchValidationResults={batchValidationResults}
+          onShowMyWork={onShowMyWork}
+          isBatchValidating={isBatchValidating}
+          selectedDatabase={selectedDatabase}
+          selectedSchema={selectedSchema}
+          queryValidationMap={queryValidationMap}
+          onValidateAll={onValidateAll}
+          onOpenConnectionModal={onOpenConnectionModal}
+          onTestQuery={handleTestQuery}
+          extractTableFromQuery={extractTableFromQuery}
+        />
       )}
-    </div>
+    </QueryPanelShell>
   );
 }
 
@@ -1644,7 +484,7 @@ function PlayQueryButton({ onClick, hasQuery, tableAvailable, isConnected }) {
     return (
       <button
         onClick={onClick}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 hover:bg-orange-200 text-orange-700 transition-all duration-200 border border-orange-200"
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 transition-all duration-200 border border-gray-200"
         title="Table not found - query may fail"
       >
         <Code2 size={12} />
@@ -1679,20 +519,13 @@ function PlayQueryButton({ onClick, hasQuery, tableAvailable, isConnected }) {
   );
 }
 
-// Default MDLH databases users can query
-// Note: Not all databases have the same tables - users should verify access
-const MDLH_DATABASES = [
-  { name: 'FIELD_METADATA', label: 'Field Metadata (atlan.atlan.com)', schema: 'PUBLIC' },
-  { name: 'ATLAN_MDLH', label: 'Atlan MDLH', schema: 'PUBLIC' },
-  { name: 'MDLH_GOVERNANCE', label: 'MDLH Governance', schema: 'PUBLIC', warning: 'May have different tables' },
-  { name: 'MDLH_ATLAN_HOME', label: 'MDLH Atlan Home', schema: 'PUBLIC', warning: 'May have different tables' },
-];
+// Note: MDLH_DATABASES, MDLH_SCHEMAS, and fetchTableColumns are imported from data/constants.js and utils/tableDiscovery.js
 
-// Schema options for the selected database
-const MDLH_SCHEMAS = ['PUBLIC', 'INFORMATION_SCHEMA'];
+// Local columnCache for table column caching
+const columnCache = new Map();
 
-// Fetch columns for a table from the backend
-async function fetchTableColumns(database, schema, table) {
+// Local fetchTableColumns - keeping for backward compat until full migration
+async function localFetchTableColumns(database, schema, table) {
   const cacheKey = `${database}.${schema}.${table}`;
   
   // Return cached columns if available
@@ -1706,7 +539,7 @@ async function fetchTableColumns(database, schema, table) {
     const sessionId = sessionData ? JSON.parse(sessionData).sessionId : null;
     
     if (!sessionId) {
-      console.log('No session - cannot fetch columns');
+      appLog.warn('fetchColumnsForTable() - no session, cannot fetch columns');
       return null;
     }
     
@@ -1722,7 +555,7 @@ async function fetchTableColumns(database, schema, table) {
       return columns;
     }
   } catch (err) {
-    console.error('Failed to fetch columns:', err);
+    appLog.error('fetchColumnsForTable() - failed', { error: err.message });
   }
   
   return null;
@@ -1741,7 +574,7 @@ function selectQueryColumns(columns, entityName, maxColumns = 8) {
     hierarchy: ['DATABASENAME', 'SCHEMANAME', 'TABLENAME', 'CONNECTIONNAME', 'CONNECTORNAME'],
     description: ['DESCRIPTION', 'USERDESCRIPTION', 'SHORTDESCRIPTION'],
     metadata: ['TYPENAME', 'DATATYPE', 'STATUS'],
-    governance: ['CERTIFICATESTATUS', 'OWNERUSERS', 'OWNERGROUPS'],
+    governance: ['CERTIFICATESTATUSMESSAGE', 'OWNERUSERS', 'OWNERGROUPS'],
     metrics: ['QUERYCOUNT', 'POPULARITYSCORE', 'ROWCOUNT', 'COLUMNCOUNT'],
     timestamps: ['CREATETIME', 'UPDATETIME'],
     // Entity-specific priority columns
@@ -2039,11 +872,19 @@ LIMIT ${limit};
 }
 
 export default function App() {
+  // =========================================================================
+  // Backend Restart Detection
+  // =========================================================================
+  // This MUST be first - it clears stale sessions before any other hooks run
+  useBackendInstanceGuard();
+  
   const [activeTab, setActiveTab] = useState('core');
   const [search, setSearch] = useState('');
   const [showQueries, setShowQueries] = useState(false);
   const [highlightedQuery, setHighlightedQuery] = useState(null);
   const [editorQuery, setEditorQuery] = useState('');
+  const [selectedEntity, setSelectedEntity] = useState(null);
+  const [showRecommendations, setShowRecommendations] = useState(false);
   const [selectedMDLHDatabase, setSelectedMDLHDatabase] = useState('FIELD_METADATA');
   const [selectedMDLHSchema, setSelectedMDLHSchema] = useState('PUBLIC');
   const searchRef = useRef(null);
@@ -2057,6 +898,10 @@ export default function App() {
   const [showOnlyAvailable, setShowOnlyAvailable] = useState(true); // Filter to show only queryable entities
   const [queryValidationMap, setQueryValidationMap] = useState(new Map()); // Pre-validated queries
   
+  // Dynamic queries - transformed to use actual discovered table names with FQNs
+  const [exampleQueries, setExampleQueries] = useState(staticExampleQueries);
+  const [mergedExampleQueries, setMergedExampleQueries] = useState(staticMergedQueries);
+  
   // State for batch validation results (with suggestions)
   const [batchValidationResults, setBatchValidationResults] = useState(new Map()); // queryId -> full validation result
   const [isBatchValidating, setIsBatchValidating] = useState(false);
@@ -2065,56 +910,274 @@ export default function App() {
   const [showMyWorkQuery, setShowMyWorkQuery] = useState(null);
   const [showMyWorkValidation, setShowMyWorkValidation] = useState(null);
   
-  // Check connection status on mount and when session changes
+  // Global connection modal state
+  const [showConnectionModal, setShowConnectionModal] = useState(false);
+  
+  // Lineage flyout state
+  const [showLineageFlyout, setShowLineageFlyout] = useState(false);
+  const [selectedLineageEntity, setSelectedLineageEntity] = useState(null);
+  const [lineagePreviewCache, setLineagePreviewCache] = useState({});
+  const [hoveredTable, setHoveredTable] = useState(null);
+  
+  // Handler to open lineage flyout with a specific entity
+  const handleOpenLineagePanel = useCallback((entityData = null) => {
+    console.log('[App.handleOpenLineagePanel] Opening lineage panel:', {
+      entityData,
+      name: entityData?.NAME || entityData?.name,
+      guid: entityData?.GUID || entityData?.guid
+    });
+    setSelectedLineageEntity(entityData);
+    setShowLineageFlyout(true);
+  }, []);
+
+  // Command palette state
+  const [isCmdOpen, setIsCmdOpen] = useState(false);
+  
+  // Use global connection hook
+  const { 
+    status: globalConnectionStatus, 
+    testConnection: globalTestConnection, 
+    loading: globalConnectionLoading 
+  } = useConnection();
+  
+  // Use sample entities hook - loads real GUIDs from discovered tables
+  const {
+    samples: sampleEntities,
+    loadSamples: loadSampleEntities,
+    clearSamples: clearSampleEntities
+  } = useSampleEntities();
+  
+  // Use query hook for executing SQL
+  const { executeQuery: lineageExecuteQuery } = useQuery(globalConnectionStatus);
+  
+  // Use dynamic lineage data hook - fetches lineage for tables in the current query
+  // Following OpenLineage standard: Job (process) with input/output Datasets
+  const {
+    lineageData: dynamicLineage,
+    loading: lineageLoading,
+    error: lineageError,
+    currentTable: lineageCurrentTable,
+    refetch: refetchLineage,
+    fetchForEntity: fetchLineageForEntity
+  } = useLineageData(
+    lineageExecuteQuery,
+    isConnected,
+    selectedMDLHDatabase || DEFAULT_DATABASE,
+    selectedMDLHSchema || DEFAULT_SCHEMA,
+    editorQuery, // Pass current query to show contextual lineage
+    discoveredTables // Pass discovered tables so lineage knows what's available
+  );
+
+  // Fetch lineage when a specific entity is selected (from EntityDetailPanel, etc.)
   useEffect(() => {
-    const checkConnection = async () => {
+    if (selectedLineageEntity && showLineageFlyout && fetchLineageForEntity) {
+      const entityName = selectedLineageEntity.NAME || selectedLineageEntity.name;
+      const entityGuid = selectedLineageEntity.GUID || selectedLineageEntity.guid;
+      const identifier = entityName || entityGuid;
+
+      if (identifier) {
+        console.log('[App] Fetching lineage for explicitly selected entity:', identifier);
+        fetchLineageForEntity(identifier);
+      }
+    }
+  }, [selectedLineageEntity, showLineageFlyout, fetchLineageForEntity]);
+
+  // Trigger sample lineage fetch when lineage flyout opens without a specific entity
+  useEffect(() => {
+    if (showLineageFlyout && isConnected && !selectedLineageEntity && !dynamicLineage && !lineageLoading && refetchLineage) {
+      console.log('[App] Lineage flyout opened - triggering sample lineage fetch');
+      refetchLineage();
+    }
+  }, [showLineageFlyout, isConnected, selectedLineageEntity, dynamicLineage, lineageLoading, refetchLineage]);
+
+  // Prefetch and cache lineage previews for popular assets (used on hover)
+  const loadLineagePreview = useCallback(async (tableFqn) => {
+    if (!isConnected || !tableFqn) return;
+
+    // Skip if already loading or ready
+    const existing = lineagePreviewCache[tableFqn];
+    if (existing?.status === 'ready' || existing?.status === 'loading') {
+      return;
+    }
+
+    const query = buildLineagePreviewQuery(tableFqn);
+    setLineagePreviewCache((prev) => ({
+      ...prev,
+      [tableFqn]: { status: 'loading', query },
+    }));
+
+    try {
+      const result = await lineageExecuteQuery(query, {
+        database: selectedMDLHDatabase,
+        schema: selectedMDLHSchema,
+        timeout: 30,
+      });
+
+      if (result?.rows?.length) {
+        const graph = buildLineagePreviewGraph(result, tableFqn);
+        setLineagePreviewCache((prev) => ({
+          ...prev,
+          [tableFqn]: {
+            status: 'ready',
+            query,
+            graph,
+            result,
+          },
+        }));
+      } else {
+        setLineagePreviewCache((prev) => ({
+          ...prev,
+          [tableFqn]: {
+            status: 'error',
+            query,
+            error: 'No lineage activity found in last 30 days',
+          },
+        }));
+      }
+    } catch (err) {
+      setLineagePreviewCache((prev) => ({
+        ...prev,
+        [tableFqn]: {
+          status: 'error',
+          query,
+          error: err?.message || 'Failed to fetch lineage preview',
+        },
+      }));
+    }
+  }, [isConnected, lineageExecuteQuery, selectedMDLHDatabase, selectedMDLHSchema, lineagePreviewCache]);
+
+  // Hover handlers for table lineage previews
+  const handleTableHover = useCallback((tableName) => {
+    if (!tableName || tableName === '(abstract)') return;
+    const fqn = buildSafeFQN(selectedMDLHDatabase, selectedMDLHSchema, tableName);
+    setHoveredTable(tableName);
+    loadLineagePreview(fqn);
+  }, [selectedMDLHDatabase, selectedMDLHSchema, loadLineagePreview]);
+
+  const clearTableHover = useCallback(() => {
+    setHoveredTable(null);
+  }, []);
+
+  // Auto-load lineage previews for the most popular sampled tables
+  useEffect(() => {
+    if (!isConnected || !sampleEntities?.loaded || !sampleEntities.tables?.length) return;
+
+    const sortedTables = [...sampleEntities.tables].sort(
+      (a, b) => (b.POPULARITYSCORE || 0) - (a.POPULARITYSCORE || 0)
+    );
+
+    sortedTables.slice(0, 3).forEach((row) => {
+      const tableName = row.NAME || row.name;
+      if (!tableName) return;
+      const fqn = buildSafeFQN(selectedMDLHDatabase, selectedMDLHSchema, tableName);
+      loadLineagePreview(fqn);
+    });
+  }, [isConnected, sampleEntities, selectedMDLHDatabase, selectedMDLHSchema, loadLineagePreview]);
+  
+  // Handle successful connection from global modal
+  const handleGlobalConnectionSuccess = useCallback((status) => {
+    uiLog.info('Connection success from modal', { database: status?.database });
+    setShowConnectionModal(false);
+    setIsConnected(true);
+    // Table discovery will be triggered by the useEffect watching isConnected
+  }, []);
+  
+  // Check connection status on mount and when session changes
+  // FIX: Sync local isConnected state with globalConnectionStatus from useConnection hook
+  useEffect(() => {
+    let lastStatus = null; // Track last status to avoid spammy logs
+    
+    // Helper function with timeout to prevent hanging
+    const fetchWithTimeout = async (url, options, timeoutMs = 5000) => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        return response;
+      } finally {
+        clearTimeout(id);
+      }
+    };
+    
+    const checkConnection = async (source = 'poll') => {
       const sessionData = sessionStorage.getItem('snowflake_session');
       if (!sessionData) {
+        if (lastStatus !== 'disconnected') {
+          lastStatus = 'disconnected';
+          if (source !== 'poll') {
+            appLog.info('Connection status: Not connected (no session)');
+          }
+        }
         setIsConnected(false);
-        console.log('[App] Connection status: Not connected (no session)');
         return;
       }
       
-      // Validate session with backend
+      // Validate session with backend (with timeout!)
       try {
-        const { sessionId } = JSON.parse(sessionData);
-        const response = await fetch(`${API_BASE_URL}/api/session/status`, {
-          headers: { 'X-Session-ID': sessionId }
-        });
+        const { sessionId, database, schema } = JSON.parse(sessionData);
+        const response = await fetchWithTimeout(
+          `${API_BASE_URL}/api/session/status`,
+          { headers: { 'X-Session-ID': sessionId } },
+          5000 // 5-second timeout to match useConnection hook
+        );
         const status = await response.json();
         
         if (status.valid) {
+          if (lastStatus !== 'connected') {
+            lastStatus = 'connected';
+            appLog.info('Connection status: Connected (session valid)', { database: status.database });
+          }
           setIsConnected(true);
-          console.log('[App] Connection status: Connected (session valid)');
         } else {
           // Session expired or invalid - clear it
           sessionStorage.removeItem('snowflake_session');
+          if (lastStatus !== 'expired') {
+            lastStatus = 'expired';
+            appLog.warn('Connection status: Session expired, cleared');
+          }
           setIsConnected(false);
-          console.log('[App] Connection status: Session expired, cleared');
         }
       } catch (err) {
-        console.error('[App] Session validation failed:', err);
-        setIsConnected(false);
+        // FIX: On timeout or network error, assume session is still valid (like useConnection does)
+        if (err.name === 'AbortError') {
+          appLog.warn('Session check timed out - assuming still valid');
+          setIsConnected(true);
+        } else {
+          // For other errors, also assume valid if we have a session
+          appLog.warn('Session check error - assuming still valid', { error: err.message });
+          setIsConnected(true);
+        }
       }
     };
-    checkConnection();
+    checkConnection('mount');
     
     // Listen for custom session change event (dispatched by ConnectionModal)
     const handleSessionChange = (event) => {
-      console.log('[App] Session change event received:', event.detail);
-      checkConnection();
+      appLog.info('Session change event received', { 
+          hasSession: !!event.detail?.sessionId,
+          database: event.detail?.database
+        });
+      lastStatus = null; // Reset so we log the new status
+      
+      // FIX: Immediately set connected if event indicates connected
+      if (event.detail?.connected || event.detail?.sessionId) {
+        setIsConnected(true);
+      }
+      
+      checkConnection('event');
     };
     window.addEventListener('snowflake-session-changed', handleSessionChange);
     
     // Also listen for storage changes (in case session is modified from another tab)
-    window.addEventListener('storage', checkConnection);
+    const handleStorageChange = () => checkConnection('storage');
+    window.addEventListener('storage', handleStorageChange);
     
-    // Periodic check as fallback
-    const interval = setInterval(checkConnection, 3000);
+    // Periodic check as fallback (less frequent - 30 seconds)
+    const interval = setInterval(() => checkConnection('poll'), 30000);
     
     return () => {
       window.removeEventListener('snowflake-session-changed', handleSessionChange);
-      window.removeEventListener('storage', checkConnection);
+      window.removeEventListener('storage', handleStorageChange);
       clearInterval(interval);
     };
   }, []);
@@ -2126,12 +1189,37 @@ export default function App() {
       discoverMDLHTables(selectedMDLHDatabase, selectedMDLHSchema)
         .then(tables => {
           setDiscoveredTables(tables);
-          console.log(`[App] Discovered ${tables.size} tables`);
+          appLog.info('Discovered tables', { count: tables.size, database: selectedMDLHDatabase, schema: selectedMDLHSchema });
           
-          // Pre-validate all queries
+          // Load sample entities for real GUIDs in recommended queries
           if (tables.size > 0) {
+            loadSampleEntities(selectedMDLHDatabase, selectedMDLHSchema, tables);
+            appLog.info('Loading sample entities for recommended queries');
+          }
+          
+          // DYNAMIC QUERIES: Transform static queries to use actual discovered table names with FQNs
+          if (tables.size > 0) {
+            const transformedQueries = transformExampleQueries(
+              staticExampleQueries,
+              selectedMDLHDatabase,
+              selectedMDLHSchema,
+              tables
+            );
+            setExampleQueries(transformedQueries);
+            
+            const transformedMerged = transformExampleQueries(
+              staticMergedQueries,
+              selectedMDLHDatabase,
+              selectedMDLHSchema,
+              tables
+            );
+            setMergedExampleQueries(transformedMerged);
+            
+            appLog.info('Transformed queries to use discovered tables with FQNs');
+            
+            // Pre-validate all transformed queries
             const validationMap = preValidateAllQueries(
-              exampleQueries, 
+              transformedQueries, 
               tables, 
               selectedMDLHDatabase, 
               selectedMDLHSchema
@@ -2142,12 +1230,12 @@ export default function App() {
             const valid = [...validationMap.values()].filter(v => v.valid === true).length;
             const invalid = [...validationMap.values()].filter(v => v.valid === false).length;
             const autoFixed = [...validationMap.values()].filter(v => v.autoFixed).length;
-            console.log(`[App] Query validation: ${valid} valid, ${invalid} invalid, ${autoFixed} auto-fixed`);
+            appLog.info('Query validation complete', { valid, invalid, autoFixed });
           }
         })
         .finally(() => setIsDiscovering(false));
     }
-  }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema]);
+  }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema, loadSampleEntities]);
   
   // Run batch validation on entity example queries to get sample data and suggestions
   const runBatchValidation = useCallback(async () => {
@@ -2173,10 +1261,10 @@ export default function App() {
       }
     });
     
-    // Also add entity-specific queries
-    entities.filter(e => e.exampleQuery).forEach(entity => {
+    // Also add entity-specific queries from data
+    Object.values(data).flat().filter(e => e.exampleQuery).forEach(entity => {
       queriesToValidate.push({
-        query_id: `entity_${entity.tableName || entity.name}`,
+        query_id: `entity_${entity.table || entity.name}`,
         sql: entity.exampleQuery,
         entity_type: entity.name,
         description: `Example query for ${entity.name}`
@@ -2186,7 +1274,7 @@ export default function App() {
     if (queriesToValidate.length === 0) return;
     
     setIsBatchValidating(true);
-    console.log(`[App] Running batch validation on ${queriesToValidate.length} queries...`);
+    appLog.info('Running batch validation', { queryCount: queriesToValidate.length });
     
     try {
       const response = await fetch(`${API_BASE_URL}/api/query/validate-batch`, {
@@ -2215,12 +1303,12 @@ export default function App() {
         
         setBatchValidationResults(resultsMap);
         
-        console.log(`[App] Batch validation complete:`, data.summary);
+        appLog.info('Batch validation complete', data.summary);
       } else {
-        console.error('[App] Batch validation failed:', response.status);
+        appLog.error('Batch validation failed', { status: response.status });
       }
     } catch (err) {
-      console.error('[App] Batch validation error:', err);
+      appLog.error('Batch validation error', { error: err.message });
     } finally {
       setIsBatchValidating(false);
     }
@@ -2235,6 +1323,10 @@ export default function App() {
   
   // Handler for "Show My Work" button
   const handleShowMyWork = useCallback((query, validationResult) => {
+    uiLog.info('Show My Work clicked', { 
+      queryPreview: query.substring(0, 50),
+      valid: validationResult?.valid 
+    });
     setShowMyWorkQuery(query);
     setShowMyWorkValidation(validationResult);
   }, []);
@@ -2250,16 +1342,16 @@ export default function App() {
     return discoveredTables.has(tableName.toUpperCase());
   }, [isConnected, discoveredTables]);
 
-  // Keyboard shortcut: Cmd/Ctrl + K to focus search
+  // Keyboard shortcut: Cmd/Ctrl + K to toggle command palette
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        searchRef.current?.focus();
+        setIsCmdOpen((prev) => !prev);
       }
     };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   // Function to open Query Editor with a specific query
@@ -2290,15 +1382,24 @@ export default function App() {
   });
 
   // Filter and enhance queries with validation status
-  const filteredQueries = (exampleQueries[activeTab] || []).map((q, index) => {
+  // Use merged queries which include user research queries
+  // CRITICAL: Filter out queries that reference non-existent tables!
+  const filteredQueries = (mergedExampleQueries[activeTab] || exampleQueries[activeTab] || []).map((q, index) => {
     const queryId = `${activeTab}-${index}`;
     const validation = queryValidationMap.get(queryId);
+    
+    // If no pre-computed validation, do inline validation against discovered tables
+    // This catches any queries with hardcoded entity names that don't exist
+    let inlineValidation = null;
+    if (!validation && isConnected && discoveredTables.size > 0) {
+      inlineValidation = validateQueryTables(q.query, discoveredTables);
+    }
     
     return {
       ...q,
       // Use fixed query if available
       query: validation?.fixedQuery || q.query,
-      validation,
+      validation: validation || inlineValidation,
       queryId
     };
   }).filter(q => {
@@ -2309,10 +1410,17 @@ export default function App() {
       q.query.toLowerCase().includes(search.toLowerCase());
     if (!matchesSearch) return false;
     
-    // Availability filter
-    if (showOnlyAvailable && isConnected && queryValidationMap.size > 0) {
-      // Show valid queries and auto-fixed queries
-      return q.validation?.valid !== false;
+    // Availability filter - ALWAYS filter when connected with discovered tables
+    // This is the KEY fix: filter out queries that reference non-existent tables
+    if (isConnected && discoveredTables.size > 0) {
+      // Use pre-computed validation or inline validation
+      const isValid = q.validation?.valid !== false;
+      
+      // If showOnlyAvailable is off, show everything but mark unavailable ones
+      // If showOnlyAvailable is on, only show valid queries
+      if (showOnlyAvailable) {
+        return isValid;
+      }
     }
     
     return true;
@@ -2326,6 +1434,7 @@ export default function App() {
   }).length;
 
   // Find a query related to an entity by searching for table name in query SQL
+  // CRITICAL: Only return queries whose referenced tables exist!
   const findQueryForEntity = (entityName, tableName) => {
     const allQueries = exampleQueries[activeTab] || [];
     
@@ -2334,10 +1443,17 @@ export default function App() {
     const tableNameLower = tableName.toLowerCase();
     const entityNameLower = entityName.toLowerCase();
     
+    // Helper to check if a query's tables are valid
+    const isQueryValid = (q) => {
+      if (!isConnected || discoveredTables.size === 0) return true; // No validation without discovery
+      const validation = validateQueryTables(q.query, discoveredTables);
+      return validation.valid;
+    };
+    
     // Priority 1: Exact table name match in query SQL (e.g., "FROM TABLE_ENTITY" or "TABLE_ENTITY")
     let matchedQuery = allQueries.find(q => {
       const queryLower = q.query.toLowerCase();
-      return (
+      const hasMatch = (
         queryLower.includes(`from ${tableNameLower}`) ||
         queryLower.includes(`from\n    ${tableNameLower}`) ||
         queryLower.includes(`from\n${tableNameLower}`) ||
@@ -2345,6 +1461,7 @@ export default function App() {
         // Also check for the table name as a standalone reference
         new RegExp(`\\b${tableNameLower.replace(/_/g, '_')}\\b`).test(queryLower)
       );
+      return hasMatch && isQueryValid(q);
     });
     
     // Priority 2: Entity name explicitly in title (e.g., "Table" in title for TABLE_ENTITY)
@@ -2352,11 +1469,12 @@ export default function App() {
       matchedQuery = allQueries.find(q => {
         const titleLower = q.title.toLowerCase();
         // Match singular entity name (e.g., "Column" for Column entity, "Table" for Table)
-        return (
+        const hasMatch = (
           titleLower.includes(entityNameLower) ||
           titleLower.includes(entityNameLower + 's') || // plural
           titleLower.includes(entityNameLower + ' ')
         );
+        return hasMatch && isQueryValid(q);
       });
     }
     
@@ -2391,7 +1509,7 @@ export default function App() {
         );
         setHighlightedQuery(dynamicQuery);
       } catch (err) {
-        console.error('Error fetching columns:', err);
+        appLog.error('Error fetching columns', { table: tableName, error: err.message });
         // Fallback to basic query
         const dynamicQuery = generateEntityQuery(
           entityName, 
@@ -2456,179 +1574,358 @@ export default function App() {
   };
 
   return (
+    <SystemConfigProvider>
+    <EntityPanelProvider>
     <div className="min-h-screen bg-white text-gray-900">
-      {/* Navigation Bar */}
+      {/* Navigation Bar - DuckDB style: clean white, minimal */}
       <nav className="border-b border-gray-200 bg-white sticky top-0 z-30">
         <div className="max-w-full mx-auto px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-[#3366FF] font-bold text-xl">atlan</span>
-          </div>
+          {/* Logo */}
           <div className="flex items-center gap-3">
+            <AtlanIcon size={28} />
+            <span className="font-semibold text-lg text-gray-900">MDLH</span>
+          </div>
+          
+          {/* Right side controls */}
+          <div className="flex items-center gap-2">
+            {/* Search - DuckDB style: simple input with icon */}
             <div className="relative">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 ref={searchRef}
                 type="text"
                 placeholder="Search..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="w-64 pl-9 pr-16 py-2 bg-white border border-gray-300 rounded-full text-sm focus:outline-none focus:border-[#3366FF] focus:ring-2 focus:ring-[#3366FF]/20 transition-all duration-200 placeholder-gray-400"
+                className="w-48 pl-9 pr-14 py-2 bg-gray-100 border-0 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-200 transition-all placeholder-gray-500"
               />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5 text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+              <button
+                type="button"
+                onClick={() => setIsCmdOpen(true)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 text-[10px] text-gray-400 bg-white px-1.5 py-0.5 rounded border border-gray-200 font-mono hover:border-gray-300 transition-colors"
+              >
                 <Command size={10} />
                 <span>K</span>
-              </div>
+              </button>
             </div>
+            
+            {/* Connection Indicator */}
+            <ConnectionIndicator
+              status={globalConnectionStatus}
+              loading={globalConnectionLoading}
+              onClick={() => setShowConnectionModal(true)}
+              database={selectedMDLHDatabase}
+              schema={selectedMDLHSchema}
+            />
           </div>
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <div className="bg-[#3366FF] rounded-2xl mx-6 mt-6 p-8 text-white">
-        <div className="max-w-4xl mx-auto text-center">
-          <h1 className="text-3xl font-semibold mb-3 italic">
-            Metadata Lakehouse Entity Dictionary
+      {/* Unreachable Banner - shown when backend is down */}
+      {globalConnectionStatus?.unreachable && (
+        <UnreachableBanner onRetry={globalTestConnection} />
+      )}
+
+      {/* Main layout with sidebar */}
+      <div className="flex flex-1 overflow-hidden" style={{ height: 'calc(100vh - 57px)' }}>
+        {/* Left Sidebar - Category Navigation */}
+        <EntityBrowser
+          database={selectedMDLHDatabase}
+          schema={selectedMDLHSchema}
+          selectedCategory={activeTab}
+          onCategoryChange={(categoryId) => setActiveTab(categoryId)}
+          onOpenInEditor={(sql) => openInEditor(sql)}
+        />
+
+        {/* Main Content Area */}
+        <div className="flex-1 overflow-y-auto">
+          {/* Hero Section - DuckDB style: white bg, bold headlines, blue highlights */}
+          <div className="mx-6 mt-8 mb-6">
+        <div className="max-w-4xl">
+          {/* Headline with highlighted keyword */}
+          <h1 className="text-4xl md:text-5xl font-bold text-slate-900 leading-tight">
+            MDLH is a{' '}
+            <span className="bg-[#3366FF] text-white px-2 rounded">metadata</span>{' '}
+            dictionary
           </h1>
-          <p className="text-blue-100 text-lg">
-            Reference guide for MDLH entity types, tables, attributes, and example queries
+          <p className="text-lg text-slate-600 mt-4 max-w-2xl">
+            Explore MDLH entity types, tables, attributes, and example queries using DuckDB's feature-rich SQL dialect
           </p>
           
-          {/* Quick Action Buttons */}
-          <div className="flex flex-wrap justify-center gap-3 mt-6">
+          {/* Action buttons - DuckDB style: dark primary, white secondary, text tertiary */}
+          <div className="flex flex-wrap items-center gap-3 mt-6">
             <button
               onClick={() => {
                 setHighlightedQuery(null);
                 setShowQueries(true);
               }}
-              className="px-5 py-2.5 bg-white text-[#3366FF] rounded-full text-sm font-medium hover:bg-blue-50 transition-all duration-200 flex items-center gap-2"
+              className="px-5 py-2.5 bg-gray-900 text-white rounded-full text-sm font-medium hover:bg-gray-800 transition-colors flex items-center gap-2"
             >
-              <Code2 size={16} />
+              <Code2 size={14} />
               View All Queries
             </button>
             <button
               onClick={downloadCSV}
-              className="px-5 py-2.5 bg-white/20 text-white border border-white/30 rounded-full text-sm font-medium hover:bg-white/30 transition-all duration-200 flex items-center gap-2"
+              className="px-5 py-2.5 bg-white text-gray-700 border border-gray-300 rounded-full text-sm font-medium hover:border-gray-400 transition-colors flex items-center gap-2"
             >
               <Download size={14} />
               Export Tab
             </button>
             <button
               onClick={downloadAllCSV}
-              className="px-5 py-2.5 bg-white/20 text-white border border-white/30 rounded-full text-sm font-medium hover:bg-white/30 transition-all duration-200 flex items-center gap-2"
+              className="text-sm text-gray-600 hover:text-gray-900 transition-colors flex items-center gap-2"
             >
               <Download size={14} />
               Export All
             </button>
           </div>
           
-          {/* Database & Schema Selector for Query Context */}
-          <div className="flex flex-col items-center gap-2 mt-4">
+          {/* Database & Schema Selector - cleaner DuckDB style */}
+          <div className="flex flex-wrap items-center gap-3 mt-6 pt-6 border-t border-slate-200">
             <div className="flex items-center gap-2">
-              <Database size={14} className="text-blue-100" />
-              <span className="text-sm text-blue-100">Query Context:</span>
-              <select
-                value={selectedMDLHDatabase}
-                onChange={(e) => setSelectedMDLHDatabase(e.target.value)}
-                className="px-3 py-1.5 bg-white/20 text-white border border-white/30 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer appearance-none"
-                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='white'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center', backgroundSize: '16px', paddingRight: '32px' }}
-              >
-                {MDLH_DATABASES.map(db => (
-                  <option key={db.name} value={db.name} className="text-gray-900">
-                    {db.name}
-                  </option>
-                ))}
-              </select>
-              <span className="text-blue-100">.</span>
-              <select
-                value={selectedMDLHSchema}
-                onChange={(e) => setSelectedMDLHSchema(e.target.value)}
-                className="px-3 py-1.5 bg-white/20 text-white border border-white/30 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer appearance-none"
-                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='white'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center', backgroundSize: '16px', paddingRight: '32px' }}
-              >
-                {MDLH_SCHEMAS.map(sch => (
-                  <option key={sch} value={sch} className="text-gray-900">
-                    {sch}
-                  </option>
-                ))}
-              </select>
+              <Database size={14} className="text-slate-400" />
+              <span className="text-sm text-slate-500">Context:</span>
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+                <select
+                  value={selectedMDLHDatabase}
+                  onChange={(e) => setSelectedMDLHDatabase(e.target.value)}
+                  className="px-2.5 py-1 bg-white text-slate-800 border-0 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-slate-300 cursor-pointer shadow-sm"
+                >
+                  {MDLH_DATABASES.map(db => (
+                    <option key={db.name} value={db.name}>
+                      {db.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-slate-400 px-0.5">.</span>
+                <select
+                  value={selectedMDLHSchema}
+                  onChange={(e) => setSelectedMDLHSchema(e.target.value)}
+                  className="px-2.5 py-1 bg-white text-slate-800 border-0 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-slate-300 cursor-pointer shadow-sm"
+                >
+                  {MDLH_SCHEMAS.map(sch => (
+                    <option key={sch} value={sch}>
+                      {sch}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             
-            {/* Connection status and availability toggle */}
+            {/* Connection status - cleaner pills */}
             {isConnected && discoveredTables.size > 0 ? (
-              <div className="flex items-center gap-3 mt-2">
-                <div className="flex items-center gap-1.5 text-xs text-green-200 bg-green-500/20 px-3 py-1.5 rounded-full">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-100 px-3 py-1.5 rounded-full font-medium">
                   <Check size={12} />
-                  <span><strong>{discoveredTables.size}</strong> tables found • <strong>{availableEntities}</strong>/{totalEntities} entities queryable</span>
+                  <span>{discoveredTables.size} tables · {availableEntities}/{totalEntities} queryable</span>
                 </div>
-                <label className="flex items-center gap-2 text-xs text-blue-100 cursor-pointer">
+                <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={showOnlyAvailable}
                     onChange={(e) => setShowOnlyAvailable(e.target.checked)}
-                    className="w-4 h-4 rounded border-white/30 bg-white/20 text-green-500 focus:ring-green-500"
+                    className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                   />
-                  <span>Show only queryable</span>
+                  <span>Only queryable</span>
                 </label>
               </div>
             ) : isConnected ? (
-              <div className="flex items-center gap-1.5 text-xs text-blue-200 bg-blue-500/20 px-3 py-1.5 rounded-full mt-2">
+              <div className="flex items-center gap-1.5 text-xs text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">
                 {isDiscovering ? (
                   <>
                     <Loader2 size={12} className="animate-spin" />
-                    <span>Discovering tables...</span>
+                    <span>Discovering tables in {selectedMDLHDatabase}.{selectedMDLHSchema}…</span>
                   </>
                 ) : (
                   <>
                     <Database size={12} />
-                    <span>No tables found in {selectedMDLHDatabase}.{selectedMDLHSchema}</span>
+                    <span>No tables in {selectedMDLHDatabase}.{selectedMDLHSchema}</span>
                   </>
                 )}
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 text-xs text-blue-200 bg-blue-500/20 px-3 py-1.5 rounded-full mt-2">
-                <Database size={12} />
-                <span>Connect via Query Editor to validate tables</span>
-              </div>
-            )}
-            
-            {dbWarning && (
-              <div className="flex items-center gap-1.5 text-xs text-yellow-200 bg-yellow-500/20 px-3 py-1 rounded-full">
-                <span>⚠️</span>
-                <span>{dbWarning} - verify table exists before running</span>
-              </div>
+              <button 
+                onClick={() => setShowConnectionModal(true)}
+                className="flex items-center gap-1.5 text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-full transition-colors cursor-pointer font-medium"
+              >
+                <Snowflake size={12} />
+                <span>Connect to Snowflake</span>
+              </button>
             )}
           </div>
+          
+          {/* DB warning as Callout */}
+          {dbWarning && (
+            <div className="mt-4">
+              <Callout type="warning">
+                {dbWarning} – verify the table exists before running this query.
+              </Callout>
+            </div>
+          )}
         </div>
       </div>
+      
+      {/* Lineage is now available in the flyout panel - click the lineage icon in Query Editor toolbar */}
+      
+      {/* Not Connected Banner */}
+      {!isConnected && !globalConnectionLoading && (
+        <div className="mx-6 mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Snowflake size={18} className="text-blue-600" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-800">Connect to Snowflake to unlock full features</p>
+              <p className="text-xs text-gray-600 mt-0.5">
+                See which MDLH tables exist, validate queries, and execute SQL directly
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowConnectionModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            <Snowflake size={14} />
+            Connect
+          </button>
+        </div>
+      )}
 
       {/* Main Content */}
-      <div className="max-w-full mx-auto px-6 py-6">
-        {/* Tab Navigation */}
-        <div className="flex flex-wrap gap-2 mb-6 pb-4 border-b border-gray-200">
-          {tabs.map(tab => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 ${
-                  activeTab === tab.id
-                    ? 'bg-[#3366FF] text-white'
-                    : 'bg-white text-gray-600 border border-gray-200 hover:border-[#3366FF] hover:text-[#3366FF]'
-                }`}
-              >
-                <Icon size={14} />
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Conditional Content: Query Editor or Data Table */}
+      <div className={`mx-auto ${activeTab === 'editor' ? 'px-4 py-3' : 'max-w-full px-6 py-6'}`}>
+        {/* Tab Navigation - DuckDB style when in editor mode */}
         {activeTab === 'editor' ? (
-          <QueryEditor initialQuery={editorQuery} />
+          <div className="flex items-center gap-3 mb-3">
+            {/* Language tabs like DuckDB */}
+            <div className="flex items-center gap-1 px-2 py-1.5 bg-slate-100 rounded-xl">
+              <button className="px-3 py-1 text-xs font-medium bg-white text-slate-800 rounded-lg shadow-sm">
+                SQL
+              </button>
+              <button className="px-3 py-1 text-xs font-medium text-slate-400 rounded-lg cursor-not-allowed" disabled>
+                Python
+              </button>
+              <button className="px-3 py-1 text-xs font-medium text-slate-400 rounded-lg cursor-not-allowed" disabled>
+                R
+              </button>
+            </div>
+            
+            <div className="h-5 w-px bg-slate-200" />
+            
+            {/* Quick switch back to dictionary */}
+            <button
+              onClick={() => setActiveTab('core')}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:border-blue-400 hover:text-blue-600 transition-colors"
+            >
+              <Layers size={12} />
+              Dictionary
+            </button>
+          </div>
+        ) : null}
+        
+        {/* MDLH Context Header - hide for home and editor */}
+        {activeTab !== 'editor' && activeTab !== 'home' && (
+          <div className="flex items-center justify-between mb-4 px-1">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold text-gray-900">
+                {tabs.find(t => t.id === activeTab)?.label}
+              </h2>
+              <span className="text-sm text-gray-500">
+                {tabs.find(t => t.id === activeTab)?.description}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <Database size={14} className="text-gray-400" />
+              <span>MDLH context:</span>
+              <span className="font-mono px-2 py-0.5 bg-gray-100 rounded text-gray-800">
+                {selectedMDLHDatabase}.{selectedMDLHSchema}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Conditional Content: Home, Query Editor, or Data Table */}
+        {activeTab === 'home' ? (
+          <DiscoveryHome
+            database={selectedMDLHDatabase}
+            schema={selectedMDLHSchema}
+            isConnected={isConnected}
+            onSelectQuery={(sql, query) => {
+              openInEditor(sql);
+            }}
+            onOpenInEditor={(sql, query) => {
+              openInEditor(sql);
+            }}
+            onSwitchToEditor={() => setActiveTab('editor')}
+          />
+        ) : activeTab === 'editor' ? (
+          <QueryEditor
+            initialQuery={editorQuery}
+            onOpenConnectionModal={() => setShowConnectionModal(true)}
+            globalDatabase={selectedMDLHDatabase}
+            globalSchema={selectedMDLHSchema}
+            onDatabaseChange={setSelectedMDLHDatabase}
+            onSchemaChange={setSelectedMDLHSchema}
+            discoveredTables={discoveredTables}
+            sampleEntities={sampleEntities}
+            onOpenLineagePanel={handleOpenLineagePanel}
+            onSelectEntity={setSelectedEntity}
+          />
         ) : (
           <>
+            {/* Filter bar - availability toggle */}
+            <div className="flex items-center justify-between mb-4 px-1">
+              <div className="flex items-center gap-3">
+                {/* Availability filter toggle */}
+                <button
+                  onClick={() => setShowOnlyAvailable(!showOnlyAvailable)}
+                  disabled={!isConnected || discoveredTables.size === 0}
+                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                    showOnlyAvailable && isConnected && discoveredTables.size > 0
+                      ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                      : 'bg-gray-100 text-gray-600 border border-gray-200'
+                  } ${!isConnected || discoveredTables.size === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:border-emerald-400'}`}
+                  title={!isConnected ? 'Connect to Snowflake to filter by availability' : showOnlyAvailable ? 'Showing only queryable tables' : 'Show all tables'}
+                >
+                  {showOnlyAvailable && isConnected ? <Check size={14} /> : <Database size={14} />}
+                  <span>{showOnlyAvailable ? 'Showing queryable only' : 'Show only queryable'}</span>
+                </button>
+                
+                {/* Stats badges */}
+                {isConnected && discoveredTables.size > 0 && (
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <span className="px-2 py-1 bg-green-50 text-green-700 rounded-full">
+                      {availableEntities} queryable
+                    </span>
+                    <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-full">
+                      {totalEntities} total
+                    </span>
+                  </div>
+                )}
+              </div>
+              
+              {/* Discovery status */}
+              {isDiscovering && (
+                <div className="flex items-center gap-2 text-sm text-blue-600">
+                  <Loader2 size={14} className="animate-spin" />
+                  <span>Discovering tables...</span>
+                </div>
+              )}
+            </div>
+
+            {/* Discovery Cards - Category-specific recommended queries */}
+            <div className="mb-4">
+              <DiscoveryCards
+                database={selectedMDLHDatabase}
+                schema={selectedMDLHSchema}
+                onSelectQuery={(sql, query) => openInEditor(sql)}
+                onViewAllQueries={() => setShowQueries(true)}
+                onExploreMore={() => setActiveTab('home')}
+                compact={true}
+                sidebarCategory={activeTab}
+                maxCards={4}
+              />
+            </div>
+
             <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
               <table className="w-full text-sm">
                 <thead>
@@ -2638,7 +1935,7 @@ export default function App() {
                         {colHeaders[col]}
                       </th>
                     ))}
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider w-24">
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b border-gray-200 text-xs uppercase tracking-wider w-32">
                       Actions
                     </th>
                   </tr>
@@ -2646,66 +1943,223 @@ export default function App() {
                 <tbody className="divide-y divide-gray-100">
                   {filteredData.length > 0 ? (
                     filteredData.map((row, i) => (
-                      <tr key={i} className="group hover:bg-blue-50/50 transition-colors duration-150">
-                        {columns[activeTab]?.map(col => (
-                          <td key={col} className="px-4 py-3 align-top">
-                            {col === 'entity' ? (
-                              <span className="inline-flex items-center">
-                                <span className="font-semibold text-[#3366FF]">{row[col]}</span>
-                                <CellCopyButton text={row[col]} />
-                              </span>
-                            ) : col === 'table' ? (
-                              <span className="inline-flex items-center gap-1">
-                                {/* Table availability indicator */}
-                                {row[col] !== '(abstract)' && isConnected && discoveredTables.size > 0 && (
-                                  isTableAvailable(row[col]) ? (
-                                    <span title="Table exists - click to query" className="text-green-500">
-                                      <Check size={14} />
+                      <tr
+                        key={i}
+                        className="group hover:bg-blue-50/50 transition-colors duration-150 cursor-pointer"
+                        onClick={() => setSelectedEntity({ ...row, entityType: row.entity })}
+                      >
+                        {columns[activeTab]?.map(col => {
+                          const cellValue = row[col];
+                          const tableFqn = col === 'table' && cellValue && cellValue !== '(abstract)'
+                            ? buildSafeFQN(selectedMDLHDatabase, selectedMDLHSchema, cellValue)
+                            : null;
+                          const preview = tableFqn ? lineagePreviewCache[tableFqn] : null;
+
+                          return (
+                            <td key={col} className="px-4 py-3 align-top">
+                              {col === 'entity' ? (
+                                <span className="inline-flex items-center">
+                                  <span className="font-semibold text-[#3366FF]">{cellValue}</span>
+                                  <CellCopyButton text={cellValue} />
+                                </span>
+                              ) : col === 'table' ? (
+                                <div 
+                                  className="relative inline-flex items-center gap-1.5"
+                                  onMouseEnter={() => handleTableHover(cellValue)}
+                                  onMouseLeave={clearTableHover}
+                                >
+                                  {/* Table availability indicator */}
+                                  {cellValue === '(abstract)' ? (
+                                    <span 
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-500 rounded text-xs"
+                                      title="This is an abstract concept with no direct table representation"
+                                    >
+                                      <span className="text-gray-400">⚬</span>
+                                      Abstract
                                     </span>
                                   ) : (
-                                    <span title="Table not found in selected database" className="text-orange-400">
-                                      <X size={14} />
-                                    </span>
-                                  )
-                                )}
-                                {isDiscovering && row[col] !== '(abstract)' && (
-                                  <Loader2 size={14} className="animate-spin text-gray-400" />
-                                )}
-                                <span className={`font-mono px-2 py-0.5 rounded text-xs ${
-                                  row[col] === '(abstract)' 
-                                    ? 'text-gray-400 bg-gray-100' 
-                                    : isTableAvailable(row[col]) === false
-                                      ? 'text-orange-600 bg-orange-50'
-                                      : 'text-emerald-600 bg-emerald-50'
-                                }`}>{row[col]}</span>
-                                {row[col] !== '(abstract)' && <CellCopyButton text={row[col]} />}
-                              </span>
-                            ) : col === 'exampleQuery' ? (
-                              <span className="inline-flex items-center">
-                                <code className="text-gray-600 bg-gray-100 px-2 py-0.5 rounded text-xs break-all">{row[col]}</code>
-                                {row[col] && <CellCopyButton text={row[col]} />}
-                              </span>
-                            ) : (
-                              <span className="text-gray-600">{row[col]}</span>
-                            )}
-                          </td>
-                        ))}
+                                    <>
+                                      {isConnected && discoveredTables.size > 0 && (
+                                        isTableAvailable(cellValue) ? (
+                                          <span title="Table exists in MDLH" className="text-green-500">
+                                            <Check size={14} />
+                                          </span>
+                                        ) : (
+                                          <span title="Table not found in this database/schema" className="text-gray-400">
+                                            <X size={14} />
+                                          </span>
+                                        )
+                                      )}
+                                      {isDiscovering && (
+                                        <Loader2 size={14} className="animate-spin text-gray-400" />
+                                      )}
+                                      <span className={`font-mono px-2 py-0.5 rounded text-xs ${
+                                        isTableAvailable(cellValue) === false
+                                          ? 'text-gray-500 bg-gray-50'
+                                          : 'text-emerald-600 bg-emerald-50'
+                                      }`}>{cellValue}</span>
+                                      <CellCopyButton text={cellValue} />
+                                    </>
+                                  )}
+
+                                  {/* Hover lineage preview */}
+                                  {hoveredTable === cellValue && (
+                                    <div className="absolute left-0 top-full mt-2 z-30 w-[440px]">
+                                      <div className="bg-white border border-gray-200 rounded-lg shadow-xl p-3 space-y-2">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <div>
+                                            <p className="text-xs font-semibold text-gray-800">
+                                              Lineage preview (last 30 days)
+                                            </p>
+                                            <p className="text-[11px] text-gray-500 font-mono break-all">
+                                              {tableFqn}
+                                            </p>
+                                          </div>
+                                          {preview?.status === 'loading' && (
+                                            <Loader2 size={14} className="text-blue-500 animate-spin" />
+                                          )}
+                                          {preview?.status === 'ready' && (
+                                            <span className="text-[10px] px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded border border-emerald-200">
+                                              Ready
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {preview?.status === 'error' && (
+                                          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                                            {preview.error}
+                                          </div>
+                                        )}
+
+                                        {preview?.status === 'ready' && preview.graph?.nodes?.length > 0 && (
+                                          <div className="border border-gray-100 rounded-lg overflow-hidden">
+                                            <LineageRail
+                                              nodes={preview.graph.nodes}
+                                              edges={preview.graph.edges}
+                                              metadata={preview.graph.metadata}
+                                              title="Lineage"
+                                            />
+                                          </div>
+                                        )}
+
+                                        {preview?.status === 'ready' && (!preview.graph?.nodes?.length) && (
+                                          <p className="text-xs text-gray-500">
+                                            No lineage edges found for this asset.
+                                          </p>
+                                        )}
+
+                                        {!preview && (
+                                          <p className="text-xs text-gray-500">Preparing lineage preview…</p>
+                                        )}
+
+                                        <div className="bg-gray-50 border border-gray-100 rounded p-2">
+                                          <p className="text-[10px] text-gray-500 mb-1 font-medium">SQL used</p>
+                                          <pre className="text-[10px] text-gray-800 font-mono whitespace-pre-wrap">
+                                            {(preview && preview.query) || (tableFqn ? buildLineagePreviewQuery(tableFqn) : '')}
+                                          </pre>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : col === 'exampleQuery' ? (
+                                <span className="inline-flex items-center">
+                                  <code className="text-gray-600 bg-gray-100 px-2 py-0.5 rounded text-xs break-all">{cellValue}</code>
+                                  {cellValue && <CellCopyButton text={cellValue} />}
+                                </span>
+                              ) : (
+                                <span className="text-gray-600">{cellValue}</span>
+                              )}
+                            </td>
+                          );
+                        })}
                         <td className="px-4 py-3 align-top">
-                          <PlayQueryButton 
-                            hasQuery={hasQueryForEntity(row.entity, row.table, row.exampleQuery)}
-                            onClick={() => openQueryForEntity(row.entity, row.table, row.exampleQuery)}
-                            tableAvailable={isTableAvailable(row.table)}
-                            isConnected={isConnected}
-                          />
+                          <div className="flex items-center gap-1">
+                            {/* View/Test Query button */}
+                            <PlayQueryButton 
+                              hasQuery={hasQueryForEntity(row.entity, row.table, row.exampleQuery)}
+                              onClick={() => openQueryForEntity(row.entity, row.table, row.exampleQuery)}
+                              tableAvailable={isTableAvailable(row.table)}
+                              isConnected={isConnected}
+                            />
+                            {/* Recommended Queries button */}
+                            {row.table && row.table !== '(abstract)' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedEntity({
+                                    entity: row.entity,
+                                    table: row.table,
+                                    entityType: row.entityType || 'TABLE',
+                                    description: row.description
+                                  });
+                                  setShowRecommendations(true);
+                                }}
+                                className="opacity-0 group-hover:opacity-100 px-2 py-1 rounded text-xs font-medium text-purple-600 hover:text-purple-700 hover:bg-purple-50 transition-all flex items-center gap-1"
+                                title="Show recommended queries for this entity"
+                              >
+                                <Zap size={12} />
+                                <span className="hidden lg:inline">Recommend</span>
+                              </button>
+                            )}
+                            {/* Lineage button - only for non-abstract */}
+                            {row.table && row.table !== '(abstract)' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenLineagePanel({
+                                    NAME: row.table,
+                                    GUID: row.guid || `${selectedMDLHDatabase}.${selectedMDLHSchema}.${row.table}`,
+                                    entityType: row.entity
+                                  });
+                                }}
+                                className="opacity-0 group-hover:opacity-100 p-1.5 rounded text-gray-400 hover:text-[#3366FF] hover:bg-blue-50 transition-all"
+                                title="View lineage"
+                              >
+                                <GitBranch size={14} />
+                              </button>
+                            )}
+                            {/* Copy table name - only for non-abstract */}
+                            {row.table && row.table !== '(abstract)' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(row.table);
+                                }}
+                                className="opacity-0 group-hover:opacity-100 p-1.5 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all"
+                                title="Copy table name"
+                              >
+                                <Copy size={12} />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
                       <td colSpan={(columns[activeTab]?.length || 0) + 1} className="px-4 py-12 text-center">
-                        <Search size={32} className="mx-auto text-gray-300 mb-2" />
-                        <p className="text-gray-600 font-medium">No results found</p>
-                        <p className="text-gray-400 text-xs mt-1">Try adjusting your search terms</p>
+                        {isConnected && showOnlyAvailable && discoveredTables.size > 0 ? (
+                          <>
+                            <Database size={32} className="mx-auto text-gray-300 mb-2" />
+                            <p className="text-gray-600 font-medium">No queryable tables found</p>
+                            <p className="text-gray-400 text-sm mt-1">
+                              No tables for this category exist in {selectedMDLHDatabase}.{selectedMDLHSchema}
+                            </p>
+                            <button
+                              onClick={() => setShowOnlyAvailable(false)}
+                              className="mt-3 text-sm text-blue-600 hover:text-blue-700"
+                            >
+                              Show all entities
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <Search size={32} className="mx-auto text-gray-300 mb-2" />
+                            <p className="text-gray-600 font-medium">No results found</p>
+                            <p className="text-gray-400 text-xs mt-1">Try adjusting your search terms</p>
+                          </>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -2724,6 +2178,34 @@ export default function App() {
           </>
         )}
       </div>
+        </div>{/* End Main Content Area */}
+
+        {/* Entity Panel - Unified expandable sidebar with hover-to-expand */}
+        {/* Always rendered for quick access to Library & Test tabs */}
+        {activeTab !== 'home' && (
+          <EntityPanel
+            selectedEntity={selectedEntity}
+            category={activeTab}
+            database={selectedMDLHDatabase}
+            schema={selectedMDLHSchema}
+            discoveredTables={discoveredTables}
+            sampleEntities={sampleEntities}
+            onOpenLineage={(entityData) => {
+              handleOpenLineagePanel(entityData);
+              setSelectedEntity(null);
+            }}
+            onClose={() => setSelectedEntity(null)}
+            // Library props
+            libraryQueries={filteredQueries}
+            queryValidationMap={queryValidationMap}
+            batchValidationResults={batchValidationResults}
+            isBatchValidating={isBatchValidating}
+            onValidateAll={runBatchValidation}
+            onShowMyWork={handleShowMyWork}
+            onRunInEditor={openInEditor}
+          />
+        )}
+      </div>{/* End Main layout with sidebar */}
 
       {/* Query Side Panel */}
       <QueryPanel 
@@ -2742,6 +2224,65 @@ export default function App() {
         batchValidationResults={batchValidationResults}
         onShowMyWork={handleShowMyWork}
         isBatchValidating={isBatchValidating}
+        selectedDatabase={selectedMDLHDatabase}
+        selectedSchema={selectedMDLHSchema}
+        queryValidationMap={queryValidationMap}
+        onValidateAll={runBatchValidation}
+        onOpenConnectionModal={() => setShowConnectionModal(true)}
+      />
+      
+      {/* Lineage Flyout Panel */}
+      <QueryPanelShell
+        isOpen={showLineageFlyout}
+        onClose={() => setShowLineageFlyout(false)}
+        maxWidth="max-w-4xl"
+      >
+        <header className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-white flex-shrink-0">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">
+              {selectedLineageEntity?.NAME || selectedLineageEntity?.name 
+                ? `Lineage for ${selectedLineageEntity.NAME || selectedLineageEntity.name}`
+                : 'Lineage'}
+            </h2>
+            <p className="text-sm text-slate-500 mt-0.5">
+              {selectedLineageEntity?.GUID || selectedLineageEntity?.guid 
+                ? `GUID: ${(selectedLineageEntity.GUID || selectedLineageEntity.guid).slice(0, 20)}...`
+                : 'Select an entity from query results to view its lineage'}
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              setShowLineageFlyout(false);
+              setSelectedLineageEntity(null);
+            }}
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+            title="Close (Esc)"
+          >
+            <X size={18} />
+          </button>
+        </header>
+        <div className="flex-1 overflow-y-auto">
+          <LineagePanel
+            isConnected={isConnected}
+            database={selectedMDLHDatabase || DEFAULT_DATABASE}
+            schema={selectedMDLHSchema || DEFAULT_SCHEMA}
+            editorQuery={editorQuery}
+            lineageData={dynamicLineage}
+            loading={lineageLoading}
+            error={lineageError}
+            currentTable={selectedLineageEntity?.NAME || selectedLineageEntity?.name || lineageCurrentTable}
+            selectedEntity={selectedLineageEntity}
+            onRefresh={refetchLineage}
+          />
+        </div>
+      </QueryPanelShell>
+
+      {/* Global Connection Modal */}
+      <ConnectionModal
+        isOpen={showConnectionModal}
+        onClose={() => setShowConnectionModal(false)}
+        onConnect={handleGlobalConnectionSuccess}
+        currentStatus={globalConnectionStatus}
       />
       
       {/* Show My Work Modal */}
@@ -2764,6 +2305,36 @@ export default function App() {
           setShowMyWorkValidation(null);
         }}
       />
+      
+      {/* Recommended Queries Panel */}
+      <RecommendedQueries
+        entity={selectedEntity}
+        entityContext={{
+          database: selectedMDLHDatabase,
+          schema: selectedMDLHSchema,
+          table: selectedEntity?.table,
+          entityType: selectedEntity?.entityType
+        }}
+        isOpen={showRecommendations}
+        onClose={() => {
+          setShowRecommendations(false);
+          setSelectedEntity(null);
+        }}
+        onRunQuery={(sql, query) => {
+          openInEditor(sql);
+          setShowRecommendations(false);
+          setSelectedEntity(null);
+        }}
+        database={selectedMDLHDatabase}
+        schema={selectedMDLHSchema}
+        availableTables={[...discoveredTables]}
+        sampleEntities={sampleEntities}
+      />
+      
+      {/* Command Palette (⌘K / Ctrl+K) */}
+      <CommandPalette open={isCmdOpen} onOpenChange={setIsCmdOpen} />
     </div>
+    </EntityPanelProvider>
+    </SystemConfigProvider>
   );
 }

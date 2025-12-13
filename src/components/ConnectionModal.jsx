@@ -7,8 +7,11 @@
  * 3. onConnect callback receives session info including sessionId
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Database, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Info, Key } from 'lucide-react';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('ConnectionModal');
 
 // API base URL - configurable for different environments
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -28,8 +31,31 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [saveToStorage, setSaveToStorage] = useState(true);
+  
+  // Ref to store the AbortController so we can cancel ongoing requests
+  const abortControllerRef = useRef(null);
+  const timeoutIdRef = useRef(null);
 
-  // Load saved config on open
+  // Cancel any ongoing connection attempt
+  const cancelConnection = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (timeoutIdRef.current) {
+      clearTimeout(timeoutIdRef.current);
+      timeoutIdRef.current = null;
+    }
+    setTesting(false);
+  }, []);
+
+  // Handle modal close - cancel any pending requests
+  const handleClose = useCallback(() => {
+    cancelConnection();
+    onClose();
+  }, [cancelConnection, onClose]);
+
+  // Load saved config on open, cleanup on close
   useEffect(() => {
     if (isOpen) {
       setTestResult(null);
@@ -40,11 +66,26 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
           setFormData(prev => ({ ...prev, ...parsed, token: '' }));
           if (parsed.authMethod) setAuthMethod(parsed.authMethod);
         } catch (e) {
-          console.error('Failed to load saved config');
+          log.warn('Failed to load saved config');
         }
       }
+    } else {
+      // Modal is closing - cancel any pending requests
+      cancelConnection();
     }
-  }, [isOpen]);
+  }, [isOpen, cancelConnection]);
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      if (timeoutIdRef.current) {
+        clearTimeout(timeoutIdRef.current);
+      }
+    };
+  }, []);
 
   const handleAuthMethodChange = (method) => {
     setAuthMethod(method);
@@ -57,12 +98,17 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
   };
 
   const handleTestConnection = async () => {
+    // Cancel any existing request first
+    cancelConnection();
+    
     setTesting(true);
     setTestResult(null);
 
     const controller = new AbortController();
+    abortControllerRef.current = controller;
+    
     const timeoutMs = authMethod === 'sso' ? 120000 : 30000;
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    timeoutIdRef.current = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const requestBody = {
@@ -86,7 +132,8 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
         signal: controller.signal
       });
 
-      clearTimeout(timeoutId);
+      clearTimeout(timeoutIdRef.current);
+      timeoutIdRef.current = null;
       const result = await response.json();
 
       if (result.connected && result.session_id) {
@@ -112,18 +159,32 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
         }
 
         // Store session in sessionStorage for persistence across page loads
-        sessionStorage.setItem('snowflake_session', JSON.stringify({
+        const sessionData = {
           sessionId: result.session_id,
           user: result.user,
           warehouse: result.warehouse,
           database: result.database,
-          role: result.role
-        }));
+          schema: formData.schema || 'PUBLIC',
+          role: result.role,
+          timestamp: Date.now()
+        };
+        sessionStorage.setItem('snowflake_session', JSON.stringify(sessionData));
+        log.info('Session saved to sessionStorage', {
+          sessionId: result.session_id?.substring(0, 8) + '...',
+          database: result.database,
+          schema: formData.schema || 'PUBLIC',
+          timestamp: new Date().toISOString()
+        });
+        
+        // Verify it was saved
+        const verify = sessionStorage.getItem('snowflake_session');
+        log.debug('Session verification', { status: verify ? 'SAVED' : 'FAILED' });
         
         // Dispatch custom event to notify other components (including App.jsx)
         window.dispatchEvent(new CustomEvent('snowflake-session-changed', { 
           detail: { connected: true, sessionId: result.session_id }
         }));
+        log.info('Dispatched snowflake-session-changed event');
 
         // Notify parent component
         onConnect?.(sessionInfo);
@@ -150,19 +211,29 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
         setTestResult({ connected: false, error: result.error || 'Connection failed' });
       }
     } catch (err) {
-      clearTimeout(timeoutId);
+      if (timeoutIdRef.current) {
+        clearTimeout(timeoutIdRef.current);
+        timeoutIdRef.current = null;
+      }
       if (err.name === 'AbortError') {
-        setTestResult({
-          connected: false,
-          error: authMethod === 'sso'
-            ? 'SSO login timed out. Complete the login in the browser window.'
-            : 'Connection timed out. Is the backend server running?'
-        });
+        // Check if this was a manual cancel vs timeout
+        if (!abortControllerRef.current) {
+          // Manual cancel - don't show error
+          setTestResult(null);
+        } else {
+          setTestResult({
+            connected: false,
+            error: authMethod === 'sso'
+              ? 'SSO login timed out or was cancelled. Complete the login in the browser window.'
+              : 'Connection timed out. Is the backend server running?'
+          });
+        }
       } else {
         setTestResult({ connected: false, error: err.message });
       }
     } finally {
       setTesting(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -188,7 +259,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
                 <p className="text-blue-100 text-sm">Enter your credentials to query MDLH</p>
               </div>
             </div>
-            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
+            <button onClick={handleClose} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
               <X size={20} />
             </button>
           </div>
@@ -389,10 +460,10 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
           <div className="flex gap-3 pt-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleClose}
               className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors"
             >
-              Cancel
+              {testing ? 'Cancel' : 'Close'}
             </button>
             <button
               type="submit"

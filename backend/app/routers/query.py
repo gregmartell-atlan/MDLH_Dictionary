@@ -6,7 +6,10 @@ import time
 import uuid
 from datetime import datetime
 from typing import Optional, List, Tuple
+from contextlib import contextmanager
 from fastapi import APIRouter, HTTPException, Query as QueryParam, Header
+from fastapi.responses import JSONResponse
+from snowflake.connector.errors import DatabaseError, OperationalError, ProgrammingError
 
 from app.models.schemas import (
     QueryRequest, QuerySubmitResponse, QueryStatusResponse,
@@ -19,10 +22,48 @@ from app.models.schemas import (
 )
 from app.services.session import session_manager
 from app.database import query_history_db
-
-logger = logging.getLogger(__name__)
+from app.utils.logger import logger, generate_request_id, set_request_id
 
 router = APIRouter(prefix="/api/query", tags=["query"])
+
+# =============================================================================
+# Constants and Pre-compiled Patterns
+# =============================================================================
+
+# Note: Query result storage limits are now in session.py (QueryResultStore)
+
+# Pre-compiled regex patterns for performance (avoid recompiling on each call)
+BLOCK_COMMENT_PATTERN = re.compile(r'/\*.*?\*/', re.DOTALL)
+LINE_COMMENT_PATTERN = re.compile(r'--.*?$', re.MULTILINE)
+FULL_TABLE_PATTERN = re.compile(
+    r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE
+)
+PARTIAL_TABLE_PATTERN = re.compile(
+    r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\.)',
+    re.IGNORECASE
+)
+BARE_TABLE_PATTERN = re.compile(
+    r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)(?!\.)',
+    re.IGNORECASE
+)
+SQL_KEYWORDS = frozenset({
+    'SELECT', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'AS', 'ON',
+    'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS'
+})
+
+
+@contextmanager
+def get_cursor(session):
+    """Context manager for safe cursor handling - ensures cleanup."""
+    cursor = session.conn.cursor()
+    try:
+        yield cursor
+    finally:
+        try:
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"Failed to close cursor: {e}")
 
 
 def _split_sql_statements(sql: str) -> List[str]:
@@ -35,11 +76,11 @@ def _split_sql_statements(sql: str) -> List[str]:
     
     Returns list of non-empty statements.
     """
-    # Remove block comments
-    sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+    # Remove block comments (using pre-compiled pattern)
+    sql = BLOCK_COMMENT_PATTERN.sub('', sql)
     
-    # Remove single-line comments
-    sql = re.sub(r'--.*?$', '', sql, flags=re.MULTILINE)
+    # Remove single-line comments (using pre-compiled pattern)
+    sql = LINE_COMMENT_PATTERN.sub('', sql)
     
     # Split on semicolons (simple approach - works for most cases)
     # For production, consider a proper SQL parser
@@ -82,32 +123,29 @@ def _extract_tables_from_sql(sql: str) -> List[Tuple[str, str, str]]:
     """
     Extract table references from SQL.
     Returns list of (database, schema, table) tuples.
+    Uses pre-compiled patterns for better performance.
     """
-    # Remove comments
-    clean_sql = re.sub(r'--[^\n]*', '', sql)
-    clean_sql = re.sub(r'/\*.*?\*/', '', clean_sql, flags=re.DOTALL)
+    # Remove comments using pre-compiled patterns
+    clean_sql = LINE_COMMENT_PATTERN.sub('', sql)
+    clean_sql = BLOCK_COMMENT_PATTERN.sub('', clean_sql)
     
     tables = []
     
     # Pattern for fully qualified: database.schema.table
-    full_pattern = r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)'
-    for match in re.finditer(full_pattern, clean_sql, re.IGNORECASE):
+    for match in FULL_TABLE_PATTERN.finditer(clean_sql):
         tables.append((match.group(1), match.group(2), match.group(3)))
     
     # Pattern for schema.table (no database)
-    partial_pattern = r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\.)'
-    for match in re.finditer(partial_pattern, clean_sql, re.IGNORECASE):
+    for match in PARTIAL_TABLE_PATTERN.finditer(clean_sql):
         # Only add if not already captured as full reference
         schema, table = match.group(1), match.group(2)
         if not any(t[2].upper() == table.upper() for t in tables):
             tables.append((None, schema, table))
     
     # Pattern for bare table name
-    bare_pattern = r'(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)(?!\.)'
-    keywords = {'SELECT', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'AS', 'ON', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS'}
-    for match in re.finditer(bare_pattern, clean_sql, re.IGNORECASE):
+    for match in BARE_TABLE_PATTERN.finditer(clean_sql):
         table = match.group(1)
-        if table.upper() not in keywords and not any(t[2].upper() == table.upper() for t in tables):
+        if table.upper() not in SQL_KEYWORDS and not any(t[2].upper() == table.upper() for t in tables):
             tables.append((None, None, table))
     
     return tables
@@ -320,87 +358,88 @@ async def preflight_check(
             issues=[]
         )
     
-    cursor = session.conn.cursor()
     tables_checked = []
     issues = []
     suggestions = []
     replacements = {}
     
-    try:
-        for db, schema, table in tables:
-            # Resolve defaults
-            resolved_db = db or default_db
-            resolved_schema = schema or default_schema
-            fqn = f"{resolved_db}.{resolved_schema}.{table}"
+    # Use context manager for safe cursor cleanup
+    with get_cursor(session) as cursor:
+        try:
+            for db, schema, table in tables:
+                # Resolve defaults
+                resolved_db = db or default_db
+                resolved_schema = schema or default_schema
+                fqn = f"{resolved_db}.{resolved_schema}.{table}"
+                
+                # Check table
+                check_result = _check_table_exists(cursor, resolved_db, resolved_schema, table)
+                
+                table_check = TableCheckResult(
+                    table_name=table,
+                    fully_qualified=fqn,
+                    exists=check_result["exists"],
+                    row_count=check_result["row_count"],
+                    columns=check_result["columns"],
+                    error=check_result["error"]
+                )
+                tables_checked.append(table_check)
+                
+                # Collect issues
+                if not check_result["exists"]:
+                    issues.append(f"Table '{fqn}' does not exist or you don't have access")
+                    
+                    # Find alternatives
+                    similar = _find_similar_tables(cursor, resolved_db, resolved_schema, table)
+                    for s in similar:
+                        suggestions.append(TableSuggestion(**s))
+                        # Use first high-scoring suggestion for replacement
+                        if s["relevance_score"] >= 0.6 and fqn not in replacements:
+                            replacements[fqn] = s["fully_qualified"]
+                            
+                elif check_result["row_count"] == 0:
+                    issues.append(f"Table '{fqn}' exists but is empty (0 rows)")
+                    
+                    # Find alternatives with data
+                    similar = _find_similar_tables(cursor, resolved_db, resolved_schema, table)
+                    for s in similar:
+                        suggestions.append(TableSuggestion(**s))
+                        # Suggest replacement for empty tables too
+                        if s["relevance_score"] >= 0.5 and fqn not in replacements:
+                            replacements[fqn] = s["fully_qualified"]
             
-            # Check table
-            check_result = _check_table_exists(cursor, resolved_db, resolved_schema, table)
+            # Generate suggested query if we have replacements
+            suggested_query = None
+            if replacements:
+                suggested_query = _generate_suggested_query(request.sql, replacements)
             
-            table_check = TableCheckResult(
-                table_name=table,
-                fully_qualified=fqn,
-                exists=check_result["exists"],
-                row_count=check_result["row_count"],
-                columns=check_result["columns"],
-                error=check_result["error"]
+            # Build response message
+            if not issues:
+                message = f"All {len(tables_checked)} table(s) exist and have data"
+                valid = True
+            else:
+                message = f"Found {len(issues)} issue(s) with query"
+                valid = False
+            
+            return PreflightResponse(
+                valid=valid,
+                tables_checked=tables_checked,
+                issues=issues,
+                suggestions=suggestions,
+                suggested_query=suggested_query,
+                message=message
             )
-            tables_checked.append(table_check)
             
-            # Collect issues
-            if not check_result["exists"]:
-                issues.append(f"Table '{fqn}' does not exist or you don't have access")
-                
-                # Find alternatives
-                similar = _find_similar_tables(cursor, resolved_db, resolved_schema, table)
-                for s in similar:
-                    suggestions.append(TableSuggestion(**s))
-                    # Use first high-scoring suggestion for replacement
-                    if s["relevance_score"] >= 0.6 and fqn not in replacements:
-                        replacements[fqn] = s["fully_qualified"]
-                        
-            elif check_result["row_count"] == 0:
-                issues.append(f"Table '{fqn}' exists but is empty (0 rows)")
-                
-                # Find alternatives with data
-                similar = _find_similar_tables(cursor, resolved_db, resolved_schema, table)
-                for s in similar:
-                    suggestions.append(TableSuggestion(**s))
-                    # Suggest replacement for empty tables too
-                    if s["relevance_score"] >= 0.5 and fqn not in replacements:
-                        replacements[fqn] = s["fully_qualified"]
-        
-        cursor.close()
-        
-        # Generate suggested query if we have replacements
-        suggested_query = None
-        if replacements:
-            suggested_query = _generate_suggested_query(request.sql, replacements)
-        
-        # Build response message
-        if not issues:
-            message = f"All {len(tables_checked)} table(s) exist and have data"
-            valid = True
-        else:
-            message = f"Found {len(issues)} issue(s) with query"
-            valid = False
-        
-        return PreflightResponse(
-            valid=valid,
-            tables_checked=tables_checked,
-            issues=issues,
-            suggestions=suggestions,
-            suggested_query=suggested_query,
-            message=message
-        )
-        
-    except Exception as e:
-        logger.error(f"Preflight check failed: {e}")
-        cursor.close()
-        return PreflightResponse(
-            valid=False,
-            message=f"Preflight check failed: {str(e)}",
-            issues=[str(e)]
-        )
+        except Exception as e:
+            logger.error(f"Preflight check failed: {e}")
+            return PreflightResponse(
+                valid=False,
+                message=f"Preflight check failed: {str(e)}",
+                issues=[str(e)]
+            )
+
+
+# Note: Query result eviction is now handled by QueryResultStore in session.py
 
 
 @router.post("/execute", response_model=QuerySubmitResponse)
@@ -412,106 +451,197 @@ async def execute_query(
     Submit a SQL query for execution.
     
     Requires X-Session-ID header from successful /api/connect.
+    
+    Response codes:
+    - 200 { status: 'SUCCESS', ... } -> query executed successfully
+    - 200 { status: 'FAILED', ... } -> SQL error (syntax, permissions, etc.)
+    - 401 { reason: 'SESSION_NOT_FOUND' | 'AUTH_FAILED' | 'TOKEN_EXPIRED' } -> session invalid
+    - 503 -> Snowflake unreachable / network error
+    - 504 -> Query timed out
     """
+    # Generate request ID for correlation
+    req_id = generate_request_id()
+    set_request_id(req_id)
+    
     if not request.sql or not request.sql.strip():
         raise HTTPException(status_code=400, detail="SQL query cannot be empty")
     
     session = _get_session_or_401(x_session_id)
     query_id = str(uuid.uuid4())
     start_time = time.time()
+    timeout_seconds = request.timeout or 60  # Define early for error handlers
     
-    try:
-        cursor = session.conn.cursor()
-        
-        # Count statements (properly handles comments and strings)
-        statement_count = _count_statements(request.sql)
-        
-        # Execute query (enable multi-statement if needed)
-        columns = []
-        rows = []
-        
-        if statement_count > 1:
-            logger.info(f"Executing {statement_count} statements")
-            cursor.execute(request.sql, num_statements=statement_count)
+    # Use context manager for safe cursor cleanup
+    with get_cursor(session) as cursor:
+        try:
+            # Set statement timeout from request (default 60s)
+            cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {timeout_seconds}")
             
-            # For multi-statement, collect results from each statement
-            # Keep the last non-empty result set (usually the SELECT/SHOW)
-            while True:
-                if cursor.description:
-                    current_columns = [desc[0] for desc in cursor.description]
-                    current_rows = cursor.fetchall()
-                    # Keep results if this statement returned rows
-                    if current_rows or not rows:
-                        columns = current_columns
-                        rows = [list(row) for row in current_rows]
-                        logger.info(f"Statement returned {len(rows)} rows, {len(columns)} columns")
+            # Set query tag for correlation in Snowflake query history
+            query_tag = f"MDLH:{req_id}"
+            cursor.execute(f"ALTER SESSION SET QUERY_TAG = '{query_tag}'")
+            
+            logger.info(f"[{req_id}] Executing query with {timeout_seconds}s timeout")
+            
+            # Count statements (properly handles comments and strings)
+            statement_count = _count_statements(request.sql)
+            
+            # Execute query (enable multi-statement if needed)
+            columns = []
+            rows = []
+            
+            if statement_count > 1:
+                logger.info(f"[{req_id}] Executing {statement_count} statements")
+                cursor.execute(request.sql, num_statements=statement_count)
                 
-                # Move to next result set, break if none left
-                if not cursor.nextset():
-                    break
-        else:
-            cursor.execute(request.sql)
-            columns = [desc[0] for desc in cursor.description] if cursor.description else []
-            rows = cursor.fetchall()
-            rows = [list(row) for row in rows]
-        
-        execution_time_ms = int((time.time() - start_time) * 1000)
-        cursor.close()
-        
-        # Store results in session for retrieval
-        if not hasattr(session, 'query_results'):
-            session.query_results = {}
-        
-        session.query_results[query_id] = {
-            "columns": columns,
-            "rows": rows,
-            "row_count": len(rows),
-            "status": QueryStatus.SUCCESS,
-            "execution_time_ms": execution_time_ms,
-            "started_at": datetime.utcnow().isoformat(),
-            "completed_at": datetime.utcnow().isoformat()
-        }
-        
-        _record_query_history(
-            query_id, request.sql, request,
-            QueryStatus.SUCCESS, len(rows), None, execution_time_ms
-        )
-        
-        return QuerySubmitResponse(
-            query_id=query_id,
-            status=QueryStatus.SUCCESS,
-            message="Query executed successfully",
-            execution_time_ms=execution_time_ms,
-            row_count=len(rows)
-        )
-        
-    except Exception as e:
-        execution_time_ms = int((time.time() - start_time) * 1000)
-        error_msg = str(e)
-        
-        # Store failure info
-        if not hasattr(session, 'query_results'):
-            session.query_results = {}
-        
-        session.query_results[query_id] = {
-            "status": QueryStatus.FAILED,
-            "error_message": error_msg,
-            "execution_time_ms": execution_time_ms,
-            "started_at": datetime.utcnow().isoformat(),
-            "completed_at": datetime.utcnow().isoformat()
-        }
-        
-        _record_query_history(
-            query_id, request.sql, request,
-            QueryStatus.FAILED, None, error_msg, execution_time_ms
-        )
-        
-        return QuerySubmitResponse(
-            query_id=query_id,
-            status=QueryStatus.FAILED,
-            message=error_msg,
-            execution_time_ms=execution_time_ms
-        )
+                # FIX: Wrap multi-statement loop in try/except to handle cursor.nextset() failures
+                try:
+                    # For multi-statement, collect results from each statement
+                    # Keep the last non-empty result set (usually the SELECT/SHOW)
+                    while True:
+                        try:
+                            if cursor.description:
+                                current_columns = [desc[0] for desc in cursor.description]
+                                current_rows = cursor.fetchall()
+                                # Keep results if this statement returned rows
+                                if current_rows or not rows:
+                                    columns = current_columns
+                                    rows = [list(row) for row in current_rows]
+                                    logger.info(f"[{req_id}] Statement returned {len(rows)} rows, {len(columns)} columns")
+                        except Exception as stmt_err:
+                            logger.warning(f"[{req_id}] Error processing statement result: {stmt_err}")
+                        
+                        # Move to next result set, break if none left
+                        try:
+                            if not cursor.nextset():
+                                break
+                        except Exception as next_err:
+                            logger.warning(f"[{req_id}] Error in nextset(): {next_err}")
+                            break
+                except Exception as multi_err:
+                    logger.warning(f"[{req_id}] Multi-statement processing error: {multi_err}")
+                    # Continue with whatever results we have
+            else:
+                cursor.execute(request.sql)
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                rows = cursor.fetchall()
+                rows = [list(row) for row in rows]
+            
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Store results using the new QueryResultStore
+            session.query_results.put(query_id, {
+                "columns": columns,
+                "rows": rows,
+                "row_count": len(rows),
+                "status": QueryStatus.SUCCESS,
+                "execution_time_ms": execution_time_ms,
+                "started_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.utcnow().isoformat()
+            })
+            
+            _record_query_history(
+                query_id, request.sql, request,
+                QueryStatus.SUCCESS, len(rows), None, execution_time_ms
+            )
+            
+            logger.info(f"[{req_id}] Query SUCCESS: {len(rows)} rows in {execution_time_ms}ms")
+            
+            return QuerySubmitResponse(
+                query_id=query_id,
+                status=QueryStatus.SUCCESS,
+                message="Query executed successfully",
+                execution_time_ms=execution_time_ms,
+                row_count=len(rows)
+            )
+            
+        except (OperationalError, TimeoutError) as e:
+            # Network errors or timeouts -> 503 or 504
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            error_msg = str(e).lower()
+            
+            # Check if it's a statement timeout
+            if "timeout" in error_msg or "statement canceled" in error_msg:
+                logger.warning(f"[{req_id}] Query TIMEOUT after {execution_time_ms}ms: {e}")
+                return JSONResponse(
+                    status_code=504,
+                    content={
+                        "query_id": query_id,
+                        "status": "TIMEOUT",
+                        "reason": "QUERY_TIMEOUT",
+                        "message": f"Query exceeded {timeout_seconds}s timeout",
+                        "execution_time_ms": execution_time_ms
+                    }
+                )
+            
+            # Network/connection error -> 503
+            logger.error(f"[{req_id}] Snowflake UNREACHABLE: {e}")
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "query_id": query_id,
+                    "status": "FAILED",
+                    "reason": "SNOWFLAKE_UNREACHABLE",
+                    "message": "Snowflake unreachable",
+                    "error": str(e),
+                    "execution_time_ms": execution_time_ms
+                }
+            )
+            
+        except (DatabaseError, ProgrammingError) as e:
+            # SQL errors (syntax, permissions, etc.) -> normal failure response
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            error_msg = str(e)
+            
+            # Store failure info using new interface
+            session.query_results.put(query_id, {
+                "status": QueryStatus.FAILED,
+                "error_message": error_msg,
+                "execution_time_ms": execution_time_ms,
+                "started_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.utcnow().isoformat()
+            })
+            
+            _record_query_history(
+                query_id, request.sql, request,
+                QueryStatus.FAILED, None, error_msg, execution_time_ms
+            )
+            
+            logger.warning(f"[{req_id}] Query FAILED: {error_msg[:100]}")
+            
+            return QuerySubmitResponse(
+                query_id=query_id,
+                status=QueryStatus.FAILED,
+                message=error_msg,
+                execution_time_ms=execution_time_ms
+            )
+            
+        except Exception as e:
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            error_msg = str(e)
+            
+            # Store failure info using new interface
+            session.query_results.put(query_id, {
+                "status": QueryStatus.FAILED,
+                "error_message": error_msg,
+                "execution_time_ms": execution_time_ms,
+                "started_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.utcnow().isoformat()
+            })
+            
+            _record_query_history(
+                query_id, request.sql, request,
+                QueryStatus.FAILED, None, error_msg, execution_time_ms
+            )
+            
+            logger.error(f"[{req_id}] Unexpected error: {e}")
+            
+            return QuerySubmitResponse(
+                query_id=query_id,
+                status=QueryStatus.FAILED,
+                message=error_msg,
+                execution_time_ms=execution_time_ms
+            )
 
 
 @router.get("/{query_id}/status", response_model=QueryStatusResponse)
@@ -522,10 +652,10 @@ async def get_query_status(
     """Get the status of a query."""
     session = _get_session_or_401(x_session_id)
     
-    if not hasattr(session, 'query_results') or query_id not in session.query_results:
-        raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
+    result = session.query_results.get(query_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found or expired")
     
-    result = session.query_results[query_id]
     return QueryStatusResponse(
         query_id=query_id,
         status=result["status"],
@@ -547,10 +677,9 @@ async def get_query_results(
     """Get paginated results for a completed query."""
     session = _get_session_or_401(x_session_id)
     
-    if not hasattr(session, 'query_results') or query_id not in session.query_results:
-        raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
-    
-    result = session.query_results[query_id]
+    result = session.query_results.get(query_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found or expired")
     
     if result["status"] == QueryStatus.FAILED:
         raise HTTPException(
@@ -587,10 +716,9 @@ async def cancel_query(
     """Cancel a running query."""
     session = _get_session_or_401(x_session_id)
     
-    if not hasattr(session, 'query_results') or query_id not in session.query_results:
-        raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found")
-    
-    result = session.query_results[query_id]
+    result = session.query_results.get(query_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Query '{query_id}' not found or expired")
     
     if result["status"] != QueryStatus.RUNNING:
         raise HTTPException(
@@ -598,9 +726,10 @@ async def cancel_query(
             detail=f"Cannot cancel query with status '{result['status']}'"
         )
     
-    # Mark as cancelled
+    # Mark as cancelled - update in store
     result["status"] = QueryStatus.CANCELLED
     result["completed_at"] = datetime.utcnow().isoformat()
+    session.query_results.put(query_id, result)
     
     return CancelQueryResponse(message="Query cancelled", query_id=query_id)
 
@@ -780,6 +909,80 @@ def _execute_and_sample(cursor, sql: str, sample_limit: int = 3) -> dict:
     return result
 
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+# Thread pool for parallel query execution (batch validation)
+_batch_executor = ThreadPoolExecutor(max_workers=5)
+
+
+def _validate_single_query(session, query_req, default_db, default_schema, include_samples, sample_limit):
+    """
+    Validate a single query (runs in thread pool).
+    Returns tuple of (validation_result, status) for summary aggregation.
+    """
+    sql = query_req.sql.strip()
+    
+    with get_cursor(session) as cursor:
+        # Execute the query
+        exec_result = _execute_and_sample(
+            cursor, sql, 
+            sample_limit if include_samples else 0
+        )
+        
+        # Determine status
+        if exec_result["error_message"]:
+            status = "error"
+        elif exec_result["row_count"] == 0:
+            status = "empty"
+        else:
+            status = "success"
+        
+        # Build result
+        validation_result = QueryValidationResult(
+            query_id=query_req.query_id,
+            status=status,
+            row_count=exec_result["row_count"],
+            sample_data=exec_result["sample_data"] if include_samples else None,
+            columns=exec_result["columns"],
+            execution_time_ms=exec_result["execution_time_ms"],
+            error_message=exec_result["error_message"]
+        )
+        
+        # If failed or empty, try to find alternative
+        if status in ("error", "empty"):
+            tables = _extract_tables_from_sql(sql)
+            if tables:
+                db, schema, table = tables[0]
+                resolved_db = db or default_db
+                resolved_schema = schema or default_schema
+                
+                similar = _find_similar_tables(
+                    cursor, resolved_db, resolved_schema, table, limit=5
+                )
+                
+                if similar:
+                    best = similar[0]
+                    suggested_sql = re.sub(
+                        rf'(FROM|JOIN)\s+[\w."]*{re.escape(table)}\b',
+                        rf'\1 {best["fully_qualified"]}',
+                        sql,
+                        flags=re.IGNORECASE
+                    )
+                    
+                    suggested_result = _execute_and_sample(cursor, suggested_sql, 3)
+                    
+                    if suggested_result["success"] and suggested_result["row_count"] > 0:
+                        validation_result.suggested_query = suggested_sql
+                        validation_result.suggested_query_result = {
+                            "row_count": suggested_result["row_count"],
+                            "sample_data": suggested_result["sample_data"],
+                            "columns": suggested_result["columns"]
+                        }
+        
+        return validation_result, status
+
+
 @router.post("/validate-batch", response_model=BatchValidationResponse)
 async def validate_batch(
     request: BatchValidationRequest,
@@ -792,97 +995,91 @@ async def validate_batch(
     - Executes it to check if it works
     - Returns row count and sample data
     - If empty/failed, suggests a working alternative
+    
+    Queries are executed in parallel (up to 5 concurrent) for performance.
     """
     session = _get_session_or_401(x_session_id)
     
     default_db = request.database or session.database or "FIELD_METADATA"
     default_schema = request.schema_name or session.schema or "PUBLIC"
     
-    cursor = session.conn.cursor()
-    results = []
-    summary = {"success": 0, "empty": 0, "error": 0}
+    # For small batches, run sequentially (overhead of parallelism not worth it)
+    if len(request.queries) <= 2:
+        results = []
+        summary = {"success": 0, "empty": 0, "error": 0}
+        
+        for query_req in request.queries:
+            try:
+                result, status = _validate_single_query(
+                    session, query_req, default_db, default_schema,
+                    request.include_samples, request.sample_limit
+                )
+                results.append(result)
+                summary[status] += 1
+            except Exception as e:
+                logger.error(f"Query validation failed: {e}")
+                results.append(QueryValidationResult(
+                    query_id=query_req.query_id,
+                    status="error",
+                    error_message=str(e)
+                ))
+                summary["error"] += 1
+        
+        return BatchValidationResponse(
+            results=results,
+            summary=summary,
+            validated_at=datetime.utcnow().isoformat()
+        )
+    
+    # For larger batches, run in parallel with semaphore for concurrency control
+    loop = asyncio.get_event_loop()
+    
+    async def validate_with_semaphore(query_req, semaphore):
+        async with semaphore:
+            return await loop.run_in_executor(
+                _batch_executor,
+                _validate_single_query,
+                session, query_req, default_db, default_schema,
+                request.include_samples, request.sample_limit
+            )
     
     try:
-        for query_req in request.queries:
-            sql = query_req.sql.strip()
-            
-            # Execute the query
-            exec_result = _execute_and_sample(
-                cursor, sql, 
-                request.sample_limit if request.include_samples else 0
-            )
-            
-            # Determine status
-            if exec_result["error_message"]:
-                status = "error"
-                summary["error"] += 1
-            elif exec_result["row_count"] == 0:
-                status = "empty"
-                summary["empty"] += 1
-            else:
-                status = "success"
-                summary["success"] += 1
-            
-            # Build result
-            validation_result = QueryValidationResult(
-                query_id=query_req.query_id,
-                status=status,
-                row_count=exec_result["row_count"],
-                sample_data=exec_result["sample_data"] if request.include_samples else None,
-                columns=exec_result["columns"],
-                execution_time_ms=exec_result["execution_time_ms"],
-                error_message=exec_result["error_message"]
-            )
-            
-            # If failed or empty, try to find alternative
-            if status in ("error", "empty"):
-                # Extract table name from query
-                tables = _extract_tables_from_sql(sql)
-                if tables:
-                    db, schema, table = tables[0]
-                    resolved_db = db or default_db
-                    resolved_schema = schema or default_schema
-                    
-                    # Find similar tables with data
-                    similar = _find_similar_tables(
-                        cursor, resolved_db, resolved_schema, table, limit=5
-                    )
-                    
-                    if similar:
-                        # Generate suggested query using first table with data
-                        best = similar[0]
-                        suggested_sql = re.sub(
-                            rf'(FROM|JOIN)\s+[\w."]*{re.escape(table)}\b',
-                            rf'\1 {best["fully_qualified"]}',
-                            sql,
-                            flags=re.IGNORECASE
-                        )
-                        
-                        # Verify suggested query works
-                        suggested_result = _execute_and_sample(cursor, suggested_sql, 3)
-                        
-                        if suggested_result["success"] and suggested_result["row_count"] > 0:
-                            validation_result.suggested_query = suggested_sql
-                            validation_result.suggested_query_result = {
-                                "row_count": suggested_result["row_count"],
-                                "sample_data": suggested_result["sample_data"],
-                                "columns": suggested_result["columns"]
-                            }
-            
-            results.append(validation_result)
+        # Limit concurrent queries to prevent overwhelming Snowflake
+        semaphore = asyncio.Semaphore(5)
         
-        cursor.close()
+        tasks = [
+            validate_with_semaphore(query_req, semaphore)
+            for query_req in request.queries
+        ]
+        
+        task_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        results = []
+        summary = {"success": 0, "empty": 0, "error": 0}
+        
+        for i, task_result in enumerate(task_results):
+            if isinstance(task_result, Exception):
+                logger.error(f"Parallel validation failed for query {i}: {task_result}")
+                results.append(QueryValidationResult(
+                    query_id=request.queries[i].query_id,
+                    status="error",
+                    error_message=str(task_result)
+                ))
+                summary["error"] += 1
+            else:
+                validation_result, status = task_result
+                results.append(validation_result)
+                summary[status] += 1
+        
+        return BatchValidationResponse(
+            results=results,
+            summary=summary,
+            validated_at=datetime.utcnow().isoformat()
+        )
         
     except Exception as e:
-        cursor.close()
         logger.error(f"Batch validation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-    return BatchValidationResponse(
-        results=results,
-        summary=summary,
-        validated_at=datetime.utcnow().isoformat()
-    )
 
 
 @router.post("/explain", response_model=QueryExplanationResponse)
@@ -938,14 +1135,13 @@ async def explain_query(
     
     # Execute if requested
     if request.include_execution and session:
-        cursor = session.conn.cursor()
-        exec_result = _execute_and_sample(cursor, sql, 5)
-        cursor.close()
-        
-        response.executed = True
-        response.row_count = exec_result["row_count"]
-        response.sample_data = exec_result["sample_data"]
-        response.execution_time_ms = exec_result["execution_time_ms"]
-        response.error_message = exec_result["error_message"]
+        with get_cursor(session) as cursor:
+            exec_result = _execute_and_sample(cursor, sql, 5)
+            
+            response.executed = True
+            response.row_count = exec_result["row_count"]
+            response.sample_data = exec_result["sample_data"]
+            response.execution_time_ms = exec_result["execution_time_ms"]
+            response.error_message = exec_result["error_message"]
     
     return response

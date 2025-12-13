@@ -2,17 +2,63 @@
  * Results Table - Display query results with pagination and export
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
+  getFilteredRowModel,
   flexRender,
 } from '@tanstack/react-table';
-import { 
+import {
   ArrowUpDown, ArrowUp, ArrowDown, Download, Copy, Check,
-  ChevronLeft, ChevronRight, Loader2, AlertCircle, Search, Wand2, Play
+  ChevronLeft, ChevronRight, Loader2, AlertCircle, Search, Wand2, Play,
+  Table as TableIcon, Plus, GitBranch, ChevronDown, ArrowRight, X,
+  FileJson, FileSpreadsheet, Clipboard
 } from 'lucide-react';
+import { EntityRowActions, isEntityRow, buildEntityFromRow } from './EntityActions';
+import { isLineageQueryResult, transformLineageResultsToGraph } from '../services/lineageService';
+import { LineageRail } from './lineage/LineageRail';
+
+/**
+ * Detect if results are from a SHOW TABLES or similar metadata query
+ * @param {Object} results - Query results
+ * @returns {Object|null} - { type: 'tables'|'databases'|'schemas', nameColumn: string }
+ */
+function detectMetadataResults(results) {
+  if (!results?.columns || !results?.rows?.length) return null;
+  
+  const colNames = results.columns.map(c => 
+    (typeof c === 'string' ? c : c.name || '').toLowerCase()
+  );
+  
+  // SHOW TABLES results have "name" column and optionally "kind", "database_name", "schema_name"
+  if (colNames.includes('name') && (colNames.includes('kind') || colNames.includes('database_name'))) {
+    return { type: 'tables', nameColumn: 'name' };
+  }
+  
+  // SHOW DATABASES results
+  if (colNames.includes('name') && colNames.includes('created_on') && !colNames.includes('kind')) {
+    return { type: 'databases', nameColumn: 'name' };
+  }
+  
+  // SHOW SCHEMAS results
+  if (colNames.includes('name') && colNames.includes('database_name') && !colNames.includes('kind')) {
+    return { type: 'schemas', nameColumn: 'name' };
+  }
+  
+  // Generic results with a "name" column - could be entity tables
+  if (colNames.includes('name')) {
+    return { type: 'generic', nameColumn: 'name' };
+  }
+  
+  // Results with TABLE_NAME column (common in information_schema)
+  if (colNames.includes('table_name')) {
+    return { type: 'tables', nameColumn: 'table_name' };
+  }
+  
+  return null;
+}
 
 // Parse error message to extract the missing table name
 function parseErrorForMissingTable(error) {
@@ -151,22 +197,88 @@ export default function ResultsTable({
   onSearchAlternatives,
   onSelectAlternative,
   alternatives,
-  alternativesLoading
+  alternativesLoading,
+  // New prop for inserting values into editor
+  onInsertIntoEditor,
+  // New props for query flows
+  onOpenQueryFlow,
+  availableTables = [],
+  // Row selection for exploration panel
+  selectedRowIndex = null,
+  onRowSelect = null,
 }) {
   const [sorting, setSorting] = useState([]);
+  const [copiedValue, setCopiedValue] = useState(null);
+  const [globalFilter, setGlobalFilter] = useState('');
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef(null);
+
+  // Close export menu on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
   
   // Parse error to find missing object
   const missingObject = useMemo(() => parseErrorForMissingTable(error), [error]);
+  
+  // Detect if this is a metadata query result (SHOW TABLES, etc.)
+  const metadataInfo = useMemo(() => detectMetadataResults(results), [results]);
+  
+  // Detect if results contain entity data (has GUID, name, typename)
+  const isEntityData = useMemo(() => {
+    if (!results?.columns || !results?.rows?.length) return false;
+    const colNames = results.columns.map(c => 
+      (typeof c === 'string' ? c : c.name || '').toLowerCase()
+    );
+    return colNames.includes('guid') && colNames.includes('name');
+  }, [results]);
+  
+  // Detect if results are lineage data (PROCESS_NAME, INPUTS, OUTPUTS)
+  const [showLineageGraph, setShowLineageGraph] = useState(true);
+  const lineageGraphData = useMemo(() => {
+    if (!results?.columns || !results?.rows?.length) return null;
+    
+    // Check if this looks like lineage data
+    if (!isLineageQueryResult(results)) return null;
+    
+    // Transform to graph visualization
+    return transformLineageResultsToGraph(results);
+  }, [results]);
+  
+  // Handle inserting a value into the editor
+  const handleInsert = useCallback((value) => {
+    if (onInsertIntoEditor) {
+      onInsertIntoEditor(value);
+      setCopiedValue(value);
+      setTimeout(() => setCopiedValue(null), 1500);
+    }
+  }, [onInsertIntoEditor]);
   
   // Build columns from result metadata
   // Handles both string columns ["col1", "col2"] and object columns [{name: "col1"}, {name: "col2"}]
   const columns = useMemo(() => {
     if (!results?.columns) return [];
     
-    return results.columns.map((col, index) => {
+    const cols = results.columns.map((col, index) => {
       // Handle both string and object column formats
       const colName = typeof col === 'string' ? col : (col.name || `col_${index}`);
       const colType = typeof col === 'object' ? col.type : undefined;
+      const colNameLower = colName.toLowerCase();
+      
+      // Check if this column should have clickable cells (for inserting into editor)
+      const isClickableColumn = onInsertIntoEditor && metadataInfo && (
+        colNameLower === metadataInfo.nameColumn ||
+        colNameLower === 'name' ||
+        colNameLower === 'table_name' ||
+        colNameLower === 'schema_name' ||
+        colNameLower === 'database_name'
+      );
       
       return {
         id: colName || `col_${index}`,
@@ -177,6 +289,7 @@ export default function ResultsTable({
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
           >
             <span>{colName}</span>
+            {isClickableColumn && <Plus size={12} className="text-emerald-500" />}
             {column.getIsSorted() === 'asc' ? (
               <ArrowUp size={14} />
             ) : column.getIsSorted() === 'desc' ? (
@@ -190,12 +303,72 @@ export default function ResultsTable({
           const value = getValue();
           if (value === null) return <span className="text-gray-400 italic">NULL</span>;
           if (typeof value === 'object') return JSON.stringify(value);
-          return String(value);
+          
+          const strValue = String(value);
+          
+          // Make clickable if this is an insertable column
+          if (isClickableColumn && strValue) {
+            const isInserted = copiedValue === strValue;
+            return (
+              <button
+                onClick={() => handleInsert(strValue)}
+                className={`group flex items-center gap-1.5 px-2 py-0.5 -mx-2 rounded transition-colors ${
+                  isInserted 
+                    ? 'bg-emerald-100 text-emerald-700' 
+                    : 'hover:bg-emerald-50 text-gray-900 hover:text-emerald-700'
+                }`}
+                title={`Click to insert "${strValue}" into your query`}
+              >
+                {isInserted ? (
+                  <Check size={12} className="text-emerald-600" />
+                ) : (
+                  <Plus size={12} className="opacity-0 group-hover:opacity-100 text-emerald-500" />
+                )}
+                <span className="font-mono text-sm">{strValue}</span>
+                {!isInserted && (
+                  <span className="text-xs text-emerald-500 opacity-0 group-hover:opacity-100 ml-1">
+                    Insert
+                  </span>
+                )}
+              </button>
+            );
+          }
+          
+          return strValue;
         },
         meta: { type: colType }
       };
     });
-  }, [results?.columns]);
+    
+    // Add entity actions column if this looks like entity data and we have a flow handler
+    if (isEntityData && onOpenQueryFlow) {
+      const columnNames = results.columns.map(c => 
+        typeof c === 'string' ? c : c.name
+      );
+      
+      cols.push({
+        id: '__entity_actions',
+        header: () => (
+          <div className="flex items-center gap-1 text-indigo-600">
+            <GitBranch size={14} />
+            <span>Flows</span>
+          </div>
+        ),
+        cell: ({ row }) => (
+          <EntityRowActions
+            row={row.original}
+            columns={columnNames}
+            availableTables={availableTables}
+            onSelectFlow={onOpenQueryFlow}
+            variant="quick"
+          />
+        ),
+        meta: { type: 'actions' }
+      });
+    }
+    
+    return cols;
+  }, [results?.columns, metadataInfo, onInsertIntoEditor, copiedValue, handleInsert, isEntityData, onOpenQueryFlow, availableTables]);
   
   // Build data from rows
   // Handles both string and object column formats
@@ -215,17 +388,20 @@ export default function ResultsTable({
   const table = useReactTable({
     data,
     columns,
-    state: { sorting },
+    state: { sorting, globalFilter },
     onSortingChange: setSorting,
+    onGlobalFilterChange: setGlobalFilter,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    globalFilterFn: 'includesString',
   });
   
   const exportToCSV = () => {
     if (!results?.columns || !results?.rows) return;
-    
-    const headers = results.columns.map(c => c.name).join(',');
-    const rows = results.rows.map(row => 
+
+    const headers = results.columns.map(c => typeof c === 'string' ? c : c.name).join(',');
+    const rows = results.rows.map(row =>
       row.map(cell => {
         if (cell === null) return '';
         if (typeof cell === 'string' && (cell.includes(',') || cell.includes('"'))) {
@@ -234,7 +410,7 @@ export default function ResultsTable({
         return String(cell);
       }).join(',')
     ).join('\n');
-    
+
     const csv = `${headers}\n${rows}`;
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -243,6 +419,52 @@ export default function ResultsTable({
     a.download = `query_results_${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    setShowExportMenu(false);
+  };
+
+  const exportToJSON = () => {
+    if (!results?.columns || !results?.rows) return;
+
+    const jsonData = results.rows.map(row => {
+      const obj = {};
+      results.columns.forEach((col, i) => {
+        const colName = typeof col === 'string' ? col : col.name;
+        obj[colName] = row[i];
+      });
+      return obj;
+    });
+
+    const json = JSON.stringify(jsonData, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `query_results_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setShowExportMenu(false);
+  };
+
+  const copyAllToClipboard = async () => {
+    if (!results?.columns || !results?.rows) return;
+
+    const jsonData = results.rows.map(row => {
+      const obj = {};
+      results.columns.forEach((col, i) => {
+        const colName = typeof col === 'string' ? col : col.name;
+        obj[colName] = row[i];
+      });
+      return obj;
+    });
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(jsonData, null, 2));
+      setCopiedValue('__all__');
+      setTimeout(() => setCopiedValue(null), 1500);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+    setShowExportMenu(false);
   };
   
   // Loading state
@@ -328,27 +550,151 @@ export default function ResultsTable({
   
   return (
     <div className="flex flex-col h-full bg-white">
+      {/* Lineage Data Detected Banner & Visualization */}
+      {lineageGraphData && (
+        <div className="border-b border-gray-200">
+          {/* Banner */}
+          <button
+            onClick={() => setShowLineageGraph(!showLineageGraph)}
+            className="w-full flex items-center justify-between px-4 py-2 bg-emerald-50 hover:bg-emerald-100 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <GitBranch size={16} className="text-emerald-600" />
+              <span className="text-sm font-medium text-emerald-700">
+                Lineage Data Detected
+              </span>
+              <span className="text-xs text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded">
+                {lineageGraphData.rawProcesses?.length || 0} processes
+              </span>
+              <span className="text-xs text-emerald-600">
+                {lineageGraphData.metadata?.sourceCount || 0} sources → {lineageGraphData.metadata?.targetCount || 0} targets
+              </span>
+            </div>
+            <ChevronDown 
+              size={16} 
+              className={`text-emerald-600 transition-transform ${showLineageGraph ? '' : '-rotate-90'}`} 
+            />
+          </button>
+          
+          {/* Lineage Graph */}
+          {showLineageGraph && lineageGraphData.nodes?.length > 0 && (
+            <div className="p-4 bg-white border-t border-emerald-100">
+              <LineageRail
+                nodes={lineageGraphData.nodes}
+                edges={lineageGraphData.edges}
+                title={`Query Results Lineage (${lineageGraphData.rawProcesses?.length || 0} processes)`}
+                metadata={lineageGraphData.metadata}
+                rawProcesses={lineageGraphData.rawProcesses}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    
+      {/* Search Bar */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 bg-slate-50">
+        <Search size={14} className="text-slate-400" />
+        <input
+          type="text"
+          placeholder="Search all columns..."
+          value={globalFilter}
+          onChange={(e) => setGlobalFilter(e.target.value)}
+          className="flex-1 text-sm bg-transparent outline-none placeholder:text-slate-400"
+        />
+        {globalFilter && (
+          <>
+            <span className="text-xs text-slate-500">
+              {table.getFilteredRowModel().rows.length} of {rowCount}
+            </span>
+            <button
+              onClick={() => setGlobalFilter('')}
+              className="p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"
+            >
+              <X size={14} />
+            </button>
+          </>
+        )}
+      </div>
+
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
         <div className="flex items-center gap-4 text-sm text-gray-600">
           <span>
-            <strong>{rowCount.toLocaleString()}</strong> rows
+            <strong>{globalFilter ? table.getFilteredRowModel().rows.length : rowCount.toLocaleString()}</strong> rows
+            {globalFilter && <span className="text-slate-400 ml-1">(filtered)</span>}
           </span>
           <span>
             <strong>{columnCount}</strong> columns
           </span>
+          {lineageGraphData && (
+            <span className="flex items-center gap-1 text-emerald-600">
+              <GitBranch size={12} />
+              Lineage
+            </span>
+          )}
         </div>
-        
-        <div className="flex items-center gap-2">
+
+        {/* Enhanced Export Menu */}
+        <div className="relative" ref={exportMenuRef}>
           <button
-            onClick={exportToCSV}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-200 rounded"
+            onClick={() => setShowExportMenu(!showExportMenu)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 bg-white border border-gray-200 hover:border-gray-300 rounded-lg transition-colors"
           >
             <Download size={14} />
-            Export CSV
+            Export
+            <ChevronDown size={12} className={`transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
           </button>
+
+          {showExportMenu && (
+            <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+              <button
+                onClick={exportToCSV}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <FileSpreadsheet size={14} className="text-green-600" />
+                Export as CSV
+              </button>
+              <button
+                onClick={exportToJSON}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <FileJson size={14} className="text-amber-600" />
+                Export as JSON
+              </button>
+              <div className="border-t border-gray-100" />
+              <button
+                onClick={copyAllToClipboard}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                {copiedValue === '__all__' ? (
+                  <>
+                    <Check size={14} className="text-emerald-600" />
+                    <span className="text-emerald-600">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Clipboard size={14} className="text-blue-600" />
+                    Copy All (JSON)
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
+      
+      {/* Metadata hint banner */}
+      {metadataInfo && onInsertIntoEditor && (
+        <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-100 flex items-center gap-2 text-sm text-emerald-700">
+          <TableIcon size={14} />
+          <span>
+            <strong>Tip:</strong> Click any table name below to insert it into your query
+          </span>
+          <span className="ml-auto text-emerald-500 text-xs">
+            {metadataInfo.type === 'tables' ? 'Tables' : metadataInfo.type === 'databases' ? 'Databases' : 'Results'}
+          </span>
+        </div>
+      )}
       
       {/* Table */}
       <div className="flex-1 overflow-auto">
@@ -370,15 +716,26 @@ export default function ResultsTable({
             ))}
           </thead>
           <tbody>
-            {table.getRowModel().rows.map(row => (
-              <tr key={row.id} className="hover:bg-blue-50/50 border-b border-gray-100">
-                {row.getVisibleCells().map(cell => (
-                  <td key={cell.id} className="px-4 py-2 max-w-xs truncate">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {table.getRowModel().rows.map((row, rowIndex) => {
+              const isSelected = selectedRowIndex === rowIndex;
+              return (
+                <tr 
+                  key={row.id} 
+                  onClick={() => onRowSelect?.(rowIndex, row.original)}
+                  className={`border-b border-gray-100 cursor-pointer transition-colors ${
+                    isSelected 
+                      ? 'bg-blue-100 hover:bg-blue-100' 
+                      : 'hover:bg-blue-50/50'
+                  }`}
+                >
+                  {row.getVisibleCells().map(cell => (
+                    <td key={cell.id} className="px-4 py-2 max-w-xs truncate">
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

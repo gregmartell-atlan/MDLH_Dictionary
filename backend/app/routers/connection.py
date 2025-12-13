@@ -1,12 +1,68 @@
 """Connection management endpoints with session support."""
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict
 import snowflake.connector
+from snowflake.connector.errors import DatabaseError, OperationalError, ProgrammingError
 from app.services.session import session_manager
+from app.utils.logger import logger
+import time
+from collections import defaultdict
+import threading
 
 router = APIRouter(prefix="/api", tags=["connection"])
+
+# =============================================================================
+# Rate Limiting (Simple in-memory implementation)
+# =============================================================================
+
+class RateLimiter:
+    """
+    Simple in-memory rate limiter with sliding window.
+    Limits: 5 connection attempts per minute per IP.
+    """
+    
+    def __init__(self, max_attempts: int = 5, window_seconds: int = 60):
+        self._attempts: Dict[str, list] = defaultdict(list)
+        self._lock = threading.Lock()
+        self._max_attempts = max_attempts
+        self._window_seconds = window_seconds
+    
+    def is_allowed(self, client_ip: str) -> tuple[bool, int]:
+        """
+        Check if a request is allowed.
+        Returns (allowed, seconds_until_reset).
+        """
+        now = time.time()
+        
+        with self._lock:
+            # Clean old entries
+            self._attempts[client_ip] = [
+                t for t in self._attempts[client_ip] 
+                if now - t < self._window_seconds
+            ]
+            
+            if len(self._attempts[client_ip]) >= self._max_attempts:
+                oldest = self._attempts[client_ip][0]
+                seconds_until_reset = int(self._window_seconds - (now - oldest)) + 1
+                return False, seconds_until_reset
+            
+            # Record this attempt
+            self._attempts[client_ip].append(now)
+            return True, 0
+    
+    def get_remaining(self, client_ip: str) -> int:
+        """Get remaining attempts for this IP."""
+        now = time.time()
+        with self._lock:
+            recent = [t for t in self._attempts.get(client_ip, []) if now - t < self._window_seconds]
+            return max(0, self._max_attempts - len(recent))
+
+
+# Global rate limiter instance
+connect_rate_limiter = RateLimiter(max_attempts=5, window_seconds=60)
 
 
 class ConnectionRequest(BaseModel):
@@ -51,9 +107,45 @@ class DisconnectResponse(BaseModel):
     message: str
 
 
+def _get_client_ip(request: Request) -> str:
+    """Extract client IP from request, handling proxies."""
+    # Check for forwarded header (behind proxy/load balancer)
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+    
+    # Fallback to direct client IP
+    return request.client.host if request.client else "unknown"
+
+
 @router.post("/connect", response_model=ConnectionResponse)
-async def connect(request: ConnectionRequest):
-    """Establish Snowflake connection and return session ID."""
+async def connect(request: ConnectionRequest, http_request: Request):
+    """
+    Establish Snowflake connection and return session ID.
+    
+    Rate limited to 5 attempts per minute per IP address.
+    """
+    # Rate limiting check
+    client_ip = _get_client_ip(http_request)
+    allowed, retry_after = connect_rate_limiter.is_allowed(client_ip)
+    
+    if not allowed:
+        logger.warning(f"[Connect] Rate limit exceeded for {client_ip}")
+        return JSONResponse(
+            status_code=429,
+            content={
+                "connected": False,
+                "error": f"Too many connection attempts. Try again in {retry_after} seconds.",
+                "reason": "RATE_LIMITED",
+                "retry_after": retry_after
+            },
+            headers={"Retry-After": str(retry_after)}
+        )
+    
     try:
         connect_params = {
             "account": request.account,
@@ -61,6 +153,10 @@ async def connect(request: ConnectionRequest):
             "warehouse": request.warehouse,
             "database": request.database,
             "schema": request.schema_name,
+            # Keep session alive to prevent silent disconnects
+            "client_session_keep_alive": True,
+            # Network timeout for connection operations
+            "network_timeout": 10,
         }
         
         if request.role:
@@ -82,7 +178,7 @@ async def connect(request: ConnectionRequest):
                 error=f"Unknown auth_type: {request.auth_type}"
             )
         
-        print(f"[Connect] {request.auth_type} auth for {request.user}@{request.account}")
+        logger.info(f"[Connect] {request.auth_type} auth for {request.user}@{request.account}")
         conn = snowflake.connector.connect(**connect_params)
         
         cursor = conn.cursor()
@@ -100,7 +196,7 @@ async def connect(request: ConnectionRequest):
             role=row[1]
         )
         
-        print(f"[Connect] Session {session_id[:8]}... created for {row[0]}")
+        logger.info(f"[Connect] Session {session_id[:8]}... created for {row[0]}")
         
         return ConnectionResponse(
             connected=True,
@@ -111,25 +207,100 @@ async def connect(request: ConnectionRequest):
             role=row[1]
         )
         
-    except snowflake.connector.errors.DatabaseError as e:
-        print(f"[Connect] Failed: {e}")
+    except DatabaseError as e:
+        # Authentication errors -> 401
+        error_msg = str(e)
+        if "authentication" in error_msg.lower() or "password" in error_msg.lower() or "token" in error_msg.lower():
+            logger.warning(f"[Connect] Auth failed: {e}")
+            return JSONResponse(
+                status_code=401,
+                content={"connected": False, "error": "Authentication failed"}
+            )
+        # Other database errors -> return as is
+        logger.error(f"[Connect] Database error: {e}")
         return ConnectionResponse(connected=False, error=str(e))
+    except (OperationalError, TimeoutError) as e:
+        # Network/timeout errors -> 503
+        logger.error(f"[Connect] Network/timeout error: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={"connected": False, "error": "Snowflake connection timed out or unreachable"}
+        )
     except Exception as e:
-        print(f"[Connect] Error: {e}")
-        return ConnectionResponse(connected=False, error=str(e))
+        logger.exception(f"[Connect] Unexpected error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"connected": False, "error": "Internal error while connecting"}
+        )
 
 
-@router.get("/session/status", response_model=SessionStatusResponse)
+@router.get("/session/status")
 async def get_session_status(
     x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
 ):
-    """Check if a session is still valid."""
+    """
+    Check if a session is still valid.
+    
+    Response codes:
+    - 200 { valid: true, ... } -> session good
+    - 401 { valid: false, reason: "SESSION_NOT_FOUND" } -> session unknown (e.g., backend restarted)
+    - 401 { valid: false, reason: "auth-error" } -> session truly dead (Snowflake rejected)
+    - 503 { valid: true, reason: "snowflake-unreachable" } -> backend/Snowflake unreachable
+    
+    Frontend should treat 401 as "please reconnect" and 503 as "try again later".
+    """
     if not x_session_id:
-        return SessionStatusResponse(valid=False, message="No session ID provided")
+        logger.debug("[SessionStatus] No session ID provided")
+        return JSONResponse(
+            status_code=401,
+            content={"valid": False, "reason": "NO_SESSION_ID", "message": "No session ID provided"}
+        )
     
     session = session_manager.get_session(x_session_id)
     if session is None:
-        return SessionStatusResponse(valid=False, message="Session not found or expired")
+        # This is the key case: frontend has a stale session ID (e.g., backend restarted)
+        # Return 401 with a clear reason so frontend knows to prompt for reconnect
+        logger.info(f"[SessionStatus] Session {x_session_id[:8]}... not found (backend may have restarted)")
+        return JSONResponse(
+            status_code=401,
+            content={"valid": False, "reason": "SESSION_NOT_FOUND", "message": "Session not found - please reconnect"}
+        )
+    
+    # Perform a quick health check to verify Snowflake is reachable
+    try:
+        cursor = session.conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        cursor.close()
+    except (DatabaseError, ProgrammingError) as e:
+        error_msg = str(e).lower()
+        # Check if it's an auth error (session actually invalid)
+        if "authentication" in error_msg or "session" in error_msg or "token" in error_msg:
+            logger.warning(f"[SessionStatus] Session {x_session_id[:8]}... auth invalid: {e}")
+            session_manager.remove_session(x_session_id)
+            return JSONResponse(
+                status_code=401,
+                content={"valid": False, "reason": "auth-error", "message": str(e)}
+            )
+        # Otherwise it's a network/Snowflake issue -> 503
+        logger.warning(f"[SessionStatus] Snowflake unreachable for session {x_session_id[:8]}...: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={"valid": True, "reason": "snowflake-unreachable", "message": "Snowflake health check failed"}
+        )
+    except (OperationalError, TimeoutError) as e:
+        # Network errors -> 503, session may still be valid
+        logger.warning(f"[SessionStatus] Network error for session {x_session_id[:8]}...: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={"valid": True, "reason": "snowflake-unreachable", "message": "Network timeout"}
+        )
+    except Exception as e:
+        logger.error(f"[SessionStatus] Unexpected error for session {x_session_id[:8]}...: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={"valid": True, "reason": "status-check-error", "message": str(e)}
+        )
     
     from datetime import datetime
     idle = (datetime.utcnow() - session.last_used).total_seconds()

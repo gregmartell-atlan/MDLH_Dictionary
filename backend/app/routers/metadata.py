@@ -1,16 +1,17 @@
 """Metadata discovery endpoints for schema browser with session support."""
 
 import re
-import logging
 from fastapi import APIRouter, HTTPException, Query, Header
+from fastapi.responses import JSONResponse
 from typing import List, Optional
 import snowflake.connector.errors
+from snowflake.connector.errors import OperationalError
 from app.models.schemas import DatabaseInfo, SchemaInfo, TableInfo, ColumnInfo
 from app.services.session import session_manager
 from app.services import metadata_cache
+from app.utils.logger import logger
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
-logger = logging.getLogger(__name__)
 
 
 def _validate_identifier(name: str) -> str:
@@ -29,10 +30,23 @@ def _get_session_or_none(session_id: Optional[str]):
     return session_manager.get_session(session_id)
 
 
-def _handle_snowflake_error(e: Exception, context: str) -> List:
-    """Handle Snowflake errors gracefully, returning empty list for permission issues."""
+def _handle_snowflake_error(e: Exception, context: str):
+    """
+    Handle Snowflake errors gracefully.
+    
+    Returns:
+    - [] for permission/access issues
+    - JSONResponse with 503 for network/timeout issues
+    """
     error_msg = str(e)
     logger.warning(f"[Metadata] {context}: {error_msg}")
+    
+    # Network/timeout errors -> return 503 so frontend knows backend is unreachable
+    if isinstance(e, (OperationalError, TimeoutError)):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Snowflake unreachable", "detail": error_msg}
+        )
     
     # Permission/access errors - return empty list instead of 500
     if isinstance(e, snowflake.connector.errors.ProgrammingError):
@@ -130,7 +144,11 @@ async def list_tables(
     refresh: bool = False,
     x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
 ):
-    """List all tables and views in a schema."""
+    """List all tables and views in a schema with accurate row counts.
+    
+    Uses INFORMATION_SCHEMA.TABLES for accurate row counts (SHOW TABLES often has stale counts).
+    Results are sorted by row_count DESC for "popular tables" functionality.
+    """
     session = _get_session_or_none(x_session_id)
     if not session:
         return []
@@ -143,40 +161,43 @@ async def list_tables(
     
     try:
         safe_db = _validate_identifier(database)
-        safe_schema = _validate_identifier(schema)
+        # Use single-quoted string literal for schema name in WHERE clause
+        safe_schema_literal = schema.replace("'", "''")
+        
         cursor = session.conn.cursor()
-        cursor.execute(f"SHOW TABLES IN {safe_db}.{safe_schema}")
+        
+        # Query INFORMATION_SCHEMA for accurate row counts
+        # This is more reliable than SHOW TABLES which can have stale row_count
+        cursor.execute(f"""
+            SELECT 
+                table_name,
+                table_type,
+                row_count,
+                bytes,
+                table_owner,
+                comment
+            FROM {safe_db}.INFORMATION_SCHEMA.TABLES
+            WHERE table_schema = '{safe_schema_literal}'
+            AND table_type IN ('BASE TABLE', 'VIEW')
+            ORDER BY row_count DESC NULLS LAST
+        """)
         
         tables = []
         for row in cursor.fetchall():
             tables.append({
-                "name": row[1],
+                "name": row[0],
                 "database": database,
                 "schema": schema,
-                "kind": "TABLE",
-                "owner": row[4] if len(row) > 4 else None,
-                "row_count": row[6] if len(row) > 6 else None,
-                "comment": row[8] if len(row) > 8 else None
-            })
-        cursor.close()
-        
-        # Also get views
-        cursor = session.conn.cursor()
-        cursor.execute(f"SHOW VIEWS IN {safe_db}.{safe_schema}")
-        
-        for row in cursor.fetchall():
-            tables.append({
-                "name": row[1],
-                "database": database,
-                "schema": schema,
-                "kind": "VIEW",
-                "owner": row[4] if len(row) > 4 else None,
-                "comment": row[7] if len(row) > 7 else None
+                "kind": "VIEW" if row[1] == 'VIEW' else "TABLE",
+                "owner": row[4],
+                "row_count": row[2],
+                "bytes": row[3],
+                "comment": row[5]
             })
         cursor.close()
         
         metadata_cache.set_tables(database, schema, tables)
-        logger.info(f"[Metadata] list_tables({database}.{schema}): Found {len(tables)} tables/views")
+        logger.info(f"[Metadata] list_tables({database}.{schema}): Found {len(tables)} tables/views (sorted by row_count)")
         
         # Create TableInfo models - wrap in try/except to see validation errors
         result = []
