@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command } from 'lucide-react';
+import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Code2, X, Search, Command } from 'lucide-react';
+import { findQueryForEntity, hasQueryForEntity } from './utils/queryMatcher';
+import { filterEntities, filterQueries } from './utils/filterData';
+import { generateCSV, downloadCSVFile } from './utils/csvExport';
+import { CopyButton, CellCopyButton } from './components/CopyButton';
 
 const tabs = [
   { id: 'core', label: 'Core', icon: Table },
@@ -884,67 +888,6 @@ const colHeaders = {
   exampleQuery: 'Example Query',
 };
 
-function CopyButton({ text }) {
-  const [copied, setCopied] = useState(false);
-  
-  const handleCopy = async (e) => {
-    e.stopPropagation();
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-  
-  return (
-    <button
-      onClick={handleCopy}
-      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-all duration-200 ${
-        copied 
-          ? 'bg-green-500 text-white' 
-          : 'bg-white border border-gray-200 text-gray-600 hover:border-[#3366FF] hover:text-[#3366FF]'
-      }`}
-      title="Copy to clipboard"
-    >
-      {copied ? (
-        <>
-          <Check size={12} />
-          <span>Copied!</span>
-        </>
-      ) : (
-        <>
-          <Copy size={12} />
-          <span>Copy</span>
-        </>
-      )}
-    </button>
-  );
-}
-
-// Inline copy button for table cells
-function CellCopyButton({ text }) {
-  const [copied, setCopied] = useState(false);
-  
-  const handleCopy = async (e) => {
-    e.stopPropagation();
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  
-  return (
-    <button
-      onClick={handleCopy}
-      className={`ml-1.5 opacity-0 group-hover:opacity-100 inline-flex items-center justify-center w-5 h-5 rounded transition-all duration-150 ${
-        copied 
-          ? 'bg-green-500 text-white' 
-          : 'bg-gray-200 hover:bg-[#3366FF] text-gray-500 hover:text-white'
-      }`}
-      title="Copy"
-    >
-      {copied ? <Check size={10} /> : <Copy size={10} />}
-    </button>
-  );
-}
-
 // Slide-out Query Panel
 function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery }) {
   const panelRef = useRef(null);
@@ -1139,55 +1082,9 @@ export default function App() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const filteredData = data[activeTab].filter(row =>
-    Object.values(row).some(val => 
-      val?.toString().toLowerCase().includes(search.toLowerCase())
-    )
-  );
-
-  const filteredQueries = (exampleQueries[activeTab] || []).filter(q =>
-    q.title.toLowerCase().includes(search.toLowerCase()) ||
-    q.description.toLowerCase().includes(search.toLowerCase()) ||
-    q.query.toLowerCase().includes(search.toLowerCase())
-  );
-
-  // Find a query related to an entity by searching for table name in query SQL
-  const findQueryForEntity = (entityName, tableName) => {
-    const allQueries = exampleQueries[activeTab] || [];
-    
-    if (!tableName || tableName === '(abstract)') return null;
-    
-    const tableNameLower = tableName.toLowerCase();
-    const entityNameLower = entityName.toLowerCase();
-    
-    // Priority 1: Exact table name match in query SQL (e.g., "FROM TABLE_ENTITY" or "TABLE_ENTITY")
-    let matchedQuery = allQueries.find(q => {
-      const queryLower = q.query.toLowerCase();
-      return (
-        queryLower.includes(`from ${tableNameLower}`) ||
-        queryLower.includes(`from\n    ${tableNameLower}`) ||
-        queryLower.includes(`from\n${tableNameLower}`) ||
-        queryLower.includes(`join ${tableNameLower}`) ||
-        // Also check for the table name as a standalone reference
-        new RegExp(`\\b${tableNameLower.replace(/_/g, '_')}\\b`).test(queryLower)
-      );
-    });
-    
-    // Priority 2: Entity name explicitly in title (e.g., "Table" in title for TABLE_ENTITY)
-    if (!matchedQuery) {
-      matchedQuery = allQueries.find(q => {
-        const titleLower = q.title.toLowerCase();
-        // Match singular entity name (e.g., "Column" for Column entity, "Table" for Table)
-        return (
-          titleLower.includes(entityNameLower) ||
-          titleLower.includes(entityNameLower + 's') || // plural
-          titleLower.includes(entityNameLower + ' ')
-        );
-      });
-    }
-    
-    return matchedQuery || null;
-  };
+  const filteredData = filterEntities(data[activeTab], search);
+  const filteredQueriesData = filterQueries(exampleQueries[activeTab] || [], search);
+  const activeTabQueries = exampleQueries[activeTab] || [];
 
   // Open panel with highlighted query
   const openQueryForEntity = (entityName, tableName, exampleQuery) => {
@@ -1196,48 +1093,28 @@ export default function App() {
       setHighlightedQuery(exampleQuery);
     } else {
       // Find related query from exampleQueries
-      const matchedQuery = findQueryForEntity(entityName, tableName);
+      const matchedQuery = findQueryForEntity(entityName, tableName, activeTabQueries);
       setHighlightedQuery(matchedQuery?.query || null);
     }
     setShowQueries(true);
   };
 
-  // Check if entity has a related query
-  const hasQueryForEntity = (entityName, tableName, exampleQuery) => {
-    if (exampleQuery) return true;
-    if (!tableName || tableName === '(abstract)') return false;
-    return findQueryForEntity(entityName, tableName) !== null;
+  // Check if entity has a related query (wrapper using imported utility)
+  const checkHasQueryForEntity = (entityName, tableName, exampleQuery) => {
+    return hasQueryForEntity(entityName, tableName, exampleQuery, activeTabQueries);
   };
 
   const downloadCSV = () => {
     const cols = columns[activeTab];
-    const header = cols.map(c => colHeaders[c]).join(',');
-    const rows = filteredData.map(row => 
-      cols.map(c => `"${(row[c] || '').toString().replace(/"/g, '""')}"`).join(',')
-    );
-    const csv = [header, ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `mdlh_${activeTab}_entities.csv`;
-    a.click();
+    const csv = generateCSV(filteredData, cols, colHeaders);
+    downloadCSVFile(csv, `mdlh_${activeTab}_entities.csv`);
   };
 
   const downloadAllCSV = () => {
     Object.keys(data).forEach(tabId => {
       const cols = columns[tabId];
-      const header = cols.map(c => colHeaders[c]).join(',');
-      const rows = data[tabId].map(row => 
-        cols.map(c => `"${(row[c] || '').toString().replace(/"/g, '""')}"`).join(',')
-      );
-      const csv = [header, ...rows].join('\n');
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `mdlh_${tabId}_entities.csv`;
-      a.click();
+      const csv = generateCSV(data[tabId], cols, colHeaders);
+      downloadCSVFile(csv, `mdlh_${tabId}_entities.csv`);
     });
   };
 
@@ -1373,7 +1250,7 @@ export default function App() {
                     ))}
                     <td className="px-4 py-3 align-top">
                       <PlayQueryButton 
-                        hasQuery={hasQueryForEntity(row.entity, row.table, row.exampleQuery)}
+                        hasQuery={checkHasQueryForEntity(row.entity, row.table, row.exampleQuery)}
                         onClick={() => openQueryForEntity(row.entity, row.table, row.exampleQuery)}
                       />
                     </td>
@@ -1409,7 +1286,7 @@ export default function App() {
           setShowQueries(false);
           setHighlightedQuery(null);
         }} 
-        queries={filteredQueries}
+        queries={filteredQueriesData}
         categoryLabel={tabs.find(t => t.id === activeTab)?.label}
         highlightedQuery={highlightedQuery}
       />
