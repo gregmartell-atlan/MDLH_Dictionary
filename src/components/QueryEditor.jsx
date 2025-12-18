@@ -1,6 +1,6 @@
 /**
  * Query Editor - Three-panel SQL workspace
- * Inspired by DuckDB's clean, dense UI
+ * Inspired by Atlan's clean, dense UI
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -26,7 +26,7 @@ import { buildSafeFQN, escapeStringValue } from '../utils/queryHelpers';
 const log = createLogger('QueryEditor');
 
 // =============================================================================
-// QUERY SUGGESTIONS - DuckDB-style dropdown with ready-to-run queries
+// QUERY SUGGESTIONS - Atlan-style dropdown with ready-to-run queries
 // =============================================================================
 
 /**
@@ -241,7 +241,7 @@ LIMIT 20;`
 }
 
 /**
- * Query Suggestions Dropdown - DuckDB style
+ * Query Suggestions Dropdown - Atlan style
  * Shows ready-to-run queries with REAL values (no placeholders!)
  */
 function QuerySuggestionsDropdown({
@@ -419,7 +419,7 @@ function QuerySuggestionsDropdown({
 }
 
 // =============================================================================
-// TABLE SELECTOR - DuckDB-style with smart filters
+// TABLE SELECTOR - Atlan-style with smart filters
 // =============================================================================
 
 // Table category detection for smart filtering
@@ -533,7 +533,7 @@ function TableSelector({
     setSearch('');
   };
   
-  // Category badge colors (DuckDB-inspired)
+  // Category badge colors (Atlan-inspired)
   const badgeColors = {
     violet: 'bg-gray-100 text-gray-700 border-gray-200',
     blue: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -559,7 +559,7 @@ function TableSelector({
   
   return (
     <div className="relative" ref={dropdownRef}>
-      {/* Trigger Button - DuckDB style */}
+      {/* Trigger Button - Atlan style */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled}
@@ -576,7 +576,7 @@ function TableSelector({
       
       {isOpen && (
         <div className="absolute top-full left-0 mt-2 w-96 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden">
-          {/* Header with Search - DuckDB style */}
+          {/* Header with Search - Atlan style */}
           <div className="p-3 bg-gradient-to-b from-gray-50 to-white border-b border-gray-100">
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -590,7 +590,7 @@ function TableSelector({
               />
             </div>
             
-            {/* Filter Pills - DuckDB inspired */}
+            {/* Filter Pills - Atlan inspired */}
             <div className="flex flex-wrap gap-1.5 mt-2.5">
               {[
                 { id: 'all', label: 'All', icon: Layers },
@@ -684,7 +684,7 @@ function TableSelector({
 
 
 // =============================================================================
-// RESIZABLE PANEL COMPONENT - DuckDB-style with subtle handle
+// RESIZABLE PANEL COMPONENT - Atlan-style with subtle handle
 // =============================================================================
 
 function ResizablePanel({ 
@@ -743,7 +743,7 @@ function ResizablePanel({
       style={{ [direction === 'horizontal' ? 'width' : 'height']: size }}
     >
       {children}
-      {/* Resize handle - DuckDB subtle style */}
+      {/* Resize handle - Atlan subtle style */}
       <div
         className={`absolute group ${
           direction === 'horizontal' 
@@ -862,7 +862,7 @@ function TableHoverPreview({
 }
 
 // =============================================================================
-// SCHEMA TREE COMPONENT - DuckDB-style Database Explorer
+// SCHEMA TREE COMPONENT - Atlan-style Database Explorer
 // =============================================================================
 
 function SchemaTree({ 
@@ -1852,6 +1852,8 @@ export default function QueryEditor({
   // Local state for database/schema if not controlled externally
   const [localDatabase, setLocalDatabase] = useState(null);
   const [localSchema, setLocalSchema] = useState(null);
+  const STORAGE_KEY = 'query_editor_sql';
+  const [loadedFromStorage, setLoadedFromStorage] = useState(false);
   
   // Generate default query based on discovered tables
   const getDefaultQuery = useCallback(() => {
@@ -1890,7 +1892,27 @@ ORDER BY POPULARITYSCORE DESC NULLS LAST
 LIMIT 25;`;
   }, [globalDatabase, globalSchema, discoveredTables]);
   
-  const [sql, setSql] = useState(initialQuery || getDefaultQuery());
+  const [sql, setSql] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ?? (initialQuery || getDefaultQuery());
+    } catch {
+      return initialQuery || getDefaultQuery();
+    }
+  });
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      setLoadedFromStorage(!!saved);
+    } catch {
+      setLoadedFromStorage(false);
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      if (sql !== undefined) localStorage.setItem(STORAGE_KEY, sql);
+    } catch {}
+  }, [sql]);
   const [showLeftPanel, setShowLeftPanel] = useState(true);
   const [selectedColumn, setSelectedColumn] = useState(null);
   const [editorHeight, setEditorHeight] = useState(250);
@@ -1959,14 +1981,14 @@ LIMIT 25;`;
   
   // Update default query when discovered tables change (only if using default)
   useEffect(() => {
-    if (!initialQuery && discoveredTables?.size > 0) {
+    if (!initialQuery && discoveredTables?.size > 0 && !loadedFromStorage) {
       const defaultQuery = getDefaultQuery();
       // Only update if current SQL still has placeholders or is the old default
       if (sql.includes('{{TABLE}}') || sql.includes('{{DATABASE}}') || sql.includes('TABLE_ENTITY')) {
         setSql(defaultQuery);
       }
     }
-  }, [discoveredTables, initialQuery, getDefaultQuery]);
+  }, [discoveredTables, initialQuery, getDefaultQuery, loadedFromStorage, sql]);
 
   // Cleanup typewriter on unmount
   useEffect(() => {
@@ -2231,7 +2253,7 @@ LIMIT 25;`;
             
             <div className="h-5 w-px bg-slate-200 mx-1" />
             
-            {/* Query Suggestions - DuckDB style dropdown */}
+            {/* Query Suggestions - Atlan style dropdown */}
             <QuerySuggestionsDropdown
               database={selectedDatabase}
               schema={selectedSchema}
@@ -2294,6 +2316,7 @@ LIMIT 25;`;
             <button
               onClick={() => {
                 if (sql.trim() && window.confirm('Clear the editor?')) {
+                  try { localStorage.removeItem(STORAGE_KEY); } catch {}
                   setSql('');
                 }
               }}
@@ -2354,9 +2377,11 @@ LIMIT 25;`;
           )}
             <LazyMonacoEditor
               height="100%"
+              language="sql"
               value={sql}
               onChange={setSql}
               onMount={handleEditorDidMount}
+              theme="vs"
               options={{
                 fontSize: 13,
                 fontFamily: "'SF Mono', 'Monaco', 'Consolas', monospace",

@@ -18,7 +18,8 @@ import {
   Network, Columns, BarChart3, Tag, Sparkles, Play, Maximize2, Minimize2,
   Database, FileText, ArrowUpRight, ArrowDownRight, Layers, Loader2,
   FlaskConical, Code2, Clock, AlertCircle, Search, WifiOff, Library,
-  Snowflake, TrendingUp, PanelRight, AlignLeft, History, Trash2
+  Snowflake, TrendingUp, PanelRight, AlignLeft, History, Trash2,
+  Flame, Target, BarChart3 as ChartIcon
 } from 'lucide-react';
 import {
   SIDEBAR_STYLES,
@@ -122,7 +123,37 @@ function QueryCategory({ title, queries, onRun }) {
 }
 
 /**
- * LibraryQueryCard - Query card for the library tab
+ * Priority badge gradient styles
+ */
+const PRIORITY_STYLES = {
+  'Very High': {
+    bg: 'bg-gradient-to-br from-rose-500 to-red-600',
+    text: 'text-white',
+    shadow: 'shadow-rose-500/30',
+    Icon: Flame
+  },
+  'High': {
+    bg: 'bg-gradient-to-br from-amber-400 to-orange-500',
+    text: 'text-white',
+    shadow: 'shadow-amber-500/30',
+    Icon: TrendingUp
+  },
+  'Medium': {
+    bg: 'bg-gradient-to-br from-sky-400 to-blue-500',
+    text: 'text-white',
+    shadow: 'shadow-sky-500/30',
+    Icon: ChartIcon
+  },
+  'Low': {
+    bg: 'bg-gradient-to-br from-slate-300 to-slate-400',
+    text: 'text-slate-700',
+    shadow: 'shadow-slate-400/20',
+    Icon: Target
+  }
+};
+
+/**
+ * LibraryQueryCard - Enhanced query card with animations and polish
  */
 function LibraryQueryCard({
   title,
@@ -135,9 +166,11 @@ function LibraryQueryCard({
   onTest,
   onCopy,
   onExplain,
+  index = 0,
 }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
 
   const handleCopy = async (e) => {
     e.stopPropagation();
@@ -147,36 +180,75 @@ function LibraryQueryCard({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Get priority style
+  const priorityStyle = PRIORITY_STYLES[frequency] || null;
+  const PriorityIcon = priorityStyle?.Icon;
+
   return (
-    <div className={`bg-white rounded-xl border overflow-hidden transition-all duration-150 ${
-      expanded ? 'border-slate-300' : 'border-slate-200 hover:border-slate-300'
-    }`}>
+    <div
+      className={`bg-white rounded-xl border overflow-hidden transition-all duration-200 ${
+        expanded
+          ? 'border-slate-300 shadow-lg'
+          : 'border-slate-200 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5'
+      }`}
+      style={{
+        animationDelay: `${index * 30}ms`,
+        animation: 'fadeInUp 0.2s ease-out forwards',
+        opacity: 0
+      }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
       <div
-        className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors"
+        className={`flex items-center justify-between px-4 py-3.5 cursor-pointer transition-colors ${
+          isHovered && !expanded ? 'bg-slate-50/70' : ''
+        }`}
         onClick={() => setExpanded(!expanded)}
       >
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h4 className="font-medium text-slate-900 text-sm truncate">{title}</h4>
-            {isValid === true && (
-              <span className="w-2 h-2 rounded-full bg-emerald-500" title="Valid" />
-            )}
-            {isValid === false && (
-              <span className="w-2 h-2 rounded-full bg-slate-300" title="Needs attention" />
-            )}
-            {frequency && (
-              <span className="text-[11px] text-slate-400">{frequency}</span>
+        <div className="flex-1 min-w-0 flex items-start gap-3">
+          {/* Priority Badge - Compact gradient icon */}
+          {priorityStyle && (
+            <div
+              className={`flex-shrink-0 w-6 h-6 rounded-lg ${priorityStyle.bg} ${priorityStyle.text}
+                shadow-lg ${priorityStyle.shadow} flex items-center justify-center`}
+              title={`${frequency} priority`}
+            >
+              <PriorityIcon size={12} strokeWidth={2.5} />
+            </div>
+          )}
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start gap-2">
+              <h4 className="font-semibold text-slate-900 text-sm leading-snug flex-1">{title}</h4>
+              {/* Status dot with glow */}
+              {isValid === true && (
+                <span
+                  className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-lg shadow-emerald-500/50 flex-shrink-0 mt-0.5"
+                  title="Valid"
+                />
+              )}
+              {isValid === false && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 mt-0.5" title="Needs attention" />
+              )}
+            </div>
+            <p className="text-slate-600 text-xs mt-1.5 leading-relaxed">{description}</p>
+            {/* Row count badge */}
+            {isValid && rowCount && (
+              <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] text-emerald-600 font-medium">
+                <Database size={10} />
+                {rowCount.toLocaleString()} rows
+              </span>
             )}
           </div>
-          <p className="text-slate-500 text-xs mt-0.5 truncate">{description}</p>
         </div>
 
-        <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-          <div className="hidden sm:flex items-center gap-3 text-xs">
+        <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 flex-shrink-0 ml-4">
+          {/* Text actions - always visible, stack on mobile */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5">
             {onExplain && (
               <button
                 onClick={(e) => { e.stopPropagation(); onExplain(query); }}
-                className="text-slate-500 hover:text-slate-900 transition-colors"
+                className="px-2.5 py-1.5 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-all active:scale-95 whitespace-nowrap"
               >
                 Explain
               </button>
@@ -184,40 +256,61 @@ function LibraryQueryCard({
             {onTest && (
               <button
                 onClick={(e) => { e.stopPropagation(); onTest(query, title); }}
-                className="text-slate-500 hover:text-slate-900 transition-colors"
+                className="px-2.5 py-1.5 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-all active:scale-95 whitespace-nowrap"
               >
                 Test
               </button>
             )}
             <button
               onClick={handleCopy}
-              className={`transition-colors ${copied ? 'text-emerald-600' : 'text-slate-500 hover:text-slate-900'}`}
+              className={`px-2.5 py-1.5 text-xs rounded-md transition-all active:scale-95 whitespace-nowrap ${
+                copied
+                  ? 'text-emerald-600 bg-emerald-50'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
             >
-              {copied ? 'Copied!' : 'Copy'}
+              {copied ? (
+                <span className="flex items-center gap-1">
+                  <Check size={12} /> Copied
+                </span>
+              ) : 'Copy'}
             </button>
           </div>
 
+          {/* Run button - gradient style */}
           {onRun && (
             <button
               onClick={(e) => { e.stopPropagation(); onRun(query); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-900 hover:bg-slate-800 text-white transition-colors"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold
+                bg-gradient-to-br from-slate-800 to-slate-900 hover:from-slate-700 hover:to-slate-800
+                text-white shadow-lg shadow-slate-900/25 transition-all active:scale-95 whitespace-nowrap"
             >
-              <Play size={12} />
+              <Play size={11} fill="currentColor" />
               Run
             </button>
           )}
 
-          <div className={`text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}>
-            ▶
-          </div>
+          {/* Chevron */}
+          <ChevronRight
+            size={16}
+            className={`text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+          />
         </div>
       </div>
 
+      {/* Expanded content */}
       {expanded && (
-        <div className="border-t border-slate-100 p-4 bg-slate-50">
-          <div>
-            <h5 className="text-xs font-medium text-slate-600 mb-2">SQL Query</h5>
-            <pre className="text-xs text-slate-800 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed p-4 bg-white rounded-lg border border-slate-200">
+        <div
+          className="border-t border-slate-100 bg-gradient-to-b from-slate-50 to-white"
+          style={{ animation: 'fadeInUp 0.2s ease-out' }}
+        >
+          <div className="p-4">
+            <h5 className="text-xs font-semibold text-slate-600 mb-2 flex items-center gap-2">
+              <Code2 size={12} />
+              SQL Query
+            </h5>
+            {/* Dark code block */}
+            <pre className="text-xs text-slate-100 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed p-4 bg-slate-900 rounded-lg shadow-inner">
               {query}
             </pre>
           </div>
@@ -228,7 +321,7 @@ function LibraryQueryCard({
 }
 
 /**
- * TabButton - Tab navigation
+ * TabButton - Tab navigation (updated for dark header)
  */
 function TabButton({ icon: Icon, label, isActive, onClick, badge, compact = false }) {
   if (compact) {
@@ -239,7 +332,7 @@ function TabButton({ icon: Icon, label, isActive, onClick, badge, compact = fals
         className={`p-3 transition-colors ${
           isActive
             ? 'text-blue-600 bg-blue-50'
-            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
         }`}
         title={label}
       >
@@ -252,10 +345,10 @@ function TabButton({ icon: Icon, label, isActive, onClick, badge, compact = fals
     <button
       type="button"
       onClick={onClick}
-      className={`flex-1 px-2 py-3 text-xs font-medium transition-colors ${
+      className={`px-3 py-2 text-xs font-medium rounded-lg transition-all ${
         isActive
-          ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50'
-          : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+          ? 'text-blue-700 bg-blue-100'
+          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
       }`}
     >
       <span className="flex items-center justify-center gap-1.5">
@@ -263,7 +356,7 @@ function TabButton({ icon: Icon, label, isActive, onClick, badge, compact = fals
         {label}
         {badge && (
           <span className={`px-1.5 py-0.5 text-[10px] rounded-full ${
-            isActive ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'
+            isActive ? 'bg-blue-200 text-blue-800' : 'bg-slate-200 text-slate-700'
           }`}>
             {badge}
           </span>
@@ -479,7 +572,7 @@ export default function EntityPanel({
 
   const editorRef = useRef(null);
   const panelRef = useRef(null);
-  const hoverTimeoutRef = useRef(null);
+  // hoverTimeoutRef moved to context for unified timing
 
   // Resize state - use shared constants
   const [panelWidth, setPanelWidth] = useState(SIDEBAR_STYLES.minExpandedWidth + 120); // Right panel slightly wider
@@ -492,8 +585,8 @@ export default function EntityPanel({
   const MAX_WIDTH = SIDEBAR_STYLES.maxExpandedWidth + 200; // Right panel max 800px
 
   // Default tab based on whether entity is selected
-  const defaultTab = selectedEntity ? 'lineage' : 'library';
-  const [activeTab, setActiveTab] = useState(defaultTab);
+  // Default to Queries (library) tab
+  const [activeTab, setActiveTab] = useState('library');
   const [isQueriesExpanded, setIsQueriesExpanded] = useState(true);
   const [copied, setCopied] = useState(false);
   const [sql, setSql] = useState(initialQuery);
@@ -514,15 +607,24 @@ export default function EntityPanel({
   const guid = selectedEntity?.guid || selectedEntity?.GUID || null;
   const truncatedGuid = guid ? (guid.length > 16 ? `${guid.substring(0, 16)}...` : guid) : null;
 
-  // Update default tab when entity selection changes
+  // Context-aware tab switching:
+  // - When entity selected → show Details (cell) tab automatically
+  // - When entity deselected → show Queries (library) tab
+  const prevEntityRef = useRef(selectedEntity);
   useEffect(() => {
-    if (selectedEntity && (activeTab === 'library' || activeTab === 'test')) {
-      // Keep current tab
-    } else if (selectedEntity) {
-      setActiveTab('lineage');
-    } else if (!selectedEntity && (activeTab === 'lineage' || activeTab === 'cell')) {
+    const hadEntity = prevEntityRef.current;
+    const hasEntity = selectedEntity;
+
+    // Entity was just selected → switch to Details
+    if (!hadEntity && hasEntity) {
+      setActiveTab('cell');
+    }
+    // Entity was just deselected → switch to Queries
+    else if (hadEntity && !hasEntity && (activeTab === 'lineage' || activeTab === 'cell')) {
       setActiveTab('library');
     }
+
+    prevEntityRef.current = selectedEntity;
   }, [selectedEntity]);
 
   // Handle pending query from context
@@ -537,33 +639,19 @@ export default function EntityPanel({
     }
   }, [panelContext?.pendingQuery]);
 
-  // Handle hover events
-  const handleMouseEnter = useCallback(() => {
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-    }
-    hoverTimeoutRef.current = setTimeout(() => {
-      panelContext?.setHovered(true);
-    }, 150); // Small delay to prevent accidental triggers
-  }, [panelContext]);
-
-  const handleMouseLeave = useCallback(() => {
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-    }
-    hoverTimeoutRef.current = setTimeout(() => {
-      panelContext?.setHovered(false);
-    }, 300); // Delay before closing
-  }, [panelContext]);
-
-  // Cleanup timeout on unmount
+  // Handle pending tab switch from context
   useEffect(() => {
-    return () => {
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current);
+    if (panelContext?.pendingTab) {
+      const tab = panelContext.consumePendingTab();
+      if (tab) {
+        setActiveTab(tab);
       }
-    };
-  }, []);
+    }
+  }, [panelContext?.pendingTab]);
+
+  // Use context's hover handlers for consistent timing with left sidebar
+  const handleMouseEnter = panelContext?.handleMouseEnter || (() => {});
+  const handleMouseLeave = panelContext?.handleMouseLeave || (() => {});
 
   // Resize handlers
   const handleResizeStart = useCallback((e) => {
@@ -961,39 +1049,46 @@ LIMIT 50;`
         isResizing={isResizing}
         onMouseDown={handleResizeStart}
       />
-      {/* Header with tabs */}
-      <div className="flex border-b border-slate-200">
-        {selectedEntity && (
-          <>
-            <TabButton icon={Table2} label="Details" isActive={activeTab === 'cell'} onClick={() => setActiveTab('cell')} />
-            <TabButton icon={GitBranch} label="Queries" isActive={activeTab === 'lineage'} onClick={() => setActiveTab('lineage')} badge={totalQueries > 0 ? totalQueries : null} />
-          </>
-        )}
-        <TabButton icon={FlaskConical} label="Test" isActive={activeTab === 'test'} onClick={() => setActiveTab('test')} />
-        <TabButton icon={Library} label="Library" isActive={activeTab === 'library'} onClick={() => setActiveTab('library')} badge={libraryQueries.length > 0 ? libraryQueries.length : null} />
-
-        {/* Expand toggle */}
-        <button
-          onClick={() => panelContext?.toggle()}
-          className="px-3 text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-          title={isExpanded ? 'Collapse panel' : 'Expand panel'}
-        >
-          {isExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-        </button>
-
-        {/* Pin toggle */}
-        <div className="px-2 flex items-center">
-          <PinButton isPinned={isPinned} onToggle={handleTogglePin} size="sm" />
+      {/* Header - light style */}
+      <div className="bg-white border-b border-slate-200">
+        {/* Title bar */}
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Library size={16} className="text-blue-600" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-sm text-slate-900">
+                {selectedEntity ? (entityName || 'Entity') : 'Query Library'}
+              </h2>
+              <p className="text-xs text-slate-500">
+                {selectedEntity ? entityType : `${libraryQueries.length} queries`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <PinButton isPinned={isPinned} onToggle={handleTogglePin} size="sm" className="text-slate-500 hover:text-slate-700 hover:bg-slate-100" />
+            <button
+              onClick={handleClose}
+              className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
+              title="Close panel"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
-        {/* Close */}
-        <button
-          onClick={handleClose}
-          className="px-3 text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-          title="Close panel"
-        >
-          <X size={16} />
-        </button>
+        {/* Tabs - inside header */}
+        <div className="flex px-2 pb-2 border-b border-slate-100 bg-slate-50">
+          <TabButton icon={Library} label="Queries" isActive={activeTab === 'library'} onClick={() => setActiveTab('library')} badge={libraryQueries.length > 0 ? libraryQueries.length : null} />
+          {selectedEntity && (
+            <TabButton icon={GitBranch} label="Lineage" isActive={activeTab === 'lineage'} onClick={() => setActiveTab('lineage')} badge={totalQueries > 0 ? totalQueries : null} />
+          )}
+          <TabButton icon={FlaskConical} label="Test" isActive={activeTab === 'test'} onClick={() => setActiveTab('test')} />
+          {selectedEntity && (
+            <TabButton icon={Table2} label="Details" isActive={activeTab === 'cell'} onClick={() => setActiveTab('cell')} />
+          )}
+        </div>
       </div>
 
       {/* Entity Header (only when entity selected) */}
@@ -1295,6 +1390,7 @@ LIMIT 50;`
                   return (
                     <LibraryQueryCard
                       key={q.queryId || q.id || i}
+                      index={i}
                       title={q.title || q.label}
                       description={q.description}
                       query={queryText}

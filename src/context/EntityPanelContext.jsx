@@ -11,9 +11,17 @@
  * - pin(): Pin the panel open
  * - unpin(): Unpin the panel
  * - loadQuery(sql): Load a query and expand
+ *
+ * Hover behavior matches left sidebar:
+ * - 150ms delay on enter (prevent accidental triggers)
+ * - 300ms delay on leave (prevent premature close)
  */
 
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+
+// Hover timing constants (shared with left sidebar)
+const HOVER_ENTER_DELAY = 150;
+const HOVER_LEAVE_DELAY = 300;
 
 const EntityPanelContext = createContext(null);
 
@@ -22,6 +30,10 @@ export function EntityPanelProvider({ children }) {
   const [isPinned, setIsPinned] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [pendingQuery, setPendingQuery] = useState(null);
+  const [pendingTab, setPendingTab] = useState(null); // Tab to switch to
+
+  // Hover timeout ref for consistent timing
+  const hoverTimeoutRef = useRef(null);
 
   const expand = useCallback(() => {
     setIsExpanded(true);
@@ -51,7 +63,24 @@ export function EntityPanelProvider({ children }) {
     });
   }, []);
 
+  // Hover handlers with timeouts (matching left sidebar behavior)
+  const handleMouseEnter = useCallback(() => {
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    hoverTimeoutRef.current = setTimeout(() => {
+      setIsHovered(true);
+    }, HOVER_ENTER_DELAY);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    hoverTimeoutRef.current = setTimeout(() => {
+      setIsHovered(false);
+    }, HOVER_LEAVE_DELAY);
+  }, []);
+
+  // Direct setter for backwards compatibility
   const setHovered = useCallback((hovered) => {
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
     setIsHovered(hovered);
   }, []);
 
@@ -62,6 +91,13 @@ export function EntityPanelProvider({ children }) {
     setIsPinned(true); // Pin when loading a query
   }, []);
 
+  // Open panel to a specific tab
+  const openToTab = useCallback((tab) => {
+    setPendingTab(tab);
+    setIsExpanded(true);
+    setIsPinned(true);
+  }, []);
+
   // Clear pending query after it's been consumed
   const consumePendingQuery = useCallback(() => {
     const query = pendingQuery;
@@ -69,14 +105,24 @@ export function EntityPanelProvider({ children }) {
     return query;
   }, [pendingQuery]);
 
-  // Computed: panel should be visible (expanded or hovered)
-  const isVisible = isExpanded || isPinned || isHovered;
+  // Clear pending tab after it's been consumed
+  const consumePendingTab = useCallback(() => {
+    const tab = pendingTab;
+    setPendingTab(null);
+    return tab;
+  }, [pendingTab]);
+
+  // Computed: panel should be visible (pinned or hovered)
+  const isVisible = isPinned || isHovered;
+  // Show full panel when pinned OR hovered (matching left sidebar)
+  const showPanel = isPinned || isHovered;
 
   const value = {
     isExpanded,
     isPinned,
     isHovered,
     isVisible,
+    showPanel,
     expand,
     collapse,
     toggle,
@@ -84,9 +130,14 @@ export function EntityPanelProvider({ children }) {
     unpin,
     togglePin,
     setHovered,
+    handleMouseEnter,
+    handleMouseLeave,
     loadQuery,
+    openToTab,
     pendingQuery,
+    pendingTab,
     consumePendingQuery,
+    consumePendingTab,
   };
 
   return (

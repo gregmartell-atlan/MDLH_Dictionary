@@ -34,8 +34,9 @@ export const SIDEBAR_STYLES = {
   activeText: 'text-blue-600',
   mutedText: 'text-slate-500',
 
-  // Transitions
-  transition: 'transition-all duration-200 ease-in-out',
+  // Transitions - fast and snappy
+  transition: 'transition-all duration-150 ease-out',
+  transitionFast: 'transition-all duration-100 ease-out',
 };
 
 // =============================================================================
@@ -249,7 +250,7 @@ export const CollapsedRailContainer = React.forwardRef(function CollapsedRailCon
       className={`
         w-14 ${borderClass} border-slate-200
         bg-white flex flex-col flex-shrink-0
-        transition-all duration-200
+        transition-all duration-150 ease-out
         ${className}
       `}
       onMouseEnter={onMouseEnter}
@@ -286,7 +287,7 @@ export const ExpandedContainer = React.forwardRef(function ExpandedContainer({
       `}
       style={{
         width,
-        transition: isResizing ? 'none' : 'width 0.2s ease',
+        transition: isResizing ? 'none' : 'width 0.15s ease-out',
       }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}

@@ -50,7 +50,7 @@ export default function LazyMonacoEditor({
   onMount,
   height = 200,
   language = 'sql',
-  theme = 'vs',
+  theme = 'vs-dark',
   options = {},
   className = '',
 }) {
@@ -90,10 +90,10 @@ export default function LazyMonacoEditor({
   };
 
   return (
-    <div className={className}>
+    <div className={className} style={{ height }}>
       <Suspense fallback={<EditorSkeleton height={height} />}>
         <Editor
-          height={height}
+          height={typeof height === 'number' ? '100%' : '100%'}
           language={language}
           theme={theme}
           value={value}

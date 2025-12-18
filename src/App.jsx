@@ -6,11 +6,11 @@ import DiscoveryHome from './components/DiscoveryHome';
 import DiscoveryCards from './components/DiscoveryCards';
 import EntityPanel from './components/EntityPanel';
 import ShowMyWork from './components/ShowMyWork';
-import { EntityPanelProvider } from './context/EntityPanelContext';
+import { EntityPanelProvider, useEntityPanelOptional } from './context/EntityPanelContext';
 import ConnectionModal from './components/ConnectionModal';
 import QueryPanelShell from './components/QueryPanelShell';
 import TestQueryLayout from './components/TestQueryLayout';
-import QueryLibraryLayout from './components/QueryLibraryLayout';
+import QueryLibraryLayout from './components/QueryLibraryEnhanced';
 import RecommendedQueries from './components/RecommendedQueries';
 import { CommandPalette } from './components/search/CommandPalette';
 import { Callout } from './components/ui/Callout';
@@ -213,7 +213,7 @@ function AtlanIcon({ size = 24, className = "" }) {
   );
 }
 
-// Global connection status indicator - DuckDB style: clean, minimal
+// Global connection status indicator - Atlan style: clean, minimal
 function ConnectionIndicator({ status, loading, onClick, database, schema }) {
   const isConnected = status?.connected;
   const isUnreachable = status?.unreachable;
@@ -226,7 +226,7 @@ function ConnectionIndicator({ status, loading, onClick, database, schema }) {
   };
   const state = getState();
   
-  // DuckDB-style: simple dot indicator + text
+  // Atlan-style: simple dot indicator + text
   return (
     <button
       onClick={onClick}
@@ -1577,7 +1577,7 @@ export default function App() {
     <SystemConfigProvider>
     <EntityPanelProvider>
     <div className="min-h-screen bg-white text-gray-900">
-      {/* Navigation Bar - DuckDB style: clean white, minimal */}
+      {/* Navigation Bar - Atlan style: clean white, minimal */}
       <nav className="border-b border-gray-200 bg-white sticky top-0 z-30">
         <div className="max-w-full mx-auto px-6 py-3 flex items-center justify-between">
           {/* Logo */}
@@ -1588,7 +1588,7 @@ export default function App() {
           
           {/* Right side controls */}
           <div className="flex items-center gap-2">
-            {/* Search - DuckDB style: simple input with icon */}
+            {/* Search - Atlan style: simple input with icon */}
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
@@ -1639,7 +1639,7 @@ export default function App() {
 
         {/* Main Content Area */}
         <div className="flex-1 overflow-y-auto">
-          {/* Hero Section - DuckDB style: white bg, bold headlines, blue highlights */}
+          {/* Hero Section - Atlan style: white bg, bold headlines, blue highlights */}
           <div className="mx-6 mt-8 mb-6">
         <div className="max-w-4xl">
           {/* Headline with highlighted keyword */}
@@ -1649,10 +1649,10 @@ export default function App() {
             dictionary
           </h1>
           <p className="text-lg text-slate-600 mt-4 max-w-2xl">
-            Explore MDLH entity types, tables, attributes, and example queries using DuckDB's feature-rich SQL dialect
+            Explore MDLH entity types, tables, attributes, and example queries using Atlan's feature-rich SQL dialect
           </p>
           
-          {/* Action buttons - DuckDB style: dark primary, white secondary, text tertiary */}
+          {/* Action buttons - Atlan style: dark primary, white secondary, text tertiary */}
           <div className="flex flex-wrap items-center gap-3 mt-6">
             <button
               onClick={() => {
@@ -1680,7 +1680,7 @@ export default function App() {
             </button>
           </div>
           
-          {/* Database & Schema Selector - cleaner DuckDB style */}
+          {/* Database & Schema Selector - cleaner Atlan style */}
           <div className="flex flex-wrap items-center gap-3 mt-6 pt-6 border-t border-slate-200">
             <div className="flex items-center gap-2">
               <Database size={14} className="text-slate-400" />
@@ -1793,10 +1793,10 @@ export default function App() {
 
       {/* Main Content */}
       <div className={`mx-auto ${activeTab === 'editor' ? 'px-4 py-3' : 'max-w-full px-6 py-6'}`}>
-        {/* Tab Navigation - DuckDB style when in editor mode */}
+        {/* Tab Navigation - Atlan style when in editor mode */}
         {activeTab === 'editor' ? (
           <div className="flex items-center gap-3 mb-3">
-            {/* Language tabs like DuckDB */}
+            {/* Language tabs like Atlan */}
             <div className="flex items-center gap-1 px-2 py-1.5 bg-slate-100 rounded-xl">
               <button className="px-3 py-1 text-xs font-medium bg-white text-slate-800 rounded-lg shadow-sm">
                 SQL
@@ -2207,29 +2207,8 @@ export default function App() {
         )}
       </div>{/* End Main layout with sidebar */}
 
-      {/* Query Side Panel */}
-      <QueryPanel 
-        isOpen={showQueries} 
-        onClose={() => {
-          setShowQueries(false);
-          setHighlightedQuery(null);
-        }} 
-        queries={filteredQueries}
-        categoryLabel={tabs.find(t => t.id === activeTab)?.label}
-        highlightedQuery={highlightedQuery}
-        onRunInEditor={openInEditor}
-        isLoading={loadingColumns}
-        discoveredTables={discoveredTables}
-        isConnected={isConnected}
-        batchValidationResults={batchValidationResults}
-        onShowMyWork={handleShowMyWork}
-        isBatchValidating={isBatchValidating}
-        selectedDatabase={selectedMDLHDatabase}
-        selectedSchema={selectedMDLHSchema}
-        queryValidationMap={queryValidationMap}
-        onValidateAll={runBatchValidation}
-        onOpenConnectionModal={() => setShowConnectionModal(true)}
-      />
+      {/* Query Side Panel - DISABLED: Use EntityPanel's Queries tab instead */}
+      {/* The QueryPanel flyout has been unified with EntityPanel for a consistent UX */}
       
       {/* Lineage Flyout Panel */}
       <QueryPanelShell
