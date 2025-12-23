@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Download, Copy, Check, Code2, X, Search, Command, Play, Loader2, Sparkles, Eye, FlaskConical, ArrowLeft, Database, Snowflake, Settings, Wifi, WifiOff, ChevronDown, Zap, Layers, GitBranch } from 'lucide-react';
 import QueryEditor from './components/QueryEditor';
+import PivotBuilder from './components/pivot/PivotBuilder';
 import EntityBrowser from './components/EntityBrowser';
 import DiscoveryHome from './components/DiscoveryHome';
 import DiscoveryCards from './components/DiscoveryCards';
@@ -1792,9 +1793,9 @@ export default function App() {
       )}
 
       {/* Main Content */}
-      <div className={`mx-auto ${activeTab === 'editor' ? 'px-4 py-3' : 'max-w-full px-6 py-6'}`}>
-        {/* Tab Navigation - Atlan style when in editor mode */}
-        {activeTab === 'editor' ? (
+      <div className={`mx-auto ${activeTab === 'editor' || activeTab === 'pivot' ? 'px-4 py-3' : 'max-w-full px-6 py-6'}`}>
+        {/* Tab Navigation - Atlan style when in editor/pivot mode */}
+        {activeTab === 'editor' || activeTab === 'pivot' ? (
           <div className="flex items-center gap-3 mb-3">
             {/* Language tabs like Atlan */}
             <div className="flex items-center gap-1 px-2 py-1.5 bg-slate-100 rounded-xl">
@@ -1856,6 +1857,11 @@ export default function App() {
               openInEditor(sql);
             }}
             onSwitchToEditor={() => setActiveTab('editor')}
+          />
+        ) : activeTab === 'pivot' ? (
+          <PivotBuilder
+            database={selectedMDLHDatabase}
+            schema={selectedMDLHSchema}
           />
         ) : activeTab === 'editor' ? (
           <QueryEditor

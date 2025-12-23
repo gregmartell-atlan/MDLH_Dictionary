@@ -4,21 +4,22 @@
  * Contains tab definitions, database configurations, and column mappings.
  */
 
-import { 
-  Table, 
-  BookOpen, 
-  Boxes, 
-  Database, 
-  FolderTree, 
-  BarChart3, 
-  GitBranch, 
-  Cloud, 
-  Workflow, 
-  Shield, 
-  Bot, 
+import {
+  Table,
+  BookOpen,
+  Boxes,
+  Database,
+  FolderTree,
+  BarChart3,
+  GitBranch,
+  Cloud,
+  Workflow,
+  Shield,
+  Bot,
   Terminal,
   Network,
-  TrendingUp
+  TrendingUp,
+  LayoutGrid
 } from 'lucide-react';
 
 /**
@@ -39,6 +40,7 @@ export const tabs = [
   { id: 'orchestration', label: 'Orchestration', icon: Workflow, description: 'Airflow, Fivetran, Matillion pipelines' },
   { id: 'governance', label: 'Governance', icon: Shield, description: 'Tags, personas, purposes, and policies' },
   { id: 'ai', label: 'AI/ML', icon: Bot, description: 'AI models, applications, and ML entities' },
+  { id: 'pivot', label: 'Pivot Builder', icon: LayoutGrid, isEditor: true, description: 'Drag-and-drop pivot table builder for visual data analysis' },
   { id: 'editor', label: 'Query Editor', icon: Terminal, isEditor: true, description: 'Write and execute SQL queries' },
 ];
 
