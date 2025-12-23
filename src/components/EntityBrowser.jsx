@@ -225,8 +225,15 @@ export default function EntityBrowser({
           ))}
         </div>
 
-        {/* Query Editor - collapsed */}
-        <div className="p-2 border-t border-slate-200">
+        {/* Editor Tools - collapsed */}
+        <div className="p-2 border-t border-slate-200 space-y-1">
+          <RailButton
+            icon={LayoutGrid}
+            label="Pivot Builder"
+            isActive={selectedCategory === 'pivot'}
+            onClick={() => onCategoryChange?.('pivot')}
+            position="left"
+          />
           <RailButton
             icon={Terminal}
             label="Query Editor"
@@ -269,8 +276,22 @@ export default function EntityBrowser({
         ))}
       </div>
 
-      {/* Query Editor - footer */}
-      <div className="p-2 border-t border-slate-200 bg-slate-50/50">
+      {/* Editor Tools - footer */}
+      <div className="p-2 border-t border-slate-200 bg-slate-50/50 space-y-1">
+        <button
+          type="button"
+          onClick={() => onCategoryChange?.('pivot')}
+          className={`
+            w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-all
+            ${selectedCategory === 'pivot'
+              ? 'bg-blue-100 text-blue-700 font-medium'
+              : 'text-blue-600 hover:bg-blue-50'
+            }
+          `}
+        >
+          <LayoutGrid size={18} />
+          <span>Pivot Builder</span>
+        </button>
         <button
           type="button"
           onClick={() => onCategoryChange?.('editor')}
