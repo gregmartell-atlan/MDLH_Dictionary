@@ -8,9 +8,16 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery } from './useSnowflake';
-import { buildSafeFQN, escapeStringValue } from '../utils/queryHelpers';
+import { escapeStringValue } from '../utils/queryHelpers';
 import { normalizeRows } from '../utils/queryResultAdapter';
 import { Type, Hash, List, Braces, Clock, ToggleLeft, Circle } from 'lucide-react';
+
+/**
+ * Escape identifier (column/table name) with double quotes
+ */
+function escapeIdentifier(identifier) {
+  return `"${identifier}"`;
+}
 
 /**
  * Get icon component for data type
@@ -91,7 +98,7 @@ export function useFieldDiscovery(database, schema, table) {
 
       try {
         // Query INFORMATION_SCHEMA.COLUMNS for field metadata
-        const fqn = buildSafeFQN(database, schema, 'INFORMATION_SCHEMA.COLUMNS');
+        // Note: INFORMATION_SCHEMA is a special schema in Snowflake, use it directly
         const sql = `
 SELECT
     COLUMN_NAME,
@@ -100,7 +107,7 @@ SELECT
     COLUMN_DEFAULT,
     ORDINAL_POSITION,
     COMMENT
-FROM ${fqn}
+FROM ${escapeIdentifier(database)}.INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = ${escapeStringValue(schema)}
   AND TABLE_NAME = ${escapeStringValue(table)}
 ORDER BY ORDINAL_POSITION;
