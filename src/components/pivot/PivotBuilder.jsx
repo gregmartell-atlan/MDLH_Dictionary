@@ -5,13 +5,15 @@
  * without writing SQL. Generates and executes safe SQL queries.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Play, Code2, Download, RotateCcw, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
 import { usePivotConfig } from '../../hooks/usePivotConfig';
 import { useFieldDiscovery } from '../../hooks/useFieldDiscovery';
 import { useQuery } from '../../hooks/useSnowflake';
 import { generatePivotSQL, validatePivotConfig } from '../../utils/pivotSQLGenerator';
+import { getRecommendedPivots } from '../../utils/pivotTemplates';
 import { PivotConfigPanel } from './PivotConfigPanel';
+import { TemplateSelector } from './TemplateSelector';
 import ResultsTable from '../ResultsTable';
 
 export function PivotBuilder({ database, schema, initialTable = null }) {
@@ -43,6 +45,14 @@ export function PivotBuilder({ database, schema, initialTable = null }) {
 
   const { executeQuery } = useQuery();
 
+  // Get recommended templates based on table and fields
+  const recommendedTemplates = useMemo(() => {
+    if (!selectedTable || !fields || fields.length === 0) {
+      return [];
+    }
+    return getRecommendedPivots(selectedTable, fields);
+  }, [selectedTable, fields]);
+
   // Update available fields when discovered
   useEffect(() => {
     if (fields.length > 0) {
@@ -71,7 +81,18 @@ export function PivotBuilder({ database, schema, initialTable = null }) {
       console.error('[PivotBuilder] SQL generation error:', err);
       setSQL(null);
     }
-  }, [config, setSQL]);
+    // Only depend on the pivot configuration parts, not execution state
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    config.rows,
+    config.columns,
+    config.values,
+    config.filters,
+    config.source.database,
+    config.source.schema,
+    config.source.table,
+    setSQL,
+  ]);
 
   // Execute query
   const handleRunQuery = async () => {
@@ -105,6 +126,42 @@ export function PivotBuilder({ database, schema, initialTable = null }) {
     clearExecution();
   };
 
+  // Handle template application
+  const handleApplyTemplate = (template) => {
+    if (!template.enrichedConfig) {
+      console.error('[PivotBuilder] Template missing enriched config');
+      return;
+    }
+
+    // Clear current configuration
+    resetConfig();
+
+    // Apply template configuration
+    const config = template.enrichedConfig;
+
+    // Add rows
+    config.rows.forEach(field => {
+      addToZone('rows', field);
+    });
+
+    // Add columns
+    config.columns.forEach(field => {
+      addToZone('columns', field);
+    });
+
+    // Add values
+    config.values.forEach(field => {
+      addToZone('values', field);
+    });
+
+    // Add filters
+    config.filters.forEach(filter => {
+      addToZone('filters', filter);
+    });
+
+    console.log('[PivotBuilder] Applied template:', template.name);
+  };
+
   const canRunQuery = config.values.length > 0 && config.execution.sql;
 
   return (
@@ -119,6 +176,8 @@ export function PivotBuilder({ database, schema, initialTable = null }) {
           onAddToZone={addToZone}
           onRemoveFromZone={removeFromZone}
           onReorderZone={reorderZone}
+          recommendedTemplates={recommendedTemplates}
+          onApplyTemplate={handleApplyTemplate}
         />
       </div>
 

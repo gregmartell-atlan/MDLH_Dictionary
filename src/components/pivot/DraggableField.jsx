@@ -7,6 +7,7 @@
 
 import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
+import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, X } from 'lucide-react';
 
@@ -101,18 +102,37 @@ export function DraggableField({
 }
 
 /**
- * StaticField - Non-draggable field chip (for field list)
+ * StaticField - Draggable field chip (for field list)
  */
 export function StaticField({ field, onAdd }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `field-${field.fieldName}`,
+    data: {
+      field,
+      zone: null, // Indicates this is from the field list
+    },
+  });
+
+  const style = transform
+    ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        opacity: isDragging ? 0.5 : 1,
+      }
+    : undefined;
+
   const IconComponent = field.icon;
 
   return (
     <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
       onClick={() => onAdd && onAdd(field)}
       className={`
         flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg
-        hover:border-blue-400 hover:shadow-sm transition-all
-        ${onAdd ? 'cursor-pointer' : ''}
+        hover:border-blue-400 hover:shadow-sm transition-all cursor-grab active:cursor-grabbing
+        ${isDragging ? 'shadow-lg ring-2 ring-blue-400' : ''}
       `}
     >
       {/* Field icon */}

@@ -12,6 +12,7 @@ import { DndContext, closestCenter, DragOverlay, PointerSensor, useSensor, useSe
 import { FieldList } from './FieldList';
 import { DropZone } from './DropZone';
 import { DraggableField } from './DraggableField';
+import { TemplateSelector } from './TemplateSelector';
 
 export function PivotConfigPanel({
   fields,
@@ -21,6 +22,8 @@ export function PivotConfigPanel({
   onAddToZone,
   onRemoveFromZone,
   onReorderZone,
+  recommendedTemplates,
+  onApplyTemplate,
 }) {
   const [activeField, setActiveField] = useState(null);
 
@@ -111,6 +114,15 @@ export function PivotConfigPanel({
         {/* Drop Zones */}
         <div className="flex-1 p-4 overflow-y-auto">
           <h3 className="text-sm font-semibold text-slate-700 mb-4">Configuration</h3>
+
+          {/* Recommended Templates */}
+          {recommendedTemplates && recommendedTemplates.length > 0 && (
+            <TemplateSelector
+              templates={recommendedTemplates}
+              onApplyTemplate={onApplyTemplate}
+              disabled={fieldsLoading}
+            />
+          )}
 
           {/* Rows Zone */}
           <DropZone
