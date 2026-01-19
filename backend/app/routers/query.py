@@ -204,6 +204,9 @@ async def _execute_sql_with_cancellation(session, cursor, sql: str, timeout_seco
         if isinstance(async_result, dict):
             sf_query_id = async_result.get("queryId") or async_result.get("query_id")
         sf_query_id = sf_query_id or getattr(cursor, "sfqid", None)
+        if not sf_query_id:
+            cursor.execute(sql)
+            return cursor, getattr(cursor, "sfqid", None)
         start = time.time()
         while sf_query_id and conn.is_still_running(sf_query_id):
             if await request.is_disconnected():
@@ -1043,8 +1046,9 @@ def _execute_and_sample(cursor, sql: str, sample_limit: int = 3) -> dict:
     try:
         start = time.time()
         sql_to_run = sql
-        if sample_limit > 0 and _is_select_like(sql) and not _has_limit(sql):
-            sql_to_run = f"SELECT * FROM ({sql.rstrip(';')}) LIMIT {sample_limit}"
+        if _is_select_like(sql) and not _has_limit(sql):
+            limit_value = sample_limit if sample_limit > 0 else 1
+            sql_to_run = f"SELECT * FROM ({sql.rstrip(';')}) LIMIT {limit_value}"
         cursor.execute(sql_to_run)
         
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -1056,7 +1060,7 @@ def _execute_and_sample(cursor, sql: str, sample_limit: int = 3) -> dict:
             rows = []
         
         result["success"] = True
-        result["row_count"] = len(rows)
+        result["row_count"] = len(rows) if sample_limit > 0 else None
         result["columns"] = columns
         result["execution_time_ms"] = int((time.time() - start) * 1000)
         
@@ -1106,8 +1110,10 @@ def _validate_single_query(session, query_req, default_db, default_schema, inclu
         # Determine status
         if exec_result["error_message"]:
             status = "error"
-        elif exec_result.get("has_rows"):
+        elif exec_result.get("has_rows") is True:
             status = "success"
+        elif exec_result.get("has_rows") is False and exec_result.get("row_count") is None:
+            status = "empty"
         elif exec_result["row_count"] == 0:
             status = "empty"
         else:
