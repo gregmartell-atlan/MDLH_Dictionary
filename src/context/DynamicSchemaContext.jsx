@@ -135,6 +135,8 @@ export function DynamicSchemaProvider({ children }) {
   const { executeQuery } = useQuery(connectionStatus);
   
   const isConnected = connectionStatus?.connected === true;
+  const connectedDatabase = connectionStatus?.database || null;
+  const connectedSchema = connectionStatus?.schema || null;
   
   // ==========================================================================
   // STATE
@@ -422,6 +424,58 @@ export function DynamicSchemaProvider({ children }) {
       setLoading(false);
     }
   }, [isConnected, executeQuery, databases]);
+
+  /**
+   * Fast table discovery (metadata only, no column scan)
+   */
+  const discoverTablesFast = useCallback(async (databaseName, schemaName, forceRefresh = false) => {
+    if (!isConnected) return { tables: [], columns: {} };
+    if (!databaseName || !schemaName) return { tables: [], columns: {} };
+
+    const tables = await fetchTables(databaseName, schemaName, forceRefresh);
+    const normalizedTables = (Array.isArray(tables) ? tables : [])
+      .map(t => (typeof t === 'string' ? { name: t } : t))
+      .filter(t => t.name);
+
+    setDatabases(prev => {
+      const next = new Map(prev);
+      const dbEntry = next.get(databaseName) || { name: databaseName, schemas: new Map() };
+      const schemaEntry = dbEntry.schemas.get(schemaName) || { name: schemaName, tables: new Map(), mdlhTables: [] };
+
+      const mdlhTables = [];
+
+      for (const table of normalizedTables) {
+        const tableName = table.name;
+        const isMdlh = isMdlhTable(tableName);
+        const category = categorizeMdlhTable(tableName);
+
+        schemaEntry.tables.set(tableName, {
+          name: tableName,
+          kind: table.kind || table.table_type || 'TABLE',
+          rowCount: table.row_count ?? table.rowCount ?? null,
+          columns: [],
+          columnCount: 0,
+          isMdlhTable: isMdlh,
+          mdlhCategory: category,
+        });
+
+        if (isMdlh) {
+          mdlhTables.push(tableName);
+        }
+      }
+
+      schemaEntry.mdlhTables = mdlhTables;
+      schemaEntry.discovered = true;
+      schemaEntry.tableCount = normalizedTables.length;
+
+      dbEntry.schemas.set(schemaName, schemaEntry);
+      next.set(databaseName, dbEntry);
+      return next;
+    });
+
+    log.info(`Fast discovered ${normalizedTables.length} tables in ${databaseName}.${schemaName}`);
+    return { tables: normalizedTables, columns: {} };
+  }, [isConnected, fetchTables]);
   
   /**
    * Full discovery - discover everything across all or selected databases/schemas
@@ -463,6 +517,30 @@ export function DynamicSchemaProvider({ children }) {
       setLoading(false);
     }
   }, [isConnected, discoverDatabases, discoverSchemas, discoverTablesAndColumns]);
+
+  // Initial fast metadata scan on connect
+  useEffect(() => {
+    if (!isConnected) return;
+    let cancelled = false;
+
+    const runInitialScan = async () => {
+      await discoverDatabases(false);
+      if (cancelled) return;
+      if (connectedDatabase) {
+        await discoverSchemas(connectedDatabase, false);
+      }
+      if (cancelled) return;
+      if (connectedDatabase && connectedSchema) {
+        await discoverTablesFast(connectedDatabase, connectedSchema, false);
+      }
+    };
+
+    runInitialScan();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isConnected, connectedDatabase, connectedSchema, discoverDatabases, discoverSchemas, discoverTablesFast]);
   
   // ==========================================================================
   // FIELD MAPPING FUNCTIONS
@@ -674,6 +752,7 @@ export function DynamicSchemaProvider({ children }) {
     discoverDatabases,
     discoverSchemas,
     discoverTablesAndColumns,
+    discoverTablesFast,
     discoverAll,
     
     // Focus/selection
@@ -705,7 +784,7 @@ export function DynamicSchemaProvider({ children }) {
   }), [
     isConnected, loading, metadataLoading, error, lastDiscovery,
     databases, discoveredTables, mdlhTableTypes,
-    discoverDatabases, discoverSchemas, discoverTablesAndColumns, discoverAll,
+    discoverDatabases, discoverSchemas, discoverTablesAndColumns, discoverTablesFast, discoverAll,
     focusedPath, filters,
     getColumnsForTable, hasColumn, getDynamicFieldMappings, getAvailableFields, getMissingFields,
     getHierarchyValues, getAvailableHierarchyColumns,
