@@ -39,6 +39,10 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/api/pivots': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
       '/api/sessions': {
         target: 'http://localhost:8000',
         changeOrigin: true,

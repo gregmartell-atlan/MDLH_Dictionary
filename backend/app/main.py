@@ -18,6 +18,7 @@ from app.config import settings
 SERVER_INSTANCE_ID = str(uuid.uuid4())
 SERVER_START_TIME = datetime.utcnow().isoformat() + "Z"
 from app.routers import connection_router, metadata_router, query_router
+from app.routers.pivots import router as pivots_router
 from app.routers.system import router as system_router
 from app.routers.tenant_config import router as tenant_config_router
 from app.utils.logger import logger, generate_request_id, set_request_id
@@ -98,6 +99,7 @@ app.include_router(metadata_router)
 app.include_router(query_router)
 app.include_router(system_router)
 app.include_router(tenant_config_router)
+app.include_router(pivots_router)
 
 
 @app.get("/")
@@ -142,4 +144,3 @@ def start():
 
 if __name__ == "__main__":
     start()
-

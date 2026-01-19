@@ -36,7 +36,6 @@ import {
   getPivotCategories,
   getPivotsByCategory,
   generatePivotSQL,
-  buildCustomPivotSQL,
 } from '../../data/prebuiltPivotRegistry';
 
 // =============================================================================
@@ -240,13 +239,18 @@ function PivotCard({ pivot, onSelect, onPreview, onCopySQL, tableFqn }) {
 /**
  * SQL Preview Modal
  */
-function SQLPreviewModal({ pivot, tableFqn, onClose }) {
-  const sql = useMemo(() => {
-    return generatePivotSQL(pivot.id, tableFqn || '{{DATABASE}}.{{SCHEMA}}.ASSETS');
-  }, [pivot, tableFqn]);
+function SQLPreviewModal({ pivot, tableFqn, context, availableColumns, onClose }) {
+  const resolved = useMemo(() => {
+    return generatePivotSQL(
+      pivot.id,
+      tableFqn || '{{DATABASE}}.{{SCHEMA}}.ASSETS',
+      context,
+      { availableColumns }
+    );
+  }, [pivot, tableFqn, context, availableColumns]);
   
   const handleCopy = () => {
-    navigator.clipboard.writeText(sql);
+    navigator.clipboard.writeText(resolved.sql || '');
   };
   
   return (
@@ -276,13 +280,19 @@ function SQLPreviewModal({ pivot, tableFqn, onClose }) {
         {/* SQL */}
         <div className="p-6 overflow-auto max-h-[60vh]">
           <pre className="bg-slate-900 text-slate-100 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap font-mono">
-            {sql}
+            {resolved.sql}
           </pre>
         </div>
         
         {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 text-xs text-slate-500">
-          <strong>Note:</strong> Replace <code className="bg-slate-200 px-1 rounded">{'{{DATABASE}}.{{SCHEMA}}.ASSETS'}</code> with your actual MDLH table reference.
+          {resolved.missingColumns?.length > 0 ? (
+            <span>Missing columns: {resolved.missingColumns.join(', ')}.</span>
+          ) : (
+            <span>
+              <strong>Note:</strong> Replace <code className="bg-slate-200 px-1 rounded">{'{{DATABASE}}.{{SCHEMA}}.ASSETS'}</code> with your actual MDLH table reference.
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -296,6 +306,8 @@ function SQLPreviewModal({ pivot, tableFqn, onClose }) {
 export function PreBuiltPivotGallery({ 
   onSelectPivot, 
   tableFqn,
+  context,
+  availableColumns = [],
   className = '',
 }) {
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -322,17 +334,27 @@ export function PreBuiltPivotGallery({
   }, [selectedCategory, searchTerm]);
   
   const handleSelect = useCallback((pivot) => {
-    const sql = generatePivotSQL(pivot.id, tableFqn || '{{DATABASE}}.{{SCHEMA}}.ASSETS');
+    const resolved = generatePivotSQL(
+      pivot.id,
+      tableFqn || '{{DATABASE}}.{{SCHEMA}}.ASSETS',
+      context,
+      { availableColumns }
+    );
     onSelectPivot?.({
       ...pivot,
-      generatedSQL: sql,
+      generatedSQL: resolved.sql,
     });
-  }, [tableFqn, onSelectPivot]);
+  }, [tableFqn, context, availableColumns, onSelectPivot]);
   
   const handleCopySQL = useCallback((pivot) => {
-    const sql = generatePivotSQL(pivot.id, tableFqn || '{{DATABASE}}.{{SCHEMA}}.ASSETS');
-    navigator.clipboard.writeText(sql);
-  }, [tableFqn]);
+    const resolved = generatePivotSQL(
+      pivot.id,
+      tableFqn || '{{DATABASE}}.{{SCHEMA}}.ASSETS',
+      context,
+      { availableColumns }
+    );
+    navigator.clipboard.writeText(resolved.sql || '');
+  }, [tableFqn, context, availableColumns]);
   
   return (
     <div className={`space-y-6 ${className}`}>
@@ -392,11 +414,13 @@ export function PreBuiltPivotGallery({
       
       {/* SQL Preview Modal */}
       {previewPivot && (
-        <SQLPreviewModal
-          pivot={previewPivot}
-          tableFqn={tableFqn}
-          onClose={() => setPreviewPivot(null)}
-        />
+          <SQLPreviewModal 
+            pivot={previewPivot} 
+            tableFqn={tableFqn}
+            context={context}
+            availableColumns={availableColumns}
+            onClose={() => setPreviewPivot(null)}
+          />
       )}
     </div>
   );

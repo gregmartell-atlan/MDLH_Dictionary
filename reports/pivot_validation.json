@@ -1,0 +1,576 @@
+{
+  "generated_at": "2026-01-19T20:36:16.406Z",
+  "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+  "pivots_tested": 8,
+  "results": [
+    {
+      "pivot_id": "completeness_by_connection_type",
+      "name": "Completeness by Connection & Asset Type",
+      "category": "Completeness",
+      "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+      "required_columns": [
+        "ASSET_TYPE",
+        "CERTIFICATESTATUS",
+        "CONNECTORNAME",
+        "DESCRIPTION",
+        "OWNERGROUPS",
+        "OWNERUSERS",
+        "STATUS",
+        "TERMGUIDS"
+      ],
+      "missing_columns": [],
+      "alternate_suggestions": [
+        {
+          "column": "CONNECTORNAME",
+          "alternate": "CONNECTOR_NAME"
+        }
+      ],
+      "execution": {
+        "status": "SUCCESS",
+        "query_id": "cceb7fc2-f699-4dd9-afbf-3824ded3f28c",
+        "row_count": 568,
+        "columns": [
+          "status"
+        ],
+        "rows_sample": [
+          [
+            "",
+            "Task",
+            2277,
+            "0.0",
+            "0.0",
+            "50.0"
+          ],
+          [
+            "",
+            "Workflow",
+            38,
+            "36.8",
+            "0.0",
+            "25.0"
+          ],
+          [
+            "",
+            "WorkflowRun",
+            140,
+            "0.0",
+            "0.0",
+            "25.0"
+          ],
+          [
+            "Sqoop",
+            "Connection",
+            1,
+            "0.0",
+            "0.0",
+            "0.0"
+          ],
+          [
+            "Unknown",
+            "AIApplication",
+            5,
+            "100.0",
+            "20.0",
+            "50.0"
+          ]
+        ],
+        "execution_time_ms": 1125
+      }
+    },
+    {
+      "pivot_id": "quality_scorecard_domain",
+      "name": "Quality Scorecard: Domain × Dimension",
+      "category": "Quality",
+      "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+      "required_columns": [
+        "CERTIFICATESTATUS",
+        "CLASSIFICATIONNAMES",
+        "DESCRIPTION",
+        "DOMAINGUIDS",
+        "OWNERGROUPS",
+        "OWNERUSERS",
+        "STATUS",
+        "TAGS",
+        "TERMGUIDS"
+      ],
+      "missing_columns": [],
+      "alternate_suggestions": [
+        {
+          "column": "DOMAINGUIDS",
+          "alternate": "TAGS"
+        }
+      ],
+      "execution": {
+        "status": "SUCCESS",
+        "query_id": "5679b339-17e9-45b3-9039-899b425d5160",
+        "row_count": 65,
+        "columns": [
+          "status"
+        ],
+        "rows_sample": [
+          [
+            "No Domain",
+            750458,
+            "48.3",
+            "7.8",
+            "0.1",
+            "0.0",
+            "0.0"
+          ],
+          [
+            "Attribute",
+            26588,
+            "9.5",
+            "3.7",
+            "35.6",
+            "0.3",
+            "100.0"
+          ],
+          [
+            "Confidential",
+            26359,
+            "9.5",
+            "3.5",
+            "35.5",
+            "0.4",
+            "100.0"
+          ],
+          [
+            "Customer Service",
+            26307,
+            "9.3",
+            "3.6",
+            "36.0",
+            "0.4",
+            "100.0"
+          ],
+          [
+            "Cost_center",
+            26235,
+            "9.3",
+            "3.6",
+            "35.8",
+            "0.3",
+            "100.0"
+          ]
+        ],
+        "execution_time_ms": 1278
+      }
+    },
+    {
+      "pivot_id": "owner_accountability_certification",
+      "name": "Owner Accountability: Certification Coverage",
+      "category": "Accountability",
+      "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+      "required_columns": [
+        "CERTIFICATESTATUS",
+        "OWNERGROUPS",
+        "OWNERUSERS",
+        "STATUS"
+      ],
+      "missing_columns": [],
+      "alternate_suggestions": [],
+      "execution": {
+        "status": "SUCCESS",
+        "query_id": "bb4cc953-0758-4da6-92a9-1662cfdd4ff7",
+        "row_count": 98,
+        "columns": [
+          "status"
+        ],
+        "rows_sample": [
+          [
+            "Unowned",
+            38224,
+            2257,
+            7564,
+            748908,
+            796953,
+            "4.8"
+          ],
+          [
+            "omar.farah",
+            102,
+            9,
+            0,
+            56237,
+            56348,
+            "0.2"
+          ],
+          [
+            "cameron.kayfish",
+            157,
+            12,
+            2,
+            2735,
+            2906,
+            "5.4"
+          ],
+          [
+            "kaitleen.neuschwander",
+            47,
+            14,
+            0,
+            1670,
+            1731,
+            "2.7"
+          ],
+          [
+            "pablo.quinones",
+            32,
+            193,
+            0,
+            668,
+            893,
+            "3.6"
+          ]
+        ],
+        "execution_time_ms": 1079
+      }
+    },
+    {
+      "pivot_id": "lineage_coverage_source",
+      "name": "Lineage Coverage: Source Systems",
+      "category": "Lineage",
+      "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+      "required_columns": [
+        "ASSET_TYPE",
+        "CONNECTORNAME",
+        "DATABASEQUALIFIEDNAME",
+        "HASLINEAGE",
+        "SCHEMAQUALIFIEDNAME",
+        "STATUS"
+      ],
+      "missing_columns": [],
+      "alternate_suggestions": [
+        {
+          "column": "CONNECTORNAME",
+          "alternate": "CONNECTOR_NAME"
+        }
+      ],
+      "execution": {
+        "status": "SUCCESS",
+        "query_id": "d86c7036-6d27-4801-a261-d782bd06bddc",
+        "row_count": 1000,
+        "columns": [
+          "status"
+        ],
+        "rows_sample": [
+          [
+            "Unknown",
+            "ColorName",
+            "ColorName",
+            1,
+            "0.0",
+            1
+          ],
+          [
+            "Unknown",
+            "bronze_Contracts",
+            "bronze_Contracts",
+            1,
+            "0.0",
+            1
+          ],
+          [
+            "Unknown",
+            "bronze_Customers",
+            "bronze_Customers",
+            1,
+            "0.0",
+            1
+          ],
+          [
+            "Unknown",
+            "bronze_DS_MAPPING_VAL",
+            "bronze_DS_MAPPING_VAL",
+            1,
+            "0.0",
+            1
+          ],
+          [
+            "Unknown",
+            "bronze_GEO",
+            "bronze_GEO",
+            1,
+            "0.0",
+            1
+          ]
+        ],
+        "execution_time_ms": 1236
+      }
+    },
+    {
+      "pivot_id": "semantic_enrichment",
+      "name": "Semantic Enrichment Status",
+      "category": "Semantics",
+      "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+      "required_columns": [
+        "ASSET_TYPE",
+        "CERTIFICATESTATUS",
+        "CLASSIFICATIONNAMES",
+        "DESCRIPTION",
+        "STATUS",
+        "TERMGUIDS"
+      ],
+      "missing_columns": [],
+      "alternate_suggestions": [
+        {
+          "column": "CERTIFICATESTATUS",
+          "alternate": "CERTIFICATE_STATUS"
+        }
+      ],
+      "execution": {
+        "status": "SUCCESS",
+        "query_id": "63560fd2-531a-451b-aa32-fd9f167dd217",
+        "row_count": 350,
+        "columns": [
+          "status"
+        ],
+        "rows_sample": [
+          [
+            "ADLSAccount",
+            "None",
+            2,
+            "50.0",
+            "0.0",
+            "0.0"
+          ],
+          [
+            "ADLSContainer",
+            "None",
+            2,
+            "50.0",
+            "0.0",
+            "0.0"
+          ],
+          [
+            "ADLSObject",
+            "None",
+            7,
+            "28.6",
+            "0.0",
+            "0.0"
+          ],
+          [
+            "ADLSObject",
+            "VERIFIED",
+            1,
+            "100.0",
+            "100.0",
+            "0.0"
+          ],
+          [
+            "AIApplication",
+            "DRAFT",
+            4,
+            "100.0",
+            "0.0",
+            "75.0"
+          ]
+        ],
+        "execution_time_ms": 1967
+      }
+    },
+    {
+      "pivot_id": "usage_popularity",
+      "name": "Usage & Popularity Analysis",
+      "category": "Usage",
+      "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+      "required_columns": [
+        "ASSET_TYPE",
+        "CERTIFICATESTATUS",
+        "DESCRIPTION",
+        "OWNERGROUPS",
+        "OWNERUSERS",
+        "POPULARITYSCORE",
+        "STATUS"
+      ],
+      "missing_columns": [],
+      "alternate_suggestions": [
+        {
+          "column": "POPULARITYSCORE",
+          "alternate": "POPULARITY_SCORE"
+        }
+      ],
+      "execution": {
+        "status": "SUCCESS",
+        "query_id": "2fda5cfb-2c5b-4d66-84ce-7046d02a23ab",
+        "row_count": 238,
+        "columns": [
+          "status"
+        ],
+        "rows_sample": [
+          [
+            "Hot",
+            "Column",
+            3225,
+            "20.6",
+            "74.3",
+            "0.5"
+          ],
+          [
+            "Hot",
+            "Database",
+            3,
+            "66.7",
+            "66.7",
+            "33.3"
+          ],
+          [
+            "Hot",
+            "ModeReport",
+            1,
+            "0.0",
+            "0.0",
+            "0.0"
+          ],
+          [
+            "Hot",
+            "PowerBIDashboard",
+            1,
+            "100.0",
+            "100.0",
+            "100.0"
+          ],
+          [
+            "Hot",
+            "PowerBIReport",
+            2,
+            "100.0",
+            "100.0",
+            "100.0"
+          ]
+        ],
+        "execution_time_ms": 1000
+      }
+    },
+    {
+      "pivot_id": "staleness_analysis",
+      "name": "Staleness Analysis",
+      "category": "Freshness",
+      "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+      "required_columns": [
+        "CERTIFICATESTATUS",
+        "CONNECTORNAME",
+        "OWNERGROUPS",
+        "OWNERUSERS",
+        "STATUS",
+        "UPDATED_AT"
+      ],
+      "missing_columns": [],
+      "alternate_suggestions": [
+        {
+          "column": "CONNECTORNAME",
+          "alternate": "CONNECTOR_NAME"
+        }
+      ],
+      "execution": {
+        "status": "SUCCESS",
+        "query_id": "43237e14-63b3-4af8-a5e7-730842207e81",
+        "row_count": 216,
+        "columns": [
+          "status"
+        ],
+        "rows_sample": [
+          [
+            "0-30d",
+            "",
+            179,
+            "0.0",
+            "2.8"
+          ],
+          [
+            "0-30d",
+            "Unknown",
+            1195,
+            "17.5",
+            "11.2"
+          ],
+          [
+            "0-30d",
+            "adls",
+            9,
+            "11.1",
+            "11.1"
+          ],
+          [
+            "0-30d",
+            "ai",
+            1,
+            "0.0",
+            "100.0"
+          ],
+          [
+            "0-30d",
+            "airflow",
+            37,
+            "0.0",
+            "2.7"
+          ]
+        ],
+        "execution_time_ms": 1576
+      }
+    },
+    {
+      "pivot_id": "classification_coverage",
+      "name": "Classification & Sensitivity Coverage",
+      "category": "Compliance",
+      "table": "ATLAN_GOLD.PUBLIC.ASSETS",
+      "required_columns": [
+        "ASSET_TYPE",
+        "CLASSIFICATIONNAMES",
+        "CONNECTORNAME",
+        "STATUS"
+      ],
+      "missing_columns": [],
+      "alternate_suggestions": [
+        {
+          "column": "CONNECTORNAME",
+          "alternate": "CONNECTOR_NAME"
+        }
+      ],
+      "execution": {
+        "status": "SUCCESS",
+        "query_id": "6c8a22ae-58e0-4734-bb14-dc5da2db4eb8",
+        "row_count": 568,
+        "columns": [
+          "status"
+        ],
+        "rows_sample": [
+          [
+            "",
+            "Task",
+            2277,
+            "0.0"
+          ],
+          [
+            "",
+            "Workflow",
+            38,
+            "0.0"
+          ],
+          [
+            "",
+            "WorkflowRun",
+            140,
+            "0.0"
+          ],
+          [
+            "Sqoop",
+            "Connection",
+            1,
+            "0.0"
+          ],
+          [
+            "Unknown",
+            "AIApplication",
+            5,
+            "60.0"
+          ]
+        ],
+        "execution_time_ms": 1133
+      }
+    }
+  ],
+  "recommendations": []
+}

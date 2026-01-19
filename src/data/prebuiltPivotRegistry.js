@@ -81,8 +81,8 @@ export const PIVOT_DIMENSIONS = {
     label: 'Domain',
     icon: '🏢',
     mdlhColumn: 'DOMAINGUIDS',
-    alternates: ['DOMAIN_GUIDS', '__DOMAINGUIDS'],
-    extractFn: `COALESCE(DOMAINGUIDS[0]::STRING, 'No Domain')`,
+    alternates: ['DOMAIN_GUIDS', '__DOMAINGUIDS', 'TAGS'],
+    extractFn: `COALESCE(DOMAINGUIDS[0]::STRING, TAGS[0]::STRING, 'No Domain')`,
     isArray: true,
     description: 'Business domain assignment',
   },
@@ -317,6 +317,174 @@ export const PIVOT_MEASURES = {
     description: 'Average completeness score based on key fields',
   },
 };
+
+const PIVOT_COLUMN_ALIASES = {
+  CONNECTORNAME: ['CONNECTOR_NAME', 'CONNECTIONNAME', 'CONNECTION_NAME'],
+  DATABASEQUALIFIEDNAME: ['DATABASE_NAME', 'DATABASENAME', 'ASSET_QUALIFIED_NAME'],
+  SCHEMAQUALIFIEDNAME: ['SCHEMA_NAME', 'SCHEMANAME', 'ASSET_QUALIFIED_NAME'],
+  ASSET_TYPE: ['TYPENAME', 'TYPE_NAME'],
+  OWNERUSERS: ['OWNER_USERS'],
+  OWNERGROUPS: ['OWNER_GROUPS', 'OWNER_USERS'],
+  DOMAINGUIDS: ['DOMAIN_GUIDS', '__DOMAINGUIDS', 'TAGS'],
+  CERTIFICATESTATUS: ['CERTIFICATE_STATUS'],
+  TERMGUIDS: ['TERM_GUIDS', 'MEANINGS'],
+  CLASSIFICATIONNAMES: ['CLASSIFICATION_NAMES', 'TAGS'],
+  README_GUID: ['READMEGUID', 'README'],
+  POPULARITYSCORE: ['POPULARITY_SCORE'],
+  UPDATED_AT: ['UPDATETIME', 'UPDATE_TIME'],
+  HASLINEAGE: ['HAS_LINEAGE', '__HASLINEAGE'],
+  DESCRIPTION: ['USER_DESCRIPTION', 'USERDESCRIPTION'],
+  STATUS: ['ASSET_STATUS', 'STATE'],
+};
+
+const SQL_KEYWORDS = new Set([
+  'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL', 'AS',
+  'ON', 'JOIN', 'LEFT', 'RIGHT', 'FULL', 'OUTER', 'INNER', 'CROSS', 'GROUP',
+  'BY', 'ORDER', 'LIMIT', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'DISTINCT',
+  'TRUE', 'FALSE', 'ASC', 'DESC', 'ILIKE', 'LIKE', 'BETWEEN'
+]);
+
+const SQL_FUNCTIONS = new Set([
+  'COUNT', 'COUNT_IF', 'ROUND', 'COALESCE', 'NULLIF', 'ARRAY_SIZE',
+  'SPLIT_PART', 'DATEDIFF', 'DATEADD', 'TO_TIMESTAMP', 'CURRENT_TIMESTAMP'
+]);
+
+const SQL_TYPES = new Set([
+  'STRING', 'TEXT', 'NUMBER', 'FLOAT', 'BOOLEAN', 'DATE', 'TIMESTAMP',
+  'TIMESTAMP_NTZ', 'TIMESTAMP_LTZ', 'TIMESTAMP_TZ'
+]);
+
+const SQL_DATE_PARTS = new Set([
+  'DAY', 'HOUR', 'MINUTE', 'SECOND', 'WEEK', 'MONTH', 'YEAR'
+]);
+
+function normalizeIdentifier(value) {
+  return value.replace(/^"|"$/g, '').toUpperCase();
+}
+
+function compactIdentifier(value) {
+  return normalizeIdentifier(value).replace(/_/g, '');
+}
+
+function buildColumnLookup(columns = []) {
+  const lookup = new Map();
+  for (const col of columns) {
+    if (!col) continue;
+    const name = typeof col === 'string' ? col : col.name;
+    if (!name) continue;
+    const normalized = normalizeIdentifier(name);
+    const compact = compactIdentifier(name);
+    lookup.set(normalized, name);
+    lookup.set(compact, name);
+  }
+  return lookup;
+}
+
+function mergeColumnAliases() {
+  const aliases = { ...PIVOT_COLUMN_ALIASES };
+  Object.values(PIVOT_DIMENSIONS).forEach((dim) => {
+    if (!dim?.mdlhColumn) return;
+    if (!aliases[dim.mdlhColumn]) {
+      aliases[dim.mdlhColumn] = [];
+    }
+    if (Array.isArray(dim.alternates)) {
+      aliases[dim.mdlhColumn].push(...dim.alternates);
+    }
+  });
+  return aliases;
+}
+
+function resolveColumnName(column, aliasMap, lookup) {
+  if (!column) return { resolved: null, missing: null, alternate: null };
+  const candidates = [column, ...(aliasMap[column] || [])];
+  for (const candidate of candidates) {
+    const normalized = normalizeIdentifier(candidate);
+    const compact = compactIdentifier(candidate);
+    if (lookup.has(normalized)) {
+      return { resolved: lookup.get(normalized), missing: null, alternate: candidate !== column ? candidate : null };
+    }
+    if (lookup.has(compact)) {
+      return { resolved: lookup.get(compact), missing: null, alternate: candidate !== column ? candidate : null };
+    }
+  }
+  return { resolved: null, missing: column, alternate: null };
+}
+
+function extractColumnsFromSql(sql) {
+  const scrubbed = sql
+    .replace(/'[^']*'/g, ' ')
+    .replace(/"[^"]*"/g, (match) => ` ${match} `)
+    .replace(/\{\{TABLE\}\}/g, ' ');
+
+  const columns = new Set();
+  const quoted = scrubbed.match(/"[^"]+"/g) || [];
+  quoted.forEach((token) => {
+    const normalized = normalizeIdentifier(token);
+    if (
+      normalized &&
+      !SQL_KEYWORDS.has(normalized) &&
+      !SQL_FUNCTIONS.has(normalized) &&
+      !SQL_TYPES.has(normalized) &&
+      !SQL_DATE_PARTS.has(normalized)
+    ) {
+      columns.add(normalized);
+    }
+  });
+
+  const tokens = scrubbed.match(/\b[A-Z_][A-Z0-9_]*\b/g) || [];
+  tokens.forEach((token) => {
+    const normalized = normalizeIdentifier(token);
+    if (SQL_KEYWORDS.has(normalized) || SQL_FUNCTIONS.has(normalized)) return;
+    if (SQL_TYPES.has(normalized) || SQL_DATE_PARTS.has(normalized)) return;
+    columns.add(normalized);
+  });
+
+  return columns;
+}
+
+function replaceColumnsInSql(sql, replacements) {
+  let resolved = sql;
+  for (const [from, to] of Object.entries(replacements)) {
+    const pattern = new RegExp(`\\b${from}\\b`, 'g');
+    resolved = resolved.replace(pattern, to);
+  }
+  return resolved;
+}
+
+function resolveSqlTemplate(sql, columns = [], aliasMap = mergeColumnAliases()) {
+  if (!columns || columns.length === 0) {
+    return { sql, missingColumns: [], replacements: {}, alternates: [] };
+  }
+  const lookup = buildColumnLookup(columns);
+  const requiredColumns = extractColumnsFromSql(sql);
+  const replacements = {};
+  const missing = [];
+  const alternates = [];
+
+  requiredColumns.forEach((column) => {
+    const normalized = normalizeIdentifier(column);
+    const compact = compactIdentifier(column);
+    if (!aliasMap[normalized] && !lookup.has(normalized) && !lookup.has(compact)) {
+      return;
+    }
+    const { resolved, missing: miss, alternate } = resolveColumnName(column, aliasMap, lookup);
+    if (resolved) {
+      replacements[column] = resolved;
+      if (alternate) {
+        alternates.push({ column, alternate });
+      }
+    } else if (miss) {
+      missing.push(miss);
+    }
+  });
+
+  return {
+    sql: replaceColumnsInSql(sql, replacements),
+    missingColumns: missing,
+    replacements,
+    alternates,
+  };
+}
 
 // =============================================================================
 // PRE-BUILT PIVOT CONFIGURATIONS
@@ -642,11 +810,30 @@ export function getPivotCategories() {
 /**
  * Generate SQL for a pivot with a specific table FQN
  */
-export function generatePivotSQL(pivotId, tableFqn) {
+function resolveTableRef(tableFqn, context = {}) {
+  let resolved = tableFqn || '{{DATABASE}}.{{SCHEMA}}.ASSETS';
+  if (context.database) {
+    resolved = resolved.replace(/\{\{DATABASE\}\}/g, context.database);
+  }
+  if (context.schema) {
+    resolved = resolved.replace(/\{\{SCHEMA\}\}/g, context.schema);
+  }
+  return resolved;
+}
+
+export function generatePivotSQL(pivotId, tableFqn, context = {}, options = {}) {
   const pivot = getPivotById(pivotId);
-  if (!pivot) return null;
-  
-  return pivot.sqlTemplate.replace(/\{\{TABLE\}\}/g, tableFqn);
+  if (!pivot) {
+    return { sql: null, missingColumns: ['pivot_not_found'], alternates: [] };
+  }
+
+  const tableRef = resolveTableRef(tableFqn, context);
+  const rawSql = pivot.sqlTemplate.replace(/\{\{TABLE\}\}/g, tableRef);
+  const { sql, missingColumns, alternates } = resolveSqlTemplate(
+    rawSql,
+    options.availableColumns || []
+  );
+  return { sql, missingColumns, alternates };
 }
 
 /**
@@ -666,17 +853,29 @@ export function getMeasure(measureId) {
 /**
  * Build a custom pivot SQL from dimensions and measures
  */
-export function buildCustomPivotSQL(rowDimensions, measures, tableFqn, whereClause = "STATUS = 'ACTIVE'") {
+export function buildCustomPivotSQL(
+  rowDimensions,
+  measures,
+  tableFqn,
+  whereClause = "STATUS = 'ACTIVE'",
+  options = {}
+) {
   // Build SELECT clause
   const selectParts = [];
   const groupByParts = [];
+  const missingColumns = [];
+  const alternates = [];
+  const aliasMap = mergeColumnAliases();
   
   // Add dimension columns
   rowDimensions.forEach((dimId, idx) => {
     const dim = PIVOT_DIMENSIONS[dimId];
     if (dim) {
-      const selectExpr = dim.extractFn || `COALESCE(${dim.mdlhColumn}, 'Unknown')`;
-      selectParts.push(`${selectExpr} AS ${dim.id}`);
+      const baseExpr = dim.extractFn || `COALESCE(${dim.mdlhColumn}, 'Unknown')`;
+      const resolvedExpr = resolveSqlTemplate(baseExpr, options.availableColumns || [], aliasMap);
+      missingColumns.push(...resolvedExpr.missingColumns);
+      alternates.push(...resolvedExpr.alternates);
+      selectParts.push(`${resolvedExpr.sql} AS ${dim.id}`);
       groupByParts.push(idx + 1);
     }
   });
@@ -685,7 +884,10 @@ export function buildCustomPivotSQL(rowDimensions, measures, tableFqn, whereClau
   measures.forEach(measureId => {
     const measure = PIVOT_MEASURES[measureId];
     if (measure) {
-      selectParts.push(`${measure.sql} AS ${measure.id}`);
+      const resolvedMeasure = resolveSqlTemplate(measure.sql, options.availableColumns || [], aliasMap);
+      missingColumns.push(...resolvedMeasure.missingColumns);
+      alternates.push(...resolvedMeasure.alternates);
+      selectParts.push(`${resolvedMeasure.sql} AS ${measure.id}`);
     }
   });
   
@@ -699,7 +901,8 @@ GROUP BY ${groupByParts.join(', ')}
 ORDER BY ${groupByParts.join(', ')}
   `.trim();
   
-  return sql;
+  const uniqueMissing = [...new Set(missingColumns)];
+  return { sql, missingColumns: uniqueMissing, alternates };
 }
 
 // =============================================================================

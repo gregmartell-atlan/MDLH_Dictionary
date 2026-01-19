@@ -171,6 +171,24 @@ def _has_limit(sql: str) -> bool:
     return re.search(r'\bLIMIT\b', cleaned, re.IGNORECASE) is not None
 
 
+def _has_template_placeholders(sql: str) -> bool:
+    """Detect unrendered template placeholders like {db} or {{TABLE}}."""
+    return "{" in sql or "}" in sql
+
+
+def _apply_session_context(cursor, database: Optional[str], schema: Optional[str], warehouse: Optional[str]) -> None:
+    """Apply database/schema/warehouse context safely before executing SQL."""
+    if warehouse:
+        safe_warehouse = _quote_identifier(warehouse)
+        cursor.execute(f"USE WAREHOUSE {safe_warehouse}")
+    if database:
+        safe_database = _quote_identifier(database)
+        cursor.execute(f"USE DATABASE {safe_database}")
+    if schema:
+        safe_schema = _quote_identifier(schema)
+        cursor.execute(f"USE SCHEMA {safe_schema}")
+
+
 def _fetch_rows_limited(cursor, max_rows: int, batch_size: int = FETCH_BATCH_SIZE) -> List[list]:
     """Fetch rows in batches up to max_rows to avoid memory blowups."""
     rows: List[list] = []
@@ -619,12 +637,18 @@ async def execute_query(
     
     if not request.sql or not request.sql.strip():
         raise HTTPException(status_code=400, detail="SQL query cannot be empty")
-    
+
     if not _is_query_allowed(request.sql):
         QUERY_METRICS.inc("queries_blocked")
         raise HTTPException(
             status_code=400,
             detail="Only single-statement, read-only queries (SELECT/SHOW/DESCRIBE/EXPLAIN) are allowed."
+        )
+
+    if _has_template_placeholders(request.sql):
+        raise HTTPException(
+            status_code=400,
+            detail="Query contains unresolved template placeholders. Please render templates before execution."
         )
 
     session = _get_session_or_401(x_session_id)
@@ -645,6 +669,9 @@ async def execute_query(
             safe_req_id = req_id if SAFE_REQUEST_ID_PATTERN.match(req_id) else "invalid"
             query_tag = f"MDLH:{safe_req_id}"
             cursor.execute(f"ALTER SESSION SET QUERY_TAG = '{query_tag}'")
+
+            # Apply context (overrides session defaults)
+            _apply_session_context(cursor, request.database, request.schema_name, request.warehouse)
             
             logger.info(f"[{req_id}] Executing query with {timeout_seconds}s timeout")
             

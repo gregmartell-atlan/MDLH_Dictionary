@@ -21,6 +21,7 @@ import { LineageRail } from './components/lineage/LineageRail';
 import { LineagePanel } from './components/lineage/LineagePanel';
 import { useSampleEntities, useQuery } from './hooks/useSnowflake';
 import { useConnectionContext } from './context/ConnectionContext';
+import { useMdlhContext } from './context/MdlhContext';
 import { useLineageData } from './hooks/useLineageData';
 import { createLogger } from './utils/logger';
 import { buildSafeFQN, escapeStringValue } from './utils/queryHelpers';
@@ -32,7 +33,6 @@ import { ModelingApp } from './evaluation/ModelingApp';
 import { WorkbenchPage } from './evaluation/components/workbench/WorkbenchPage';
 import { ExploreDashboard } from './evaluation/components/explore/ExploreDashboard';
 import { MDLHTenantConfigPage } from './components/MDLHTenantConfigPage';
-import { DynamicSchemaProvider } from './context/DynamicSchemaContext';
 
 // Scoped loggers for App
 const appLog = createLogger('App');
@@ -898,8 +898,6 @@ export default function App() {
   const [editorQuery, setEditorQuery] = useState('');
   const [selectedEntity, setSelectedEntity] = useState(null);
   const [showRecommendations, setShowRecommendations] = useState(false);
-  const [selectedMDLHDatabase, setSelectedMDLHDatabase] = useState('FIELD_METADATA');
-  const [selectedMDLHSchema, setSelectedMDLHSchema] = useState('PUBLIC');
   const searchRef = useRef(null);
   
   // State for table discovery and validation
@@ -935,9 +933,12 @@ export default function App() {
   } = useConnectionContext();
 
   const { discoveredTables: dynamicDiscoveredTables = [] } = useDynamicSchema();
+  const { context: mdlhContext, setDatabase: setSelectedMDLHDatabase, setSchema: setSelectedMDLHSchema } = useMdlhContext();
   
   // Derive isConnected from context status
   const isConnected = globalConnectionStatus?.connected ?? false;
+  const selectedMDLHDatabase = mdlhContext.database || DEFAULT_DATABASE;
+  const selectedMDLHSchema = mdlhContext.schema || DEFAULT_SCHEMA;
   
   // Lineage flyout state
   const [showLineageFlyout, setShowLineageFlyout] = useState(false);
@@ -1099,11 +1100,12 @@ export default function App() {
     closeConnectionModal();
     
     // Update selected database/schema from connection if provided
-    if (status?.database && !selectedMDLHDatabase) {
-      setSelectedMDLHDatabase(status.database);
+    if (status?.database) {
+      setSelectedMDLHDatabase(status.database, { source: 'session' });
     }
-    if (status?.schema && !selectedMDLHSchema) {
-      setSelectedMDLHSchema(status.schema);
+    const nextSchema = status?.schema || status?.schema_name;
+    if (nextSchema) {
+      setSelectedMDLHSchema(nextSchema, { source: 'session' });
     }
     
     // Table discovery will be triggered by the useEffect watching isConnected
@@ -1111,7 +1113,7 @@ export default function App() {
       database: status?.database || selectedMDLHDatabase,
       schema: status?.schema || selectedMDLHSchema
     });
-  }, [selectedMDLHDatabase, selectedMDLHSchema, closeConnectionModal]);
+  }, [selectedMDLHDatabase, selectedMDLHSchema, closeConnectionModal, setSelectedMDLHDatabase, setSelectedMDLHSchema]);
   
   // Connection checking is now handled by ConnectionContext (see main.jsx)
   // The context provides: status, loading, testConnection, showConnectionModal, etc.
@@ -1537,7 +1539,6 @@ export default function App() {
 
   return (
     <SystemConfigProvider>
-    <DynamicSchemaProvider>
     <EntityPanelProvider>
     <div className="min-h-screen bg-white text-gray-900" data-testid="app-root" data-active-tab={activeTab}>
       {/* Navigation Bar - Atlan style: clean white, minimal */}
@@ -1652,7 +1653,7 @@ export default function App() {
               <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
                 <select
                   value={selectedMDLHDatabase}
-                  onChange={(e) => setSelectedMDLHDatabase(e.target.value)}
+                  onChange={(e) => setSelectedMDLHDatabase(e.target.value, { source: 'manual' })}
                   className="px-2.5 py-1 bg-white text-slate-800 border-0 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-slate-300 cursor-pointer shadow-sm"
                 >
                   {MDLH_DATABASES.map(db => (
@@ -1664,7 +1665,7 @@ export default function App() {
                 <span className="text-slate-400 px-0.5">.</span>
                 <select
                   value={selectedMDLHSchema}
-                  onChange={(e) => setSelectedMDLHSchema(e.target.value)}
+                  onChange={(e) => setSelectedMDLHSchema(e.target.value, { source: 'manual' })}
                   className="px-2.5 py-1 bg-white text-slate-800 border-0 rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-slate-300 cursor-pointer shadow-sm"
                 >
                   {MDLH_SCHEMAS.map(sch => (
@@ -1822,10 +1823,7 @@ export default function App() {
             onSwitchToEditor={() => setActiveTab('editor')}
           />
         ) : activeTab === 'pivot' ? (
-          <PivotBuilder
-            database={selectedMDLHDatabase}
-            schema={selectedMDLHSchema}
-          />
+          <PivotBuilder />
         ) : activeTab === 'editor' ? (
           <QueryEditor
             initialQuery={editorQuery}
@@ -2303,7 +2301,6 @@ export default function App() {
       <CommandPalette open={isCmdOpen} onOpenChange={setIsCmdOpen} />
     </div>
     </EntityPanelProvider>
-    </DynamicSchemaProvider>
     </SystemConfigProvider>
   );
 }
