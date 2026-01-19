@@ -14,6 +14,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
 import { useConnection, useMetadata, useQuery } from '../hooks/useSnowflake';
+import { buildSafeFQN } from '../utils/queryHelpers';
 import { UNIFIED_FIELD_CATALOG, getFieldById } from '../evaluation/catalog/unifiedFields';
 import { escapeIdentifier, escapeStringValue, buildSafeFQN } from '../utils/queryHelpers';
 import { createLogger } from '../utils/logger';
@@ -162,6 +163,33 @@ export function DynamicSchemaProvider({ children }) {
     domain: null,
     onlyMdlhTables: true,
   });
+
+  const { discoveredTables, mdlhTableTypes } = useMemo(() => {
+    const tables = [];
+    const types = {};
+
+    for (const [dbName, dbEntry] of databases.entries()) {
+      for (const [schemaName, schemaEntry] of dbEntry.schemas.entries()) {
+        for (const [tableName, tableEntry] of schemaEntry.tables.entries()) {
+          const fqn = buildSafeFQN(dbName, schemaName, tableName);
+          const category = tableEntry.mdlhCategory || categorizeMdlhTable(tableName);
+          tables.push({
+            name: tableName,
+            database: dbName,
+            schema: schemaName,
+            fqn,
+            isMdlhTable: tableEntry.isMdlhTable,
+            mdlhCategory: category,
+          });
+          if (category) {
+            types[fqn] = category;
+          }
+        }
+      }
+    }
+
+    return { discoveredTables: tables, mdlhTableTypes: types };
+  }, [databases]);
   
   // ==========================================================================
   // DISCOVERY FUNCTIONS
@@ -640,6 +668,8 @@ export function DynamicSchemaProvider({ children }) {
     
     // Discovery data
     databases,
+    discoveredTables,
+    mdlhTableTypes,
     
     // Discovery functions
     discoverDatabases,
@@ -675,7 +705,7 @@ export function DynamicSchemaProvider({ children }) {
     HIERARCHY_COLUMNS,
   }), [
     isConnected, loading, metadataLoading, error, lastDiscovery,
-    databases,
+    databases, discoveredTables, mdlhTableTypes,
     discoverDatabases, discoverSchemas, discoverTablesAndColumns, discoverAll,
     focusedPath, filters,
     getColumnsForTable, hasColumn, getDynamicFieldMappings, getAvailableFields, getMissingFields,
