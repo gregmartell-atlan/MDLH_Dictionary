@@ -19,7 +19,11 @@ import {
   Terminal,
   Network,
   TrendingUp,
-  LayoutGrid
+  LayoutGrid,
+  Target,
+  Layers,
+  Settings,
+  Sparkles  // For Gold Layer
 } from 'lucide-react';
 
 /**
@@ -27,6 +31,9 @@ import {
  * Each tab includes a description for tooltips and context
  */
 export const tabs = [
+  // Gold Layer - Curated MDLH views (featured)
+  { id: 'gold', label: 'Gold Layer', icon: Sparkles, description: 'Curated GOLD schema views: ASSETS, FULL_LINEAGE, GLOSSARY_DETAILS, and more' },
+  
   { id: 'core', label: 'Core', icon: Table, description: 'Shared enterprise entities like Connection, Process, and Link' },
   { id: 'glossary', label: 'Glossary', icon: BookOpen, description: 'Business glossary terms, categories, and anchors' },
   { id: 'datamesh', label: 'Data Mesh', icon: Boxes, description: 'Data domains, products, and contracts' },
@@ -42,6 +49,11 @@ export const tabs = [
   { id: 'ai', label: 'AI/ML', icon: Bot, description: 'AI models, applications, and ML entities' },
   { id: 'pivot', label: 'Pivot Builder', icon: LayoutGrid, isEditor: true, description: 'Drag-and-drop pivot table builder for visual data analysis' },
   { id: 'editor', label: 'Query Editor', icon: Terminal, isEditor: true, description: 'Write and execute SQL queries' },
+  { id: 'modeling', label: 'Modeling', icon: Layers, isEditor: true, description: 'Build metadata models with guided assistance' },
+  { id: 'evaluation', label: 'Assessment', icon: Target, isEditor: true, description: 'Assess metadata quality and identify gaps' },
+  { id: 'workbench', label: 'Workbench', icon: Shield, isEditor: true, description: 'Review audit issues, attach evidence, and manage stakeholders' },
+  { id: 'enrichment', label: 'Enrichment Studio', icon: Sparkles, isEditor: true, description: 'Explore gaps and manage enrichment plans' },
+  { id: 'tenant-config', label: 'Tenant Config', icon: Settings, isEditor: true, description: 'Discover MDLH schema and map canonical fields' },
 ];
 
 /**
@@ -49,6 +61,7 @@ export const tabs = [
  * Note: Not all databases have the same tables - users should verify access
  */
 export const MDLH_DATABASES = [
+  { name: 'ATLAN_GOLD', label: 'Atlan Gold (Production)', schema: 'PUBLIC', hasAssets: true },
   { name: 'FIELD_METADATA', label: 'Field Metadata (atlan.atlan.com)', schema: 'PUBLIC' },
   { name: 'ATLAN_MDLH', label: 'Atlan MDLH', schema: 'PUBLIC' },
   { name: 'MDLH_GOVERNANCE', label: 'MDLH Governance', schema: 'PUBLIC', warning: 'May have different tables' },
@@ -64,6 +77,7 @@ export const MDLH_SCHEMAS = ['PUBLIC', 'INFORMATION_SCHEMA'];
  * Column definitions for each entity category tab
  */
 export const columns = {
+  gold: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'exampleQuery'],
   core: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'notes'],
   glossary: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'qualifiedNamePattern', 'exampleQuery'],
   datamesh: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'qualifiedNamePattern', 'exampleQuery'],
@@ -109,7 +123,8 @@ export const selectDropdownStyles = {
 /**
  * Default values for session/state
  */
-export const DEFAULT_DATABASE = 'FIELD_METADATA';
+// Default to ATLAN_GOLD which has the main ASSETS table (899K+ rows)
+export const DEFAULT_DATABASE = 'ATLAN_GOLD';
 export const DEFAULT_SCHEMA = 'PUBLIC';
 
 /**

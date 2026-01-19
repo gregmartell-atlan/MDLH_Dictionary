@@ -1,6 +1,7 @@
 """SQLite database for query history storage."""
 
 import sqlite3
+import re
 import os
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Any
@@ -73,6 +74,7 @@ class QueryHistoryDB:
         duration_ms: Optional[int] = None
     ):
         """Add a query to history."""
+        redacted_sql = self._redact_sql(sql)
         with self._get_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO query_history 
@@ -80,7 +82,7 @@ class QueryHistoryDB:
                  row_count, error_message, started_at, completed_at, duration_ms)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                query_id, sql, database, schema, warehouse,
+                query_id, redacted_sql, database, schema, warehouse,
                 status.value if isinstance(status, QueryStatus) else status,
                 row_count, error_message, started_at, completed_at, duration_ms
             ))
@@ -183,6 +185,11 @@ class QueryHistoryDB:
         with self._get_connection() as conn:
             conn.execute("DELETE FROM query_history")
             conn.commit()
+
+    @staticmethod
+    def _redact_sql(sql: str) -> str:
+        """Redact string literals from SQL to avoid logging secrets/PII."""
+        return re.sub(r"'([^']|'')*'", "'***'", sql)
 
 
 # Global instance

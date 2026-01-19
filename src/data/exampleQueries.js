@@ -8,9 +8,10 @@
  */
 
 import { USER_RESEARCH_QUERIES, FREQUENCY_STYLES } from './mdlhUserQueries';
+import { GOLD_LAYER_QUERIES, GOLD_FREQUENCY_STYLES } from './goldLayerQueries';
 
 // Re-export for convenience
-export { FREQUENCY_STYLES };
+export { FREQUENCY_STYLES, GOLD_FREQUENCY_STYLES };
 
 /**
  * Convert user research query to exampleQueries format
@@ -40,7 +41,32 @@ const userQueryGroups = USER_RESEARCH_QUERIES.reduce((acc, q) => {
   return acc;
 }, {});
 
+/**
+ * Convert Gold Layer query to exampleQueries format
+ */
+function convertGoldQueryToExampleFormat(goldQuery) {
+  return {
+    title: goldQuery.name,
+    description: goldQuery.description,
+    query: goldQuery.sql,
+    userIntent: goldQuery.userIntent,
+    frequency: goldQuery.frequency,
+    frequencyDetail: goldQuery.frequencyDetail,
+    source: goldQuery.source,
+    confidence: goldQuery.confidence,
+    id: goldQuery.id,
+    category: goldQuery.category,
+    goldTables: goldQuery.goldTables,
+  };
+}
+
+// Convert Gold Layer queries for use in exampleQueries
+const goldQueriesConverted = GOLD_LAYER_QUERIES.map(convertGoldQueryToExampleFormat);
+
 export const exampleQueries = {
+  // GOLD LAYER - Curated MDLH views (featured at top)
+  gold: goldQueriesConverted,
+  
   core: [
     {
       title: '✓ Verify Database Access',
@@ -776,6 +802,9 @@ ORDER BY AIMODELVERSION DESC;`
  * User research queries are added to their respective categories
  */
 export const mergedExampleQueries = {
+  // GOLD LAYER - Curated MDLH views (featured)
+  gold: exampleQueries.gold,
+  
   // Core queries - add Asset Discovery and Count & Statistics
   core: [
     ...(userQueryGroups['Asset Discovery'] || []),

@@ -567,12 +567,10 @@ export default function EntityPanel({
 }) {
   const panelContext = useEntityPanelOptional();
   const isPinned = panelContext?.isPinned ?? false;
-  const isHovered = panelContext?.isHovered ?? false;
   const isExpanded = panelContext?.isExpanded ?? false;
 
   const editorRef = useRef(null);
   const panelRef = useRef(null);
-  // hoverTimeoutRef moved to context for unified timing
 
   // Resize state - use shared constants
   const [panelWidth, setPanelWidth] = useState(SIDEBAR_STYLES.minExpandedWidth + 120); // Right panel slightly wider
@@ -599,7 +597,7 @@ export default function EntityPanel({
   const isConnected = connStatus?.connected;
 
   // Determine if panel should show full content or just rail
-  const showFullPanel = isPinned || isHovered;
+  const showFullPanel = isPinned || isExpanded;
 
   // Get entity details (may be null in quick access mode)
   const entityName = selectedEntity?.table || selectedEntity?.NAME || selectedEntity?.name || selectedEntity?.entity || null;
@@ -649,10 +647,6 @@ export default function EntityPanel({
     }
   }, [panelContext?.pendingTab]);
 
-  // Use context's hover handlers for consistent timing with left sidebar
-  const handleMouseEnter = panelContext?.handleMouseEnter || (() => {});
-  const handleMouseLeave = panelContext?.handleMouseLeave || (() => {});
-
   // Resize handlers
   const handleResizeStart = useCallback((e) => {
     e.preventDefault();
@@ -664,12 +658,11 @@ export default function EntityPanel({
   }, [panelWidth]);
 
   const handleResizeMove = useCallback((e) => {
-    if (!isResizing) return;
     // For right panel, dragging left increases width
     const delta = startXRef.current - e.clientX;
     const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidthRef.current + delta));
     setPanelWidth(newWidth);
-  }, [isResizing]);
+  }, []);
 
   const handleResizeEnd = useCallback(() => {
     setIsResizing(false);
@@ -964,9 +957,13 @@ LIMIT 50;`
     panelContext?.togglePin();
   };
 
+  const handleToggleExpand = () => {
+    panelContext?.toggle();
+  };
+
   const handleClose = () => {
     panelContext?.unpin();
-    panelContext?.setHovered(false);
+    panelContext?.collapse();
     onClose?.();
   };
 
@@ -981,12 +978,17 @@ LIMIT 50;`
       <CollapsedRailContainer
         ref={panelRef}
         position="right"
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
       >
-        {/* Pin indicator at top */}
-        <div className="p-2 border-b border-slate-200 flex justify-center">
-          <PinButton isPinned={isPinned} onToggle={() => panelContext?.pin()} size="md" />
+        {/* Expand button at top */}
+        <div className="p-2 border-b border-slate-200 flex flex-col items-center gap-1">
+          <button
+            onClick={handleToggleExpand}
+            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+            title="Expand panel"
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <PinButton isPinned={isPinned} onToggle={() => panelContext?.pin()} size="sm" />
         </div>
 
         {/* Rail icons */}
@@ -997,14 +999,14 @@ LIMIT 50;`
                 icon={Table2}
                 label="Details"
                 isActive={activeTab === 'cell'}
-                onClick={() => { setActiveTab('cell'); panelContext?.pin(); }}
+                onClick={() => { setActiveTab('cell'); panelContext?.expand(); }}
                 position="right"
               />
               <RailButton
                 icon={GitBranch}
                 label="Queries"
                 isActive={activeTab === 'lineage'}
-                onClick={() => { setActiveTab('lineage'); panelContext?.pin(); }}
+                onClick={() => { setActiveTab('lineage'); panelContext?.expand(); }}
                 badge={totalQueries > 0 ? totalQueries : null}
                 position="right"
               />
@@ -1014,14 +1016,14 @@ LIMIT 50;`
             icon={FlaskConical}
             label="Test Query"
             isActive={activeTab === 'test'}
-            onClick={() => { setActiveTab('test'); panelContext?.pin(); }}
+            onClick={() => { setActiveTab('test'); panelContext?.expand(); }}
             position="right"
           />
           <RailButton
             icon={Library}
             label="Query Library"
             isActive={activeTab === 'library'}
-            onClick={() => { setActiveTab('library'); panelContext?.pin(); }}
+            onClick={() => { setActiveTab('library'); panelContext?.expand(); }}
             badge={libraryQueries.length > 0 ? libraryQueries.length : null}
             position="right"
           />
@@ -1030,8 +1032,8 @@ LIMIT 50;`
     );
   }
 
-  // Full panel mode - use expanded preset or custom width
-  const displayWidth = isExpanded ? 640 : panelWidth;
+  // Full panel mode - use custom width (allow resizing)
+  const displayWidth = panelWidth;
 
   return (
     <ExpandedContainer
@@ -1039,8 +1041,6 @@ LIMIT 50;`
       width={displayWidth}
       position="right"
       isResizing={isResizing}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
       className="shadow-lg"
     >
       {/* Resize handle */}
@@ -1067,6 +1067,13 @@ LIMIT 50;`
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <button
+              onClick={handleToggleExpand}
+              className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
+              title="Collapse panel"
+            >
+              <ChevronRight size={16} />
+            </button>
             <PinButton isPinned={isPinned} onToggle={handleTogglePin} size="sm" className="text-slate-500 hover:text-slate-700 hover:bg-slate-100" />
             <button
               onClick={handleClose}

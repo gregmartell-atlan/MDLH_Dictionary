@@ -22,6 +22,8 @@ import ResultsTable from './ResultsTable';
 import { useConnection, useQuery, useQueryHistory, useMetadata, usePreflight } from '../hooks/useSnowflake';
 import { createLogger } from '../utils/logger';
 import { buildSafeFQN, escapeStringValue } from '../utils/queryHelpers';
+import { GOLD_LAYER_QUERIES } from '../data/goldLayerQueries';
+import { GoldBadge, isGoldLayerQuery } from './ui/GoldBadge';
 
 const log = createLogger('QueryEditor');
 
@@ -237,6 +239,26 @@ LIMIT 20;`
     });
   }
 
+  // ==========================================================================
+  // GOLD LAYER QUERIES - Curated, production-ready (always show top 5)
+  // ==========================================================================
+  const goldStarters = GOLD_LAYER_QUERIES
+    .filter(q => q.frequency === 'Starter' || q.frequency === 'Common')
+    .slice(0, 5)
+    .map(q => ({
+      id: `gold_${q.id}`,
+      label: `⭐ ${q.name}`,
+      description: q.description,
+      icon: Sparkles,
+      category: 'gold',
+      isGold: true,
+      goldTables: q.goldTables,
+      sql: q.sql
+    }));
+  
+  // Add Gold queries at the beginning (featured)
+  queries.unshift(...goldStarters);
+
   return queries;
 }
 
@@ -309,12 +331,16 @@ function QuerySuggestionsDropdown({
   }, [filteredQueries]);
 
   const categoryLabels = {
+    gold: '⭐ Gold Layer (Curated)',
     structure: 'Structure',
     lookup: 'Lookup',
     lineage: 'Lineage',
     glossary: 'Glossary',
     governance: 'Governance'
   };
+  
+  // Custom sort to put Gold first
+  const categoryOrder = ['gold', 'structure', 'lookup', 'lineage', 'glossary', 'governance'];
 
   if (queries.length === 0) {
     return (
@@ -371,29 +397,55 @@ function QuerySuggestionsDropdown({
                 No templates match "{searchTerm}"
               </div>
             ) : (
-              Object.entries(groupedQueries).map(([category, categoryQueries]) => (
+              // Sort categories with Gold first
+              Object.entries(groupedQueries)
+                .sort(([a], [b]) => {
+                  const aIdx = categoryOrder.indexOf(a);
+                  const bIdx = categoryOrder.indexOf(b);
+                  return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
+                })
+                .map(([category, categoryQueries]) => (
                 <div key={category}>
-                  <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 sticky top-0">
+                  <div className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide sticky top-0 ${
+                    category === 'gold' 
+                      ? 'bg-gradient-to-r from-amber-50 to-yellow-50 text-amber-700 border-b border-amber-200' 
+                      : 'bg-slate-50 text-slate-500'
+                  }`}>
                     {categoryLabels[category] || category}
                   </div>
                   {categoryQueries.map((query) => {
                     const Icon = query.icon;
+                    const isGold = query.isGold || category === 'gold';
                     return (
                       <button
                         key={query.id}
                         onClick={() => handleSelect(query)}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-blue-50 transition-colors group"
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors group ${
+                          isGold 
+                            ? 'hover:bg-amber-50 border-l-2 border-transparent hover:border-amber-400' 
+                            : 'hover:bg-blue-50'
+                        }`}
                       >
-                        <Icon size={14} className="text-gray-400 group-hover:text-blue-600 flex-shrink-0" />
+                        {isGold ? (
+                          <GoldBadge variant="compact" size="xs" />
+                        ) : (
+                          <Icon size={14} className="text-gray-400 group-hover:text-blue-600 flex-shrink-0" />
+                        )}
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-gray-800 group-hover:text-blue-700">
+                          <div className={`text-sm font-medium ${
+                            isGold 
+                              ? 'text-amber-800 group-hover:text-amber-900' 
+                              : 'text-gray-800 group-hover:text-blue-700'
+                          }`}>
                             {query.label}
                           </div>
                           <div className="text-xs text-slate-500 truncate">
                             {query.description}
                           </div>
                         </div>
-                        <Play size={10} className="text-blue-500 opacity-0 group-hover:opacity-100" />
+                        <Play size={10} className={`opacity-0 group-hover:opacity-100 ${
+                          isGold ? 'text-amber-500' : 'text-blue-500'
+                        }`} />
                       </button>
                     );
                   })}
@@ -1007,7 +1059,7 @@ function SchemaTree({
   };
   
   return (
-    <div className="flex flex-col h-full text-[13px] bg-slate-50">
+    <div className="flex flex-col h-full text-[13px] bg-slate-50" data-testid="schema-tree">
       {/* Header */}
       <div className="px-3 py-2.5 border-b border-slate-200 bg-white">
         <div className="flex items-center justify-between">
@@ -1028,6 +1080,7 @@ function SchemaTree({
               placeholder="Filter tables..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              data-testid="schema-tree-search"
               className="w-full pl-7 pr-2 py-1.5 text-xs bg-slate-100 border-0 rounded focus:outline-none focus:ring-2 focus:ring-blue-400 placeholder-slate-400"
             />
           </div>
@@ -2192,6 +2245,7 @@ LIMIT 25;`;
   return (
     <div 
       ref={containerRef}
+      data-testid="query-editor"
       className="flex h-[calc(100vh-200px)] min-h-[600px] bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-lg"
     >
       {/* Left Panel - Schema Explorer */}
@@ -2231,6 +2285,7 @@ LIMIT 25;`;
           <button
             onClick={handleExecute}
             disabled={queryLoading || !sql.trim() || !connectionStatus?.connected}
+            data-testid="query-editor-run"
               className="flex items-center gap-1.5 px-4 py-1.5 bg-gray-900 hover:bg-gray-800 text-white rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {queryLoading ? (
@@ -2397,7 +2452,10 @@ LIMIT 25;`;
         </ResizablePanel>
           
           {/* Results */}
-        <div className={`flex-1 overflow-hidden flex flex-col relative ${successGlow ? 'animate-success-glow' : ''}`}>
+        <div
+          className={`flex-1 overflow-hidden flex flex-col relative ${successGlow ? 'animate-success-glow' : ''}`}
+          data-testid="query-results"
+        >
           {/* Success Checkmark Overlay */}
           {showSuccessCheckmark && (
             <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
@@ -2446,7 +2504,7 @@ LIMIT 25;`;
                 {queryError}
               </div>
             ) : results?.rows ? (
-              <table className="w-full text-[13px]">
+              <table className="w-full text-[13px]" data-testid="query-results-table">
                 <thead className="bg-slate-50 sticky top-0">
                   <tr>
                     {results.columns?.map((col, i) => (

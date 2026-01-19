@@ -1,6 +1,6 @@
 """Connection management endpoints with session support."""
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Request, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, Dict
@@ -8,6 +8,7 @@ import snowflake.connector
 from snowflake.connector.errors import DatabaseError, OperationalError, ProgrammingError
 from app.services.session import session_manager
 from app.utils.logger import logger
+from app.config import settings
 import time
 from collections import defaultdict
 import threading
@@ -332,13 +333,26 @@ async def disconnect(
 
 
 @router.get("/sessions")
-async def list_sessions():
+async def list_sessions(include_full_ids: bool = False):
     """Debug: list active sessions. Secure in production!"""
-    return session_manager.get_stats()
+    if not settings.debug:
+        raise HTTPException(status_code=403, detail="Disabled in production")
+    return session_manager.get_stats(include_full_ids=False)
 
 
 @router.get("/health")
 async def health():
-    """Health check."""
+    """
+    Health check with session stats.
+    
+    Note: The root /health endpoint also provides serverInstanceId for 
+    frontend restart detection. This endpoint is under /api prefix.
+    """
+    from app.main import SERVER_INSTANCE_ID, SERVER_START_TIME
     stats = session_manager.get_stats()
-    return {"status": "healthy", "active_sessions": stats["active_sessions"]}
+    return {
+        "status": "healthy",
+        "active_sessions": stats["active_sessions"],
+        "serverInstanceId": SERVER_INSTANCE_ID,
+        "startedAt": SERVER_START_TIME,
+    }

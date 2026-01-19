@@ -1,0 +1,501 @@
+[
+  {
+    "database": "ATLAN_GOLD",
+    "schema": "PUBLIC",
+    "primary_table": "ASSETS",
+    "table_columns": 25,
+    "total_fields": 31,
+    "found_fields": 14,
+    "results": [
+      {
+        "field_id": "guid",
+        "display_name": "GUID",
+        "category": "identity",
+        "expected_columns": [
+          "GUID"
+        ],
+        "matched_column": "GUID",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 859928,
+        "total_count": 859928,
+        "coverage_percent": 100.0
+      },
+      {
+        "field_id": "name",
+        "display_name": "Name",
+        "category": "identity",
+        "expected_columns": [
+          "ASSET_NAME",
+          "NAME"
+        ],
+        "matched_column": "ASSET_NAME",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 859621,
+        "total_count": 859928,
+        "coverage_percent": 99.96429933668865
+      },
+      {
+        "field_id": "asset_type",
+        "display_name": "Asset Type",
+        "category": "identity",
+        "expected_columns": [
+          "ASSET_TYPE",
+          "TYPE_NAME",
+          "TYPENAME"
+        ],
+        "matched_column": "ASSET_TYPE",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 859928,
+        "total_count": 859928,
+        "coverage_percent": 100.0
+      },
+      {
+        "field_id": "qualified_name",
+        "display_name": "Qualified Name",
+        "category": "identity",
+        "expected_columns": [
+          "ASSET_QUALIFIED_NAME",
+          "QUALIFIED_NAME",
+          "QUALIFIEDNAME"
+        ],
+        "matched_column": "ASSET_QUALIFIED_NAME",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 859928,
+        "total_count": 859928,
+        "coverage_percent": 100.0
+      },
+      {
+        "field_id": "status",
+        "display_name": "Status",
+        "category": "identity",
+        "expected_columns": [
+          "STATUS"
+        ],
+        "matched_column": "STATUS",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 859928,
+        "total_count": 859928,
+        "coverage_percent": 100.0
+      },
+      {
+        "field_id": "connector_name",
+        "display_name": "Connector Name",
+        "category": "identity",
+        "expected_columns": [
+          "CONNECTOR_NAME",
+          "CONNECTORNAME"
+        ],
+        "matched_column": "CONNECTOR_NAME",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 841173,
+        "total_count": 859928,
+        "coverage_percent": 97.81900345145175
+      },
+      {
+        "field_id": "owner_users",
+        "display_name": "Owner Users",
+        "category": "ownership",
+        "expected_columns": [
+          "OWNER_USERS",
+          "OWNERUSERS"
+        ],
+        "matched_column": "OWNER_USERS",
+        "found": true,
+        "data_type": "ARRAY(VARCHAR(16777216))",
+        "populated_count": 62975,
+        "total_count": 859928,
+        "coverage_percent": 7.323287531049111
+      },
+      {
+        "field_id": "owner_groups",
+        "display_name": "Owner Groups",
+        "category": "ownership",
+        "expected_columns": [
+          "OWNER_GROUPS",
+          "OWNERGROUPS"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "admin_users",
+        "display_name": "Admin Users",
+        "category": "ownership",
+        "expected_columns": [
+          "ADMIN_USERS",
+          "ADMINUSERS"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "admin_groups",
+        "display_name": "Admin Groups",
+        "category": "ownership",
+        "expected_columns": [
+          "ADMIN_GROUPS",
+          "ADMINGROUPS"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "description",
+        "display_name": "Description",
+        "category": "documentation",
+        "expected_columns": [
+          "DESCRIPTION",
+          "USER_DESCRIPTION",
+          "USERDESCRIPTION"
+        ],
+        "matched_column": "DESCRIPTION",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 373114,
+        "total_count": 859928,
+        "coverage_percent": 43.38898140309421
+      },
+      {
+        "field_id": "readme",
+        "display_name": "README",
+        "category": "documentation",
+        "expected_columns": [
+          "README",
+          "README_GUID",
+          "READMEGUID"
+        ],
+        "matched_column": "README_GUID",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 416,
+        "total_count": 859928,
+        "coverage_percent": 0.0483761431189588
+      },
+      {
+        "field_id": "glossary_terms",
+        "display_name": "Glossary Terms",
+        "category": "documentation",
+        "expected_columns": [
+          "TERM_GUIDS",
+          "TERMGUIDS",
+          "MEANINGS",
+          "ASSIGNEDTERMS"
+        ],
+        "matched_column": "TERM_GUIDS",
+        "found": true,
+        "data_type": "ARRAY(VARCHAR(16777216))",
+        "populated_count": 708,
+        "total_count": 859928,
+        "coverage_percent": 0.08233247434668949
+      },
+      {
+        "field_id": "has_lineage",
+        "display_name": "Has Lineage",
+        "category": "lineage",
+        "expected_columns": [
+          "HAS_LINEAGE",
+          "HASLINEAGE",
+          "__HASLINEAGE"
+        ],
+        "matched_column": "HAS_LINEAGE",
+        "found": true,
+        "data_type": "BOOLEAN",
+        "populated_count": 331650,
+        "total_count": 859928,
+        "coverage_percent": 38.567182368756455
+      },
+      {
+        "field_id": "is_primary_key",
+        "display_name": "Is Primary Key",
+        "category": "lineage",
+        "expected_columns": [
+          "IS_PRIMARY_KEY",
+          "ISPRIMARYKEY"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "is_foreign_key",
+        "display_name": "Is Foreign Key",
+        "category": "lineage",
+        "expected_columns": [
+          "IS_FOREIGN_KEY",
+          "ISFOREIGNKEY"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "tags",
+        "display_name": "Tags",
+        "category": "governance",
+        "expected_columns": [
+          "TAGS",
+          "CLASSIFICATIONNAMES",
+          "CLASSIFICATION_NAMES"
+        ],
+        "matched_column": "TAGS",
+        "found": true,
+        "data_type": "ARRAY",
+        "populated_count": 109470,
+        "total_count": 859928,
+        "coverage_percent": 12.730135546231777
+      },
+      {
+        "field_id": "certificate_status",
+        "display_name": "Certificate Status",
+        "category": "governance",
+        "expected_columns": [
+          "CERTIFICATE_STATUS",
+          "CERTIFICATESTATUS"
+        ],
+        "matched_column": "CERTIFICATE_STATUS",
+        "found": true,
+        "data_type": "VARCHAR(16777216)",
+        "populated_count": 49242,
+        "total_count": 859928,
+        "coverage_percent": 5.726293364095598
+      },
+      {
+        "field_id": "certificate_message",
+        "display_name": "Certificate Message",
+        "category": "governance",
+        "expected_columns": [
+          "CERTIFICATE_STATUS_MESSAGE",
+          "CERTIFICATESTATUSMESSAGE"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "policy_count",
+        "display_name": "Policy Count",
+        "category": "governance",
+        "expected_columns": [
+          "ASSET_POLICIES_COUNT",
+          "ASSETPOLICIESCOUNT"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "dq_soda_status",
+        "display_name": "Soda DQ Status",
+        "category": "quality",
+        "expected_columns": [
+          "ASSET_SODA_DQ_STATUS",
+          "ASSETSODADQSTATUS"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "mc_is_monitored",
+        "display_name": "Monte Carlo Monitored",
+        "category": "quality",
+        "expected_columns": [
+          "ASSET_MC_IS_MONITORED",
+          "ASSETMCISMONITORED"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "popularity_score",
+        "display_name": "Popularity Score",
+        "category": "usage",
+        "expected_columns": [
+          "POPULARITY_SCORE",
+          "POPULARITYSCORE"
+        ],
+        "matched_column": "POPULARITY_SCORE",
+        "found": true,
+        "data_type": "FLOAT",
+        "populated_count": 859928,
+        "total_count": 859928,
+        "coverage_percent": 100.0
+      },
+      {
+        "field_id": "query_count",
+        "display_name": "Query Count",
+        "category": "usage",
+        "expected_columns": [
+          "QUERY_COUNT",
+          "QUERYCOUNT"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "query_user_count",
+        "display_name": "Query User Count",
+        "category": "usage",
+        "expected_columns": [
+          "QUERY_USER_COUNT",
+          "QUERYUSERCOUNT"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "connection_qualified_name",
+        "display_name": "Connection Qualified Name",
+        "category": "hierarchy",
+        "expected_columns": [
+          "CONNECTION_QUALIFIED_NAME",
+          "CONNECTIONQUALIFIEDNAME"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "database_qualified_name",
+        "display_name": "Database Qualified Name",
+        "category": "hierarchy",
+        "expected_columns": [
+          "DATABASE_QUALIFIED_NAME",
+          "DATABASEQUALIFIEDNAME"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "schema_qualified_name",
+        "display_name": "Schema Qualified Name",
+        "category": "hierarchy",
+        "expected_columns": [
+          "SCHEMA_QUALIFIED_NAME",
+          "SCHEMAQUALIFIEDNAME"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "domain_guids",
+        "display_name": "Domain GUIDs",
+        "category": "hierarchy",
+        "expected_columns": [
+          "DOMAIN_GUIDS",
+          "DOMAINGUIDS",
+          "__DOMAINGUIDS"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "created_at",
+        "display_name": "Created At",
+        "category": "lifecycle",
+        "expected_columns": [
+          "CREATE_TIME",
+          "CREATETIME",
+          "__TIMESTAMP"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      },
+      {
+        "field_id": "updated_at",
+        "display_name": "Updated At",
+        "category": "lifecycle",
+        "expected_columns": [
+          "UPDATE_TIME",
+          "UPDATETIME",
+          "__MODIFICATIONTIMESTAMP"
+        ],
+        "matched_column": null,
+        "found": false,
+        "data_type": null,
+        "populated_count": 0,
+        "total_count": 0,
+        "coverage_percent": 0.0
+      }
+    ]
+  },
+  {
+    "error": "No assets table found",
+    "database": "WIDE_WORLD_IMPORTERS",
+    "schema": "PROCESSED_GOLD",
+    "tables": [
+      "DIM_CUSTOMER",
+      "DIM_CUSTOMER_SP",
+      "DIM_CUSTOMER_STP",
+      "DIM_EMPLOYEE",
+      "DIM_STOCKITEM",
+      "FACT_INVOICES",
+      "FACT_ORDERS",
+      "PRODUCTION_TRACKING"
+    ]
+  }
+]

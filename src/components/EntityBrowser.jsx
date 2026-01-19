@@ -12,7 +12,8 @@ import {
   Table2, BookOpen, GitBranch, ShieldCheck, BarChart3,
   LayoutGrid, Database, Workflow, BarChart2, FileCode,
   HardDrive, Clock, Search, PanelLeftClose, PanelLeft,
-  Share2, Boxes, TableProperties, Terminal, Home, Sparkles
+  Share2, Boxes, TableProperties, Terminal, Home, Sparkles,
+  Target, Layers, Settings
 } from 'lucide-react';
 import {
   SIDEBAR_STYLES,
@@ -28,6 +29,9 @@ import {
 const CATEGORIES = [
   // HOME - Discovery landing
   { id: 'home', label: 'Explore', icon: Sparkles, group: 'home' },
+
+  // GOLD LAYER - Curated views (NEW)
+  { id: 'gold', label: 'Gold Layer', icon: Database, group: 'gold' },
 
   // EXPLORE group
   { id: 'core', label: 'Core', icon: Table2, group: 'explore' },
@@ -48,10 +52,13 @@ const CATEGORIES = [
 
   // MANAGE group
   { id: 'governance', label: 'Governance', icon: ShieldCheck, group: 'manage' },
+  { id: 'modeling', label: 'Modeling', icon: Layers, group: 'manage' },
+  { id: 'evaluation', label: 'Assessment', icon: Target, group: 'manage' },
 ];
 
 const GROUPS = [
   { id: 'home', label: 'HOME' },
+  { id: 'gold', label: 'GOLD LAYER' },  // Curated MDLH views
   { id: 'explore', label: 'BROWSE' },
   { id: 'dataflow', label: 'DATA FLOW' },
   { id: 'integrations', label: 'INTEGRATIONS' },
@@ -66,6 +73,7 @@ function CategoryItem({ category, isSelected, onClick }) {
     <button
       type="button"
       onClick={() => onClick(category)}
+      data-testid={`nav-${category.id}`}
       className={`
         w-full flex items-center gap-3 px-3 py-2 text-sm rounded-lg transition-all
         ${isSelected
@@ -241,6 +249,13 @@ export default function EntityBrowser({
             onClick={() => onCategoryChange?.('editor')}
             position="left"
           />
+          <RailButton
+            icon={Settings}
+            label="Tenant Config"
+            isActive={selectedCategory === 'tenant-config'}
+            onClick={() => onCategoryChange?.('tenant-config')}
+            position="left"
+          />
         </div>
       </CollapsedRailContainer>
     );
@@ -281,6 +296,7 @@ export default function EntityBrowser({
         <button
           type="button"
           onClick={() => onCategoryChange?.('pivot')}
+          data-testid="nav-pivot"
           className={`
             w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-all
             ${selectedCategory === 'pivot'
@@ -295,6 +311,7 @@ export default function EntityBrowser({
         <button
           type="button"
           onClick={() => onCategoryChange?.('editor')}
+          data-testid="nav-editor"
           className={`
             w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-all
             ${selectedCategory === 'editor'
@@ -305,6 +322,21 @@ export default function EntityBrowser({
         >
           <Terminal size={18} />
           <span>Query Editor</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onCategoryChange?.('tenant-config')}
+          data-testid="nav-tenant-config"
+          className={`
+            w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-all
+            ${selectedCategory === 'tenant-config'
+              ? 'bg-purple-100 text-purple-700 font-medium'
+              : 'text-purple-600 hover:bg-purple-50'
+            }
+          `}
+        >
+          <Settings size={18} />
+          <span>Tenant Config</span>
         </button>
       </div>
 

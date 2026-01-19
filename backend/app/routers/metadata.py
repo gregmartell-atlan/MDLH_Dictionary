@@ -12,6 +12,7 @@ from app.services import metadata_cache
 from app.utils.logger import logger
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
+METADATA_STATEMENT_TIMEOUT_SECONDS = 30
 
 
 def _validate_identifier(name: str) -> str:
@@ -81,6 +82,7 @@ async def list_databases(
     
     try:
         cursor = session.conn.cursor()
+        cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {METADATA_STATEMENT_TIMEOUT_SECONDS}")
         cursor.execute("SHOW DATABASES")
         
         databases = []
@@ -119,6 +121,7 @@ async def list_schemas(
     try:
         safe_db = _validate_identifier(database)
         cursor = session.conn.cursor()
+        cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {METADATA_STATEMENT_TIMEOUT_SECONDS}")
         cursor.execute(f"SHOW SCHEMAS IN DATABASE {safe_db}")
         
         schemas = []
@@ -165,6 +168,7 @@ async def list_tables(
         safe_schema_literal = schema.replace("'", "''")
         
         cursor = session.conn.cursor()
+        cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {METADATA_STATEMENT_TIMEOUT_SECONDS}")
         
         # Query INFORMATION_SCHEMA for accurate row counts
         # This is more reliable than SHOW TABLES which can have stale row_count
@@ -237,6 +241,7 @@ async def list_columns(
         safe_table = _validate_identifier(table)
         
         cursor = session.conn.cursor()
+        cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {METADATA_STATEMENT_TIMEOUT_SECONDS}")
         cursor.execute(f"DESCRIBE TABLE {safe_db}.{safe_schema}.{safe_table}")
         
         columns = []

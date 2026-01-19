@@ -1,2 +1,0 @@
-# Snowflake Query API Backend
-

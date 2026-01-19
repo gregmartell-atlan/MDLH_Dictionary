@@ -20,6 +20,7 @@ import {
 import { FREQUENCY_STYLES } from '../data/queryTemplates';
 import { validateQueryTables, getSuggestedAlternatives } from '../utils/dynamicExampleQueries';
 import { getTableFriendlyName, categorizeMissingTables } from '../utils/queryAvailability';
+import { GoldBadge, GoldLayerBanner, isGoldLayerQuery, getGoldTablesFromQuery } from './ui/GoldBadge';
 
 // ============================================================================
 // CSS Keyframes (injected once)
@@ -315,11 +316,17 @@ function QueryCardEnhanced({
   source = null,
   warning = null,
   confidence = null,
-  index = 0
+  index = 0,
+  // Gold Layer props
+  goldTables = null
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [copied, setCopied] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  
+  // Check if this is a Gold Layer query
+  const isGold = goldTables?.length > 0 || isGoldLayerQuery(query);
+  const detectedGoldTables = goldTables || getGoldTablesFromQuery(query);
 
   // Status computation
   const isValidated = validated === true || tableAvailable === true || validationResult?.status === 'success';
@@ -387,13 +394,21 @@ function QueryCardEnhanced({
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex-1 min-w-0 flex items-start gap-3">
-          {/* Priority Badge - Compact */}
+          {/* Gold Badge or Priority Badge - Compact */}
           <div className="flex-shrink-0 pt-0.5">
-            <PriorityBadge priority={frequency} detail={frequencyDetail} compact />
+            {isGold ? (
+              <GoldBadge variant="compact" size="sm" animated />
+            ) : (
+              <PriorityBadge priority={frequency} detail={frequencyDetail} compact />
+            )}
           </div>
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
+              {/* Gold indicator inline with title */}
+              {isGold && (
+                <GoldBadge variant="default" size="xs" label="Gold" />
+              )}
               <h4 className="font-semibold text-slate-900 text-sm truncate">
                 {title}
               </h4>
@@ -409,6 +424,12 @@ function QueryCardEnhanced({
 
             <p className="text-slate-500 text-xs mt-0.5 line-clamp-1">
               {description}
+              {/* Show Gold tables inline */}
+              {isGold && detectedGoldTables.length > 0 && (
+                <span className="ml-1 text-amber-600 font-mono text-[10px]">
+                  • {detectedGoldTables.slice(0, 2).map(t => t.split('.').pop()).join(', ')}
+                </span>
+              )}
             </p>
 
             {/* Row count badge */}
@@ -861,6 +882,15 @@ export default function QueryLibraryEnhanced({
           </div>
         )}
 
+        {/* Gold Layer Banner - show when viewing Gold category */}
+        {categoryLabel?.toLowerCase().includes('gold') && !searchFilter && (
+          <GoldLayerBanner 
+            title="Gold Layer Queries"
+            subtitle="Production-ready queries using curated GOLD schema views. Pre-joined and optimized for common use cases."
+            compact={false}
+          />
+        )}
+        
         {/* Recommended Sections */}
         {smartRecommendations.length > 0 && !searchFilter && (
           <RecommendedSection
@@ -977,6 +1007,7 @@ export default function QueryLibraryEnhanced({
                   warning={q.warning}
                   confidence={q.confidence}
                   index={i}
+                  goldTables={q.goldTables}
                 />
               </div>
             );

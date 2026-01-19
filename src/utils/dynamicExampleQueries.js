@@ -168,8 +168,19 @@ export function buildTableMapping(discoveredTables) {
 }
 
 /**
+ * Known Gold Layer table names
+ * These are the canonical names used in GOLD.* queries
+ */
+const GOLD_TABLE_NAMES = [
+  'ASSETS', 'README', 'TAGS', 'CUSTOM_METADATA', 'GLOSSARY_DETAILS',
+  'DATA_QUALITY_DETAILS', 'PIPELINE_DETAILS', 'RELATIONAL_ASSET_DETAILS',
+  'DATA_MESH_DETAILS', 'FULL_LINEAGE', 'ASSET_LOOKUP_TABLE'
+];
+
+/**
  * Extract ALL table names referenced in a SQL query
  * Looks for patterns like FROM TABLE, JOIN TABLE, etc.
+ * Also detects Gold Layer tables (GOLD.ASSETS, etc.)
  * @param {string} sql - SQL query
  * @returns {string[]} Array of table names (uppercase)
  */
@@ -204,12 +215,29 @@ export function extractAllReferencedTables(sql) {
     }
   }
   
+  // Also extract GOLD.* table references (Gold Layer tables)
+  // These use a different pattern: GOLD.TABLENAME
+  const goldPattern = /\bGOLD\.(\w+)\b/gi;
+  let goldMatch;
+  while ((goldMatch = goldPattern.exec(sql)) !== null) {
+    const tableName = goldMatch[1].toUpperCase();
+    // Only add if it's a known Gold table name
+    if (GOLD_TABLE_NAMES.includes(tableName)) {
+      tables.add(`GOLD.${tableName}`);
+    }
+  }
+  
   return Array.from(tables);
 }
 
 /**
  * Check if ALL tables referenced in a query exist in discoveredTables
  * This is the CRITICAL validation function - returns false if ANY table is missing
+ * 
+ * For Gold Layer tables (GOLD.ASSETS, etc.), we check if:
+ * 1. The exact name exists (e.g., "ASSETS", "FULL_LINEAGE")
+ * 2. Or a prefixed version exists (e.g., "GOLD_ASSETS", "GOLD.ASSETS")
+ * 
  * @param {string} sql - SQL query
  * @param {Set<string>|string[]} discoveredTables - Tables from schema scan
  * @returns {{valid: boolean, missingTables: string[], foundTables: string[]}}
@@ -231,16 +259,46 @@ export function validateQueryTables(sql, discoveredTables) {
   const foundTables = [];
   
   for (const table of referencedTables) {
-    // Check if table exists directly or via mapping
-    if (tableSet.has(table)) {
-      foundTables.push(table);
-    } else {
-      // Try to find an alternative
-      const alternative = findActualTableName(table, tableSet);
-      if (alternative) {
-        foundTables.push(alternative);
+    // Handle Gold Layer tables specially (e.g., "GOLD.ASSETS")
+    if (table.startsWith('GOLD.')) {
+      const goldTableName = table.replace('GOLD.', '');
+      // Check various possible locations for Gold tables:
+      // 1. Direct match (ASSETS)
+      // 2. With GOLD prefix (GOLD_ASSETS)
+      // 3. With GOLD. prefix (GOLD.ASSETS)
+      // 4. In PUBLIC schema
+      if (tableSet.has(goldTableName) ||
+          tableSet.has(`GOLD_${goldTableName}`) ||
+          tableSet.has(`GOLD.${goldTableName}`) ||
+          tableSet.has(`PUBLIC.${goldTableName}`)) {
+        foundTables.push(table);
       } else {
-        missingTables.push(table);
+        // Also check if any table contains the gold table name as suffix
+        let found = false;
+        for (const discovered of tableSet) {
+          if (discovered.endsWith(goldTableName) || 
+              discovered.endsWith(`.${goldTableName}`)) {
+            foundTables.push(discovered);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          missingTables.push(table);
+        }
+      }
+    } else {
+      // Standard table validation
+      if (tableSet.has(table)) {
+        foundTables.push(table);
+      } else {
+        // Try to find an alternative
+        const alternative = findActualTableName(table, tableSet);
+        if (alternative) {
+          foundTables.push(alternative);
+        } else {
+          missingTables.push(table);
+        }
       }
     }
   }

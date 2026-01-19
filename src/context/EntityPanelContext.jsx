@@ -3,8 +3,7 @@
  *
  * Provides expand/collapse control from anywhere in the app:
  * - isExpanded: Whether the panel is in expanded (full editor) mode
- * - isPinned: Whether the panel is pinned open (vs hover-only)
- * - isHovered: Whether mouse is over the panel/rail
+ * - isPinned: Whether the panel is pinned open
  * - expand(): Expand the panel
  * - collapse(): Collapse the panel
  * - toggle(): Toggle expanded state
@@ -12,28 +11,18 @@
  * - unpin(): Unpin the panel
  * - loadQuery(sql): Load a query and expand
  *
- * Hover behavior matches left sidebar:
- * - 150ms delay on enter (prevent accidental triggers)
- * - 300ms delay on leave (prevent premature close)
+ * Note: Hover behavior removed - panel now uses explicit expand/collapse buttons only
  */
 
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-
-// Hover timing constants (shared with left sidebar)
-const HOVER_ENTER_DELAY = 150;
-const HOVER_LEAVE_DELAY = 300;
+import React, { createContext, useContext, useState, useCallback } from 'react';
 
 const EntityPanelContext = createContext(null);
 
 export function EntityPanelProvider({ children }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
   const [pendingQuery, setPendingQuery] = useState(null);
   const [pendingTab, setPendingTab] = useState(null); // Tab to switch to
-
-  // Hover timeout ref for consistent timing
-  const hoverTimeoutRef = useRef(null);
 
   const expand = useCallback(() => {
     setIsExpanded(true);
@@ -61,27 +50,6 @@ export function EntityPanelProvider({ children }) {
       if (!prev) setIsExpanded(true);
       return !prev;
     });
-  }, []);
-
-  // Hover handlers with timeouts (matching left sidebar behavior)
-  const handleMouseEnter = useCallback(() => {
-    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
-    hoverTimeoutRef.current = setTimeout(() => {
-      setIsHovered(true);
-    }, HOVER_ENTER_DELAY);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
-    hoverTimeoutRef.current = setTimeout(() => {
-      setIsHovered(false);
-    }, HOVER_LEAVE_DELAY);
-  }, []);
-
-  // Direct setter for backwards compatibility
-  const setHovered = useCallback((hovered) => {
-    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
-    setIsHovered(hovered);
   }, []);
 
   // Load a query into the editor and expand the panel
@@ -112,15 +80,13 @@ export function EntityPanelProvider({ children }) {
     return tab;
   }, [pendingTab]);
 
-  // Computed: panel should be visible (pinned or hovered)
-  const isVisible = isPinned || isHovered;
-  // Show full panel when pinned OR hovered (matching left sidebar)
-  const showPanel = isPinned || isHovered;
+  // Computed: panel should be visible when pinned or expanded
+  const isVisible = isPinned || isExpanded;
+  const showPanel = isPinned || isExpanded;
 
   const value = {
     isExpanded,
     isPinned,
-    isHovered,
     isVisible,
     showPanel,
     expand,
@@ -129,9 +95,6 @@ export function EntityPanelProvider({ children }) {
     pin,
     unpin,
     togglePin,
-    setHovered,
-    handleMouseEnter,
-    handleMouseLeave,
     loadQuery,
     openToTab,
     pendingQuery,

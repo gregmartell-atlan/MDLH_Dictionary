@@ -314,7 +314,7 @@ class SessionManager:
             if expired:
                 print(f"[SessionManager] Cleaned up {len(expired)} expired sessions")
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self, include_full_ids: bool = False) -> Dict[str, Any]:
         """Get session manager statistics."""
         with self._lock:
             return {
@@ -322,7 +322,7 @@ class SessionManager:
                 "max_idle_minutes": self._max_idle_minutes,
                 "sessions": [
                     {
-                        "session_id": sid[:8] + "...",
+                        "session_id": sid if include_full_ids else (sid[:8] + "..."),
                         "user": s.user,
                         "warehouse": s.warehouse,
                         "idle_seconds": (datetime.utcnow() - s.last_used).total_seconds(),

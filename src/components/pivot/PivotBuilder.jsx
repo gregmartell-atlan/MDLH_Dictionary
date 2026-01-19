@@ -1,342 +1,568 @@
 /**
- * PivotBuilder - Main pivot table builder component
- *
- * Excel-style drag-and-drop interface for building aggregation queries
- * without writing SQL. Generates and executes safe SQL queries.
+ * Pivot Builder
+ * 
+ * Interactive pivot table builder with:
+ * - Pre-built pivot gallery
+ * - Custom pivot configuration
+ * - Live SQL generation and execution
+ * - Results visualization
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Play, Code2, Download, RotateCcw, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
-import { usePivotConfig } from '../../hooks/usePivotConfig';
-import { useFieldDiscovery } from '../../hooks/useFieldDiscovery';
-import { useQuery } from '../../hooks/useSnowflake';
-import { generatePivotSQL, validatePivotConfig } from '../../utils/pivotSQLGenerator';
-import { getRecommendedPivots } from '../../utils/pivotTemplates';
-import { PivotConfigPanel } from './PivotConfigPanel';
-import { TemplateSelector } from './TemplateSelector';
-import ResultsTable from '../ResultsTable';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import {
+  LayoutGrid,
+  Plus,
+  Play,
+  RefreshCw,
+  ChevronRight,
+  Database,
+  Table2,
+  Download,
+  Copy,
+  Check,
+  X,
+  ArrowUpDown,
+  Layers,
+  BarChart3,
+  Settings2,
+  Filter,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
+import { useConnection, useQuery } from '../../hooks/useSnowflake';
+import { useDynamicSchema } from '../../context/DynamicSchemaContext';
+import { PreBuiltPivotGallery } from './PreBuiltPivotGallery';
+import {
+  PIVOT_DIMENSIONS,
+  PIVOT_MEASURES,
+  generatePivotSQL,
+  buildCustomPivotSQL,
+  getPivotById,
+} from '../../data/prebuiltPivotRegistry';
+import { buildSafeFQN, escapeIdentifier } from '../../utils/queryHelpers';
 
-export function PivotBuilder({ database, schema, initialTable = null }) {
-  const [selectedTable, setSelectedTable] = useState(initialTable);
-  const [showSQL, setShowSQL] = useState(false);
+// =============================================================================
+// SUB-COMPONENTS
+// =============================================================================
 
-  // Hooks
-  const {
-    config,
-    addToZone,
-    removeFromZone,
-    reorderZone,
-    setAggregation,
-    setAvailableFields,
-    setSource,
-    setSQL,
-    setResults,
-    setLoading,
-    setError,
-    clearExecution,
-    resetConfig,
-  } = usePivotConfig(database, schema, selectedTable);
-
-  const { fields, loading: fieldsLoading, error: fieldsError } = useFieldDiscovery(
-    database,
-    schema,
-    selectedTable
+/**
+ * Dimension/Measure selector with drag-drop style
+ */
+function ItemSelector({ items, selected, onToggle, type = 'dimension' }) {
+  return (
+    <div className="space-y-1">
+      {Object.entries(items).map(([id, item]) => {
+        const isSelected = selected.includes(id);
+        return (
+          <button
+            key={id}
+            onClick={() => onToggle(id)}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors ${
+              isSelected
+                ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
+            }`}
+          >
+            <span className="text-base">{item.icon}</span>
+            <span className="flex-1 font-medium">{item.label}</span>
+            {isSelected && <Check size={14} className="text-indigo-600" />}
+          </button>
+        );
+      })}
+    </div>
   );
+}
 
-  const { executeQuery } = useQuery();
+/**
+ * Selected items display with reorder/remove
+ */
+function SelectedItems({ items, definitions, onRemove, onReorder, label }) {
+  if (items.length === 0) {
+    return (
+      <div className="text-center py-4 text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-lg">
+        No {label} selected
+      </div>
+    );
+  }
+  
+  return (
+    <div className="space-y-1">
+      {items.map((id, idx) => {
+        const def = definitions[id];
+        return (
+          <div
+            key={id}
+            className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg"
+          >
+            <span className="text-base">{def?.icon}</span>
+            <span className="flex-1 text-sm font-medium text-indigo-700">{def?.label || id}</span>
+            <button
+              onClick={() => onRemove(id)}
+              className="p-1 text-indigo-400 hover:text-indigo-600"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
-  // Get recommended templates based on table and fields
-  const recommendedTemplates = useMemo(() => {
-    if (!selectedTable || !fields || fields.length === 0) {
-      return [];
-    }
-    return getRecommendedPivots(selectedTable, fields);
-  }, [selectedTable, fields]);
+/**
+ * Results table
+ */
+function PivotResultsTable({ results, loading, error }) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <RefreshCw size={24} className="animate-spin text-indigo-500" />
+        <span className="ml-2 text-slate-500">Executing pivot query...</span>
+      </div>
+    );
+  }
+  
+  if (error) {
+    return (
+      <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+        <strong>Error:</strong> {error}
+      </div>
+    );
+  }
+  
+  if (!results || results.length === 0) {
+    return (
+      <div className="text-center py-12 text-slate-400">
+        <BarChart3 size={48} className="mx-auto mb-4 opacity-30" />
+        <p>No results yet. Run a pivot to see data.</p>
+      </div>
+    );
+  }
+  
+  // Get headers from first row
+  const headers = Object.keys(results[0]);
+  
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 border-b border-slate-200">
+          <tr>
+            {headers.map(header => (
+              <th 
+                key={header}
+                className="px-4 py-3 text-left font-medium text-slate-600 uppercase text-xs tracking-wide"
+              >
+                {header.replace(/_/g, ' ')}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {results.map((row, idx) => (
+            <tr key={idx} className="hover:bg-slate-50">
+              {headers.map(header => {
+                const value = row[header];
+                const isNumeric = typeof value === 'number';
+                
+                return (
+                  <td 
+                    key={header}
+                    className={`px-4 py-3 ${isNumeric ? 'text-right font-mono' : ''}`}
+                  >
+                    {value !== null && value !== undefined 
+                      ? (isNumeric && !Number.isInteger(value) 
+                          ? value.toFixed(1) 
+                          : value)
+                      : '—'
+                    }
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
-  // Update available fields when discovered
+// =============================================================================
+// MAIN COMPONENT
+// =============================================================================
+
+export function PivotBuilder({ database: propDatabase, schema: propSchema }) {
+  const { status: connectionStatus } = useConnection();
+  const isConnected = connectionStatus?.connected === true;
+  const { executeQuery, loading: queryLoading } = useQuery(connectionStatus);
+  const { discoveredTables, mdlhTableTypes } = useDynamicSchema();
+  
+  // State
+  const [activeTab, setActiveTab] = useState('gallery'); // 'gallery' | 'custom'
+  const [selectedDimensions, setSelectedDimensions] = useState([]);
+  const [selectedMeasures, setSelectedMeasures] = useState([]);
+  const [selectedTable, setSelectedTable] = useState(null);
+  const [generatedSQL, setGeneratedSQL] = useState('');
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [showSQL, setShowSQL] = useState(false);
+  const [copiedSQL, setCopiedSQL] = useState(false);
+  
+  // Available MDLH tables (ASSETS, LINEAGE, etc.)
+  const availableTables = useMemo(() => {
+    return discoveredTables.filter(t => 
+      (t.database === propDatabase && t.schema === propSchema) ||
+      mdlhTableTypes[t.fqn]
+    );
+  }, [discoveredTables, propDatabase, propSchema, mdlhTableTypes]);
+  
+  // Default to ASSETS table
   useEffect(() => {
-    if (fields.length > 0) {
-      setAvailableFields(fields);
+    if (!selectedTable && availableTables.length > 0) {
+      const assetsTable = availableTables.find(t => 
+        t.name.toUpperCase() === 'ASSETS' || 
+        mdlhTableTypes[t.fqn] === 'ASSETS'
+      );
+      setSelectedTable(assetsTable?.fqn || availableTables[0].fqn);
     }
-  }, [fields, setAvailableFields]);
-
-  // Update source when table changes
-  useEffect(() => {
-    if (database && schema && selectedTable) {
-      setSource(database, schema, selectedTable);
+  }, [availableTables, selectedTable, mdlhTableTypes]);
+  
+  // Table FQN for queries
+  const tableFqn = useMemo(() => {
+    if (selectedTable) return selectedTable;
+    if (propDatabase && propSchema) {
+      return buildSafeFQN(propDatabase, propSchema, 'ASSETS');
     }
-  }, [database, schema, selectedTable, setSource]);
-
-  // Generate SQL when configuration changes
-  useEffect(() => {
-    try {
-      // Only generate SQL if we have at least one value (measure)
-      if (config.values.length > 0) {
-        const sql = generatePivotSQL(config);
-        setSQL(sql);
-      } else {
-        setSQL(null);
-      }
-    } catch (err) {
-      console.error('[PivotBuilder] SQL generation error:', err);
-      setSQL(null);
-    }
-    // Only depend on the pivot configuration parts, not execution state
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    config.rows,
-    config.columns,
-    config.values,
-    config.filters,
-    config.source.database,
-    config.source.schema,
-    config.source.table,
-    setSQL,
-  ]);
-
-  // Execute query
-  const handleRunQuery = async () => {
-    // Validate configuration
-    const validation = validatePivotConfig(config);
-    if (!validation.valid) {
-      setError(validation.errors.join(', '));
+    return null;
+  }, [selectedTable, propDatabase, propSchema]);
+  
+  // ==========================================================================
+  // HANDLERS
+  // ==========================================================================
+  
+  const toggleDimension = useCallback((dimId) => {
+    setSelectedDimensions(prev => 
+      prev.includes(dimId) 
+        ? prev.filter(d => d !== dimId)
+        : [...prev, dimId]
+    );
+  }, []);
+  
+  const toggleMeasure = useCallback((measureId) => {
+    setSelectedMeasures(prev => 
+      prev.includes(measureId) 
+        ? prev.filter(m => m !== measureId)
+        : [...prev, measureId]
+    );
+  }, []);
+  
+  const removeDimension = useCallback((dimId) => {
+    setSelectedDimensions(prev => prev.filter(d => d !== dimId));
+  }, []);
+  
+  const removeMeasure = useCallback((measureId) => {
+    setSelectedMeasures(prev => prev.filter(m => m !== measureId));
+  }, []);
+  
+  const handlePrebuiltSelect = useCallback((pivot) => {
+    // Set dimensions and measures from pre-built pivot
+    setSelectedDimensions(pivot.rowDimensions);
+    setSelectedMeasures(pivot.measures);
+    setGeneratedSQL(pivot.generatedSQL || generatePivotSQL(pivot.id, tableFqn));
+    setActiveTab('custom'); // Switch to custom to show the configuration
+    setShowSQL(true);
+  }, [tableFqn]);
+  
+  const generateSQL = useCallback(() => {
+    if (!tableFqn || selectedDimensions.length === 0 || selectedMeasures.length === 0) {
+      setError('Please select at least one dimension and one measure');
       return;
     }
-
+    
+    const sql = buildCustomPivotSQL(selectedDimensions, selectedMeasures, tableFqn);
+    setGeneratedSQL(sql);
+    setShowSQL(true);
+  }, [tableFqn, selectedDimensions, selectedMeasures]);
+  
+  const executePivot = useCallback(async () => {
+    if (!generatedSQL || !isConnected) {
+      setError('Generate SQL first or connect to Snowflake');
+      return;
+    }
+    
+    setLoading(true);
+    setError(null);
+    setResults(null);
+    
     try {
-      setLoading(true);
-      setError(null);
-
-      const sql = generatePivotSQL(config);
-      const results = await executeQuery(sql);
-
-      setResults(results);
+      const result = await executeQuery(generatedSQL, { 
+        database: propDatabase, 
+        schema: propSchema 
+      });
+      
+      // Normalize results
+      if (result && Array.isArray(result.rows)) {
+        setResults(result.rows);
+      } else if (Array.isArray(result)) {
+        setResults(result);
+      } else {
+        setResults([]);
+      }
     } catch (err) {
-      console.error('[PivotBuilder] Query execution error:', err);
+      console.error('[PivotBuilder] Query error:', err);
       setError(err.message || 'Failed to execute query');
     } finally {
       setLoading(false);
     }
-  };
-
-  // Handle table selection
-  const handleTableChange = (e) => {
-    const table = e.target.value;
-    setSelectedTable(table);
-    clearExecution();
-  };
-
-  // Handle template application
-  const handleApplyTemplate = (template) => {
-    if (!template.enrichedConfig) {
-      console.error('[PivotBuilder] Template missing enriched config');
-      return;
-    }
-
-    // Clear current configuration
-    resetConfig();
-
-    // Apply template configuration
-    const config = template.enrichedConfig;
-
-    // Add rows
-    config.rows.forEach(field => {
-      addToZone('rows', field);
-    });
-
-    // Add columns
-    config.columns.forEach(field => {
-      addToZone('columns', field);
-    });
-
-    // Add values
-    config.values.forEach(field => {
-      addToZone('values', field);
-    });
-
-    // Add filters
-    config.filters.forEach(filter => {
-      addToZone('filters', filter);
-    });
-
-    console.log('[PivotBuilder] Applied template:', template.name);
-  };
-
-  const canRunQuery = config.values.length > 0 && config.execution.sql;
-
+  }, [generatedSQL, isConnected, executeQuery, propDatabase, propSchema]);
+  
+  const copySQL = useCallback(() => {
+    navigator.clipboard.writeText(generatedSQL);
+    setCopiedSQL(true);
+    setTimeout(() => setCopiedSQL(false), 2000);
+  }, [generatedSQL]);
+  
+  const exportResults = useCallback(() => {
+    if (!results) return;
+    
+    const csv = [
+      Object.keys(results[0]).join(','),
+      ...results.map(row => Object.values(row).join(','))
+    ].join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pivot_results_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [results]);
+  
+  // ==========================================================================
+  // RENDER
+  // ==========================================================================
+  
   return (
-    <div className="flex h-full bg-white">
-      {/* Left Panel: Configuration */}
-      <div className="w-96 flex-shrink-0">
-        <PivotConfigPanel
-          fields={fields}
-          fieldsLoading={fieldsLoading}
-          fieldsError={fieldsError}
-          config={config}
-          onAddToZone={addToZone}
-          onRemoveFromZone={removeFromZone}
-          onReorderZone={reorderZone}
-          recommendedTemplates={recommendedTemplates}
-          onApplyTemplate={handleApplyTemplate}
-        />
-      </div>
-
-      {/* Right Panel: Results */}
-      <div className="flex-1 flex flex-col">
-        {/* Toolbar */}
-        <div className="flex-shrink-0 p-4 border-b border-slate-200 bg-slate-50">
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="bg-white border-b border-slate-200 px-6 py-4">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Table selector */}
-            <div className="flex-1">
-              <label className="block text-xs font-semibold text-slate-600 mb-1">
-                Select Table
-              </label>
-              <input
-                type="text"
-                value={selectedTable || ''}
-                onChange={handleTableChange}
-                placeholder="e.g., TABLE_ENTITY"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
-              />
+            <div className="p-2 bg-indigo-100 rounded-lg">
+              <LayoutGrid size={24} className="text-indigo-600" />
             </div>
-
-            {/* Action buttons */}
-            <div className="flex items-center gap-2 mt-5">
-              {/* Run Query */}
-              <button
-                onClick={handleRunQuery}
-                disabled={!canRunQuery || config.execution.loading}
-                className={`
-                  flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg transition-colors
-                  ${canRunQuery && !config.execution.loading
-                    ? 'bg-blue-600 text-white hover:bg-blue-700'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                  }
-                `}
-              >
-                {config.execution.loading ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    Running...
-                  </>
-                ) : (
-                  <>
-                    <Play size={16} />
-                    Run Query
-                  </>
-                )}
-              </button>
-
-              {/* Show SQL */}
-              <button
-                onClick={() => setShowSQL(!showSQL)}
-                disabled={!config.execution.sql}
-                className="flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Code2 size={16} />
-                {showSQL ? 'Hide SQL' : 'Show SQL'}
-              </button>
-
-              {/* Reset */}
-              <button
-                onClick={resetConfig}
-                className="flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
-                title="Reset configuration"
-              >
-                <RotateCcw size={16} />
-              </button>
+            <div>
+              <h1 className="text-xl font-bold text-slate-800">Pivot Builder</h1>
+              <p className="text-sm text-slate-500">
+                Build and execute pivot tables against MDLH
+              </p>
             </div>
           </div>
-
-          {/* SQL Preview */}
-          {showSQL && config.execution.sql && (
-            <div className="mt-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-slate-600">Generated SQL</span>
+          
+          {/* Table selector */}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Table2 size={16} className="text-slate-400" />
+              <select
+                value={selectedTable || ''}
+                onChange={(e) => setSelectedTable(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500"
+              >
+                {availableTables.map(t => (
+                  <option key={t.fqn} value={t.fqn}>
+                    {t.name}
+                  </option>
+                ))}
+                {availableTables.length === 0 && (
+                  <option value="">No tables discovered</option>
+                )}
+              </select>
+            </div>
+            
+            {/* Connection status */}
+            <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs ${
+              isConnected ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+            }`}>
+              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+              {isConnected ? 'Connected' : 'Disconnected'}
+            </div>
+          </div>
+        </div>
+        
+        {/* Tabs */}
+        <div className="flex gap-4 mt-4">
+          <button
+            onClick={() => setActiveTab('gallery')}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+              activeTab === 'gallery'
+                ? 'bg-indigo-100 text-indigo-700'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            Pre-Built Pivots
+          </button>
+          <button
+            onClick={() => setActiveTab('custom')}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+              activeTab === 'custom'
+                ? 'bg-indigo-100 text-indigo-700'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            Custom Builder
+          </button>
+        </div>
+      </div>
+      
+      {/* Content */}
+      <div className="flex-1 overflow-hidden">
+        {activeTab === 'gallery' ? (
+          <div className="h-full overflow-auto p-6">
+            <PreBuiltPivotGallery
+              tableFqn={tableFqn}
+              onSelectPivot={handlePrebuiltSelect}
+            />
+          </div>
+        ) : (
+          <div className="h-full flex">
+            {/* Left: Configuration */}
+            <div className="w-80 border-r border-slate-200 bg-slate-50 overflow-auto p-4">
+              {/* Dimensions */}
+              <div className="mb-6">
+                <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                  <Layers size={16} />
+                  Row Dimensions
+                </h3>
+                <SelectedItems
+                  items={selectedDimensions}
+                  definitions={PIVOT_DIMENSIONS}
+                  onRemove={removeDimension}
+                  label="dimensions"
+                />
+                <details className="mt-3">
+                  <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700">
+                    + Add dimension
+                  </summary>
+                  <div className="mt-2">
+                    <ItemSelector
+                      items={PIVOT_DIMENSIONS}
+                      selected={selectedDimensions}
+                      onToggle={toggleDimension}
+                      type="dimension"
+                    />
+                  </div>
+                </details>
+              </div>
+              
+              {/* Measures */}
+              <div className="mb-6">
+                <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                  <BarChart3 size={16} />
+                  Measures
+                </h3>
+                <SelectedItems
+                  items={selectedMeasures}
+                  definitions={PIVOT_MEASURES}
+                  onRemove={removeMeasure}
+                  label="measures"
+                />
+                <details className="mt-3">
+                  <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700">
+                    + Add measure
+                  </summary>
+                  <div className="mt-2">
+                    <ItemSelector
+                      items={PIVOT_MEASURES}
+                      selected={selectedMeasures}
+                      onToggle={toggleMeasure}
+                      type="measure"
+                    />
+                  </div>
+                </details>
+              </div>
+              
+              {/* Actions */}
+              <div className="space-y-2">
                 <button
-                  onClick={() => navigator.clipboard.writeText(config.execution.sql)}
-                  className="text-xs text-blue-600 hover:text-blue-700 font-semibold"
+                  onClick={generateSQL}
+                  disabled={selectedDimensions.length === 0 || selectedMeasures.length === 0}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Copy
+                  <Settings2 size={16} />
+                  Generate SQL
+                </button>
+                
+                <button
+                  onClick={executePivot}
+                  disabled={!generatedSQL || !isConnected || loading}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? (
+                    <RefreshCw size={16} className="animate-spin" />
+                  ) : (
+                    <Play size={16} />
+                  )}
+                  {loading ? 'Running...' : 'Run Pivot'}
                 </button>
               </div>
-              <pre className="p-3 bg-slate-900 text-slate-100 text-xs rounded-lg overflow-x-auto">
-                {config.execution.sql}
-              </pre>
             </div>
-          )}
-
-          {/* Error message */}
-          {config.execution.error && (
-            <div className="mt-4 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-              <AlertCircle className="text-red-600 flex-shrink-0 mt-0.5" size={16} />
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-red-800">Error</p>
-                <p className="text-xs text-red-700 mt-1">{config.execution.error}</p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Results Area */}
-        <div className="flex-1 overflow-hidden p-4">
-          {!selectedTable ? (
-            // No table selected
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="max-w-md">
-                <h3 className="text-lg font-semibold text-slate-700 mb-2">
-                  Welcome to Pivot Builder
-                </h3>
-                <p className="text-sm text-slate-500 mb-4">
-                  Select a table to start building your pivot analysis.
-                  Drag fields from the left panel to configure your aggregation.
-                </p>
-                <div className="flex flex-col gap-2 text-xs text-slate-600">
-                  <div className="flex items-start gap-2">
-                    <CheckCircle size={14} className="text-green-600 mt-0.5" />
-                    <span>Drag measures to <strong>Values</strong> to aggregate</span>
+            
+            {/* Right: Results */}
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* SQL Preview */}
+              {showSQL && generatedSQL && (
+                <div className="border-b border-slate-200 bg-slate-900 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-slate-400">Generated SQL</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={copySQL}
+                        className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
+                      >
+                        {copiedSQL ? <Check size={12} /> : <Copy size={12} />}
+                        {copiedSQL ? 'Copied!' : 'Copy'}
+                      </button>
+                      <button
+                        onClick={() => setShowSQL(false)}
+                        className="text-slate-400 hover:text-white"
+                      >
+                        <EyeOff size={14} />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-start gap-2">
-                    <CheckCircle size={14} className="text-green-600 mt-0.5" />
-                    <span>Drag dimensions to <strong>Rows</strong> to group</span>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <CheckCircle size={14} className="text-green-600 mt-0.5" />
-                    <span>Click <strong>Run Query</strong> to see results</span>
-                  </div>
+                  <pre className="text-sm text-slate-100 font-mono overflow-x-auto max-h-32">
+                    {generatedSQL}
+                  </pre>
                 </div>
-              </div>
-            </div>
-          ) : !config.execution.results && !config.execution.loading ? (
-            // No results yet
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="max-w-md">
-                <h3 className="text-lg font-semibold text-slate-700 mb-2">
-                  Configure Your Pivot
-                </h3>
-                <p className="text-sm text-slate-500 mb-4">
-                  Add at least one measure to the <strong>Values</strong> zone,
-                  then click <strong>Run Query</strong> to see results.
-                </p>
-                {fieldsLoading && (
-                  <div className="flex items-center justify-center gap-2 text-sm text-slate-500">
-                    <Loader2 size={16} className="animate-spin" />
-                    Discovering fields...
+              )}
+              
+              {/* Results */}
+              <div className="flex-1 overflow-auto p-4">
+                {results && results.length > 0 && (
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-sm text-slate-500">
+                      {results.length} row{results.length !== 1 ? 's' : ''}
+                    </span>
+                    <button
+                      onClick={exportResults}
+                      className="text-sm text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                    >
+                      <Download size={14} />
+                      Export CSV
+                    </button>
                   </div>
                 )}
+                
+                <PivotResultsTable
+                  results={results}
+                  loading={loading}
+                  error={error}
+                />
               </div>
             </div>
-          ) : (
-            // Show results
-            <div className="h-full">
-              <ResultsTable
-                results={config.execution.results}
-                loading={config.execution.loading}
-                error={config.execution.error}
-              />
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -82,6 +82,7 @@ export default function DiscoveryHome({
           <button
             type="button"
             onClick={onSwitchToEditor}
+            data-testid="open-sql-editor"
             className="inline-flex items-center gap-2 px-4 py-2 text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors"
           >
             <Code2 size={16} />

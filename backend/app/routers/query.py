@@ -4,6 +4,7 @@ import logging
 import re
 import time
 import uuid
+import threading
 from datetime import datetime
 from typing import Optional, List, Tuple
 from contextlib import contextmanager
@@ -23,6 +24,7 @@ from app.models.schemas import (
 from app.services.session import session_manager
 from app.database import query_history_db
 from app.utils.logger import logger, generate_request_id, set_request_id
+from app.config import settings
 
 router = APIRouter(prefix="/api/query", tags=["query"])
 
@@ -51,6 +53,13 @@ SQL_KEYWORDS = frozenset({
     'SELECT', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'AS', 'ON',
     'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS'
 })
+SAFE_REQUEST_ID_PATTERN = re.compile(r'^[a-f0-9]{8}$', re.IGNORECASE)
+BLOCKED_STATEMENT_PATTERN = re.compile(
+    r'\b(DROP|DELETE|TRUNCATE|INSERT|UPDATE|CREATE|ALTER|GRANT|REVOKE|MERGE|COPY|PUT|GET)\b',
+    re.IGNORECASE
+)
+DEFAULT_MAX_ROWS = 10000
+FETCH_BATCH_SIZE = 1000
 
 
 @contextmanager
@@ -117,6 +126,49 @@ def _split_sql_statements(sql: str) -> List[str]:
 def _count_statements(sql: str) -> int:
     """Count the number of SQL statements."""
     return len(_split_sql_statements(sql))
+
+
+def _strip_comments(sql: str) -> str:
+    """Remove SQL comments for safer inspection."""
+    sql = BLOCK_COMMENT_PATTERN.sub('', sql)
+    return LINE_COMMENT_PATTERN.sub('', sql)
+
+
+def _strip_string_literals(sql: str) -> str:
+    """Remove single-quoted literals to reduce false positives in checks."""
+    return re.sub(r"'([^']|'')*'", "''", sql)
+
+
+def _is_query_allowed(sql: str) -> bool:
+    """Block DDL/DML statements to prevent destructive operations."""
+    cleaned = _strip_comments(sql)
+    cleaned = _strip_string_literals(cleaned)
+    return BLOCKED_STATEMENT_PATTERN.search(cleaned) is None
+
+
+def _is_select_like(sql: str) -> bool:
+    """Check if SQL is a SELECT/WITH query suitable for LIMIT wrapping."""
+    cleaned = _strip_comments(sql).lstrip()
+    return cleaned.upper().startswith("SELECT") or cleaned.upper().startswith("WITH")
+
+
+def _has_limit(sql: str) -> bool:
+    """Detect presence of LIMIT (ignoring comments)."""
+    cleaned = _strip_comments(sql)
+    return re.search(r'\bLIMIT\b', cleaned, re.IGNORECASE) is not None
+
+
+def _fetch_rows_limited(cursor, max_rows: int, batch_size: int = FETCH_BATCH_SIZE) -> List[list]:
+    """Fetch rows in batches up to max_rows to avoid memory blowups."""
+    rows: List[list] = []
+    remaining = max_rows
+    while remaining > 0:
+        batch = cursor.fetchmany(min(batch_size, remaining))
+        if not batch:
+            break
+        rows.extend([list(row) for row in batch])
+        remaining = max_rows - len(rows)
+    return rows
 
 
 def _extract_tables_from_sql(sql: str) -> List[Tuple[str, str, str]]:
@@ -265,6 +317,36 @@ def _generate_suggested_query(original_sql: str, replacements: dict) -> str:
 
 
 VALID_STATUSES = {s.value for s in QueryStatus}
+
+
+class QueryMetrics:
+    """Thread-safe in-memory counters for query operations."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._counters = {
+            "queries_total": 0,
+            "queries_blocked": 0,
+            "queries_limit_wrapped": 0,
+            "queries_rows_capped": 0,
+            "cancel_attempted": 0,
+            "cancel_succeeded": 0,
+            "cancel_failed": 0,
+            "cancel_no_query_id": 0
+        }
+
+    def inc(self, key: str, value: int = 1) -> None:
+        with self._lock:
+            if key not in self._counters:
+                self._counters[key] = 0
+            self._counters[key] += value
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return dict(self._counters)
+
+
+QUERY_METRICS = QueryMetrics()
 
 
 class QueryExecutionError(Exception):
@@ -462,14 +544,23 @@ async def execute_query(
     # Generate request ID for correlation
     req_id = generate_request_id()
     set_request_id(req_id)
+    QUERY_METRICS.inc("queries_total")
     
     if not request.sql or not request.sql.strip():
         raise HTTPException(status_code=400, detail="SQL query cannot be empty")
     
+    if not _is_query_allowed(request.sql):
+        QUERY_METRICS.inc("queries_blocked")
+        raise HTTPException(
+            status_code=400,
+            detail="Only read-only queries (SELECT/SHOW/DESCRIBE) are allowed."
+        )
+
     session = _get_session_or_401(x_session_id)
     query_id = str(uuid.uuid4())
     start_time = time.time()
     timeout_seconds = request.timeout or 60  # Define early for error handlers
+    max_rows = min(request.limit or DEFAULT_MAX_ROWS, DEFAULT_MAX_ROWS)
     
     # Use context manager for safe cursor cleanup
     with get_cursor(session) as cursor:
@@ -478,7 +569,8 @@ async def execute_query(
             cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {timeout_seconds}")
             
             # Set query tag for correlation in Snowflake query history
-            query_tag = f"MDLH:{req_id}"
+            safe_req_id = req_id if SAFE_REQUEST_ID_PATTERN.match(req_id) else "invalid"
+            query_tag = f"MDLH:{safe_req_id}"
             cursor.execute(f"ALTER SESSION SET QUERY_TAG = '{query_tag}'")
             
             logger.info(f"[{req_id}] Executing query with {timeout_seconds}s timeout")
@@ -489,6 +581,7 @@ async def execute_query(
             # Execute query (enable multi-statement if needed)
             columns = []
             rows = []
+            result_sf_query_id = None
             
             if statement_count > 1:
                 logger.info(f"[{req_id}] Executing {statement_count} statements")
@@ -502,11 +595,13 @@ async def execute_query(
                         try:
                             if cursor.description:
                                 current_columns = [desc[0] for desc in cursor.description]
-                                current_rows = cursor.fetchall()
+                                current_rows = _fetch_rows_limited(cursor, max_rows)
                                 # Keep results if this statement returned rows
                                 if current_rows or not rows:
                                     columns = current_columns
-                                    rows = [list(row) for row in current_rows]
+                                    rows = current_rows
+                                if getattr(cursor, "sfqid", None):
+                                    result_sf_query_id = cursor.sfqid
                                     logger.info(f"[{req_id}] Statement returned {len(rows)} rows, {len(columns)} columns")
                         except Exception as stmt_err:
                             logger.warning(f"[{req_id}] Error processing statement result: {stmt_err}")
@@ -522,12 +617,18 @@ async def execute_query(
                     logger.warning(f"[{req_id}] Multi-statement processing error: {multi_err}")
                     # Continue with whatever results we have
             else:
-                cursor.execute(request.sql)
+                sql = request.sql.strip().rstrip(";")
+                if _is_select_like(sql) and not _has_limit(sql):
+                    QUERY_METRICS.inc("queries_limit_wrapped")
+                    sql = f"SELECT * FROM ({sql}) LIMIT {max_rows}"
+                cursor.execute(sql)
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                rows = cursor.fetchall()
-                rows = [list(row) for row in rows]
+                rows = _fetch_rows_limited(cursor, max_rows)
+                result_sf_query_id = getattr(cursor, "sfqid", None)
             
             execution_time_ms = int((time.time() - start_time) * 1000)
+            if len(rows) >= max_rows:
+                QUERY_METRICS.inc("queries_rows_capped")
             
             # Store results using the new QueryResultStore
             session.query_results.put(query_id, {
@@ -537,7 +638,8 @@ async def execute_query(
                 "status": QueryStatus.SUCCESS,
                 "execution_time_ms": execution_time_ms,
                 "started_at": datetime.utcnow().isoformat(),
-                "completed_at": datetime.utcnow().isoformat()
+                "completed_at": datetime.utcnow().isoformat(),
+                "snowflake_query_id": result_sf_query_id
             })
             
             _record_query_history(
@@ -726,6 +828,20 @@ async def cancel_query(
             detail=f"Cannot cancel query with status '{result['status']}'"
         )
     
+    # Attempt to cancel in Snowflake if we have the query ID
+    QUERY_METRICS.inc("cancel_attempted")
+    sf_query_id = result.get("snowflake_query_id")
+    if sf_query_id:
+        try:
+            with get_cursor(session) as cursor:
+                cursor.execute("SELECT SYSTEM$CANCEL_QUERY(%s)", (sf_query_id,))
+            QUERY_METRICS.inc("cancel_succeeded")
+        except Exception as e:
+            QUERY_METRICS.inc("cancel_failed")
+            logger.warning(f"Failed to cancel Snowflake query {sf_query_id}: {e}")
+    else:
+        QUERY_METRICS.inc("cancel_no_query_id")
+
     # Mark as cancelled - update in store
     result["status"] = QueryStatus.CANCELLED
     result["completed_at"] = datetime.utcnow().isoformat()
@@ -761,6 +877,14 @@ async def clear_query_history():
     """Clear all query history."""
     query_history_db.clear_history()
     return {"message": "Query history cleared"}
+
+
+@router.get("/metrics", response_model=dict)
+async def get_query_metrics():
+    """Debug-only query metrics for observability."""
+    if not settings.debug:
+        raise HTTPException(status_code=403, detail="Disabled in production")
+    return {"metrics": QUERY_METRICS.snapshot()}
 
 
 # =============================================================================
@@ -922,6 +1046,14 @@ def _validate_single_query(session, query_req, default_db, default_schema, inclu
     Returns tuple of (validation_result, status) for summary aggregation.
     """
     sql = query_req.sql.strip()
+
+    if not _is_query_allowed(sql):
+        validation_result = QueryValidationResult(
+            query_id=query_req.query_id,
+            status="error",
+            error_message="Only read-only queries (SELECT/SHOW/DESCRIBE) are allowed."
+        )
+        return validation_result, "error"
     
     with get_cursor(session) as cursor:
         # Execute the query
@@ -1093,6 +1225,12 @@ async def explain_query(
     Breaks down the query into steps with explanations suitable for SQL beginners.
     Optionally executes the query and shows sample results.
     """
+    if request.include_execution and not _is_query_allowed(request.sql):
+        raise HTTPException(
+            status_code=400,
+            detail="Only read-only queries (SELECT/SHOW/DESCRIBE) are allowed."
+        )
+
     session = _get_session_or_401(x_session_id) if request.include_execution else None
     
     sql = request.sql.strip()

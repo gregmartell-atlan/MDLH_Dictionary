@@ -15,6 +15,7 @@ import {
 import { FREQUENCY_STYLES } from '../data/queryTemplates';
 import { validateQueryTables, getSuggestedAlternatives } from '../utils/dynamicExampleQueries';
 import { getTableFriendlyName, categorizeMissingTables } from '../utils/queryAvailability';
+import { GoldBadge, isGoldLayerQuery, getGoldTablesFromQuery } from './ui/GoldBadge';
 
 // ============================================================================
 // QueryCard Component
@@ -85,10 +86,16 @@ function QueryCard({
   frequencyDetail = null,
   source = null,
   warning = null,
-  confidence = null
+  confidence = null,
+  // Gold Layer props
+  goldTables = null
 }) {
   const [expanded, setExpanded] = React.useState(defaultExpanded);
   const [copied, setCopied] = React.useState(false);
+  
+  // Check if this is a Gold Layer query
+  const isGold = goldTables?.length > 0 || isGoldLayerQuery(query);
+  const detectedGoldTables = goldTables || getGoldTablesFromQuery(query);
   
   // Determine status for visual feedback
   const isValidated = validated === true || tableAvailable === true || validationResult?.status === 'success';
@@ -145,6 +152,10 @@ function QueryCard({
       >
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
+            {/* Gold Badge - shown first for prominence */}
+            {isGold && (
+              <GoldBadge variant="default" size="xs" />
+            )}
             <h4 className="font-medium text-gray-900 text-sm truncate">{title}</h4>
             {/* Simple status indicator - just a dot */}
             {isValidated && (
@@ -154,13 +165,22 @@ function QueryCard({
               <span className="w-2 h-2 rounded-full bg-gray-300" title="Needs attention" />
             )}
             {/* Frequency - subtle text only */}
-            {frequency && (
+            {frequency && !isGold && (
               <span className="text-[11px] text-gray-400">
                 {frequency}
               </span>
             )}
           </div>
-          <p className="text-gray-500 text-xs mt-0.5 truncate">{description}</p>
+          <p className="text-gray-500 text-xs mt-0.5 truncate">
+            {description}
+            {/* Show Gold tables inline */}
+            {isGold && detectedGoldTables.length > 0 && (
+              <span className="ml-2 text-amber-600 font-mono">
+                ({detectedGoldTables.slice(0, 2).map(t => t.split('.').pop()).join(', ')}
+                {detectedGoldTables.length > 2 && ` +${detectedGoldTables.length - 2}`})
+              </span>
+            )}
+          </p>
         </div>
         
         {/* Actions - DuckDB minimal: text links + one primary button */}
@@ -577,6 +597,8 @@ export default function QueryLibraryLayout({
                     source={q.source}
                     warning={q.warning}
                     confidence={q.confidence}
+                    // Gold Layer props
+                    goldTables={q.goldTables}
                   />
                 </div>
               );

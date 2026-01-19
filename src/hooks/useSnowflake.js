@@ -3,14 +3,40 @@
  * 
  * Updated to use session-based backend with X-Session-ID headers.
  * Includes fetch timeout support and improved error handling.
+ * 
+ * IMPORTANT: useConnection is DEPRECATED for new code. 
+ * Use useConnectionContext() from '../context/ConnectionContext' instead.
+ * This hook now uses a global singleton to prevent multiple instances 
+ * from independently polling the backend.
+ * 
+ * API Configuration:
+ * - Uses centralized config from src/config/api.js
+ * - In dev mode, Vite proxy routes to Python backend at :8000
+ * - In production, uses VITE_API_URL environment variable
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { createLogger } from '../utils/logger';
 import { TIMEOUTS, CONNECTION_CONFIG } from '../data/constants';
+import { getPythonApiUrl, SESSION_STORAGE_KEY } from '../config/api';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const SESSION_KEY = 'snowflake_session';
+// Global singleton state for connection to prevent duplicate polling
+// All useConnection instances share this state
+const globalConnectionState = {
+  status: { connected: false, unreachable: false },
+  loading: true,
+  error: null,
+  lastCheckTime: 0,
+  pendingTest: null,
+  subscribers: new Set(),
+  consecutiveTimeouts: 0,
+};
+
+// Minimum time between backend checks (prevents spamming)
+const MIN_CHECK_INTERVAL_MS = 2000;
+
+const API_URL = getPythonApiUrl();
+const SESSION_KEY = SESSION_STORAGE_KEY;
 const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds default timeout
 const MAX_RETRIES = 3; // Max retries for 503 errors
 const INITIAL_RETRY_DELAY_MS = 1000; // Start with 1 second backoff
@@ -178,7 +204,25 @@ export function useConnection() {
   // FIX: Uses promise mutex pattern to prevent race conditions
   // FIX: Don't delete session on network errors - only on explicit 401/404
   // FIX: After N consecutive timeouts, mark as unreachable
+  // FIX: Uses global singleton to prevent multiple instances from spamming backend
   const testConnection = useCallback(async () => {
+    // Global throttle - use global singleton to prevent multiple instances spamming
+    const now = Date.now();
+    if (globalConnectionState.pendingTest) {
+      connectionLog.debug('testConnection() - global test in progress, returning pending promise');
+      return globalConnectionState.pendingTest;
+    }
+    
+    // Throttle: if last check was too recent, return cached state
+    if (now - globalConnectionState.lastCheckTime < MIN_CHECK_INTERVAL_MS) {
+      connectionLog.debug('testConnection() - throttled, using cached state');
+      // Still update local state from global
+      setStatus(globalConnectionState.status);
+      setLoading(globalConnectionState.loading);
+      setError(globalConnectionState.error);
+      return globalConnectionState.status;
+    }
+    
     // Promise mutex pattern: if a test is already in flight, return that promise
     if (pendingTestRef.current) {
       connectionLog.debug('testConnection() already in progress - returning pending promise');
@@ -192,19 +236,24 @@ export function useConnection() {
     abortControllerRef.current = new AbortController();
 
     // Create and cache the promise
-    pendingTestRef.current = (async () => {
+    const testPromise = (async () => {
       connectionLog.info('testConnection() called');
       setLoading(true);
       setError(null);
+      globalConnectionState.loading = true;
+      globalConnectionState.lastCheckTime = now;
 
       const stored = getStoredSession();
       
       if (!stored?.sessionId) {
         connectionLog.warn('testConnection() - no stored session, setting connected=false');
         consecutiveStatusTimeoutsRef.current = 0;
+        globalConnectionState.consecutiveTimeouts = 0;
         const noSessionStatus = { connected: false, unreachable: false };
         setStatus(noSessionStatus);
         setLoading(false);
+        globalConnectionState.status = noSessionStatus;
+        globalConnectionState.loading = false;
         return noSessionStatus;
       }
 
@@ -294,7 +343,7 @@ export function useConnection() {
         // Ignore aborted requests (we cancelled them intentionally)
         if (err.name === 'AbortError' && abortControllerRef.current?.signal?.aborted) {
           connectionLog.debug('Request was intentionally aborted');
-          return status || { connected: false, unreachable: false };
+          return globalConnectionState.status || { connected: false, unreachable: false };
         }
         
         const isTimeout = err.name === 'AbortError';
@@ -348,13 +397,22 @@ export function useConnection() {
       }
     })();
 
+    // Track the promise globally to prevent duplicate concurrent requests
+    pendingTestRef.current = testPromise;
+    globalConnectionState.pendingTest = testPromise;
+
     // Clear the pending promise when done (success or failure)
     try {
-      return await pendingTestRef.current;
+      const result = await testPromise;
+      // Update global state with result
+      globalConnectionState.status = result;
+      globalConnectionState.loading = false;
+      return result;
     } finally {
       pendingTestRef.current = null;
+      globalConnectionState.pendingTest = null;
     }
-  }, [getStoredSession, status]);
+  }, [getStoredSession]); // FIXED: Removed status from deps - it causes infinite callback recreation
 
   // Store ref for useEffect
   testConnectionRef.current = testConnection;

@@ -1,4 +1,24 @@
-"""Snowflake connection and query service."""
+"""
+Snowflake connection and query service.
+
+ARCHITECTURE NOTE:
+-------------------
+This module contains the SnowflakeService class which was originally designed for 
+ENV-based authentication (private key or password from environment variables).
+
+For UI-based authentication (PAT tokens, SSO), the SessionManager in session.py 
+is now the primary connection management system. It:
+- Creates per-user sessions with explicit credentials
+- Manages session lifecycle (30-min timeout, cleanup)
+- Stores query results per-session
+
+The global `snowflake_service` singleton at the bottom of this file is DEPRECATED 
+for new code. Use `session_manager` from session.py instead.
+
+The SnowflakeService class still provides useful utilities like:
+- _validate_identifier() for SQL injection prevention
+- _validate_snowflake_query_id() for query ID validation
+"""
 
 import snowflake.connector
 from snowflake.connector import DictCursor
@@ -759,5 +779,7 @@ class SnowflakeService:
         return True, None
 
 
-# Global service instance
+# Global service instance - DEPRECATED for new code
+# Use session_manager from session.py instead for UI-based auth
+# This singleton is kept for backward compatibility with ENV-based auth
 snowflake_service = SnowflakeService()

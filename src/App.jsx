@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { Download, Copy, Check, Code2, X, Search, Command, Play, Loader2, Sparkles, Eye, FlaskConical, ArrowLeft, Database, Snowflake, Settings, Wifi, WifiOff, ChevronDown, Zap, Layers, GitBranch } from 'lucide-react';
 import QueryEditor from './components/QueryEditor';
 import PivotBuilder from './components/pivot/PivotBuilder';
@@ -18,12 +19,19 @@ import { Callout } from './components/ui/Callout';
 import { TabbedCodeCard } from './components/ui/TabbedCodeCard';
 import { LineageRail } from './components/lineage/LineageRail';
 import { LineagePanel } from './components/lineage/LineagePanel';
-import { useConnection, useSampleEntities, useQuery } from './hooks/useSnowflake';
+import { useSampleEntities, useQuery } from './hooks/useSnowflake';
+import { useConnectionContext } from './context/ConnectionContext';
 import { useLineageData } from './hooks/useLineageData';
 import { createLogger } from './utils/logger';
 import { buildSafeFQN, escapeStringValue } from './utils/queryHelpers';
 import { SystemConfigProvider } from './context/SystemConfigContext';
 import { useBackendInstanceGuard } from './hooks/useBackendInstanceGuard';
+import { EvaluationApp } from './evaluation';
+import { ModelingApp } from './evaluation/ModelingApp';
+import { WorkbenchPage } from './evaluation/components/workbench/WorkbenchPage';
+import { ExploreDashboard } from './evaluation/components/explore/ExploreDashboard';
+import { MDLHTenantConfigPage } from './components/MDLHTenantConfigPage';
+import { DynamicSchemaProvider } from './context/DynamicSchemaContext';
 
 // Scoped loggers for App
 const appLog = createLogger('App');
@@ -176,8 +184,9 @@ const buildLineagePreviewGraph = (result, focusFqn) => {
   };
 };
 
-// API base URL for backend calls
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// API base URL for backend calls - use centralized config
+import { getPythonApiUrl } from './config/api';
+const API_BASE_URL = getPythonApiUrl();
 
 // Note: tabs, data, exampleQueries, columns, colHeaders, MDLH_DATABASES, MDLH_SCHEMAS 
 // are now imported from ./data/* modules
@@ -231,6 +240,8 @@ function ConnectionIndicator({ status, loading, onClick, database, schema }) {
   return (
     <button
       onClick={onClick}
+      data-testid="connection-indicator"
+      data-state={state}
       className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
       title={
         state === 'disconnected' ? 'Click to connect to Snowflake' :
@@ -895,7 +906,7 @@ export default function App() {
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [validatedQueries, setValidatedQueries] = useState(new Map()); // queryId -> { valid, error, columns }
   const [isValidating, setIsValidating] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
+  // isConnected is now derived from ConnectionContext (see below)
   const [showOnlyAvailable, setShowOnlyAvailable] = useState(true); // Filter to show only queryable entities
   const [queryValidationMap, setQueryValidationMap] = useState(new Map()); // Pre-validated queries
   
@@ -911,8 +922,19 @@ export default function App() {
   const [showMyWorkQuery, setShowMyWorkQuery] = useState(null);
   const [showMyWorkValidation, setShowMyWorkValidation] = useState(null);
   
-  // Global connection modal state
-  const [showConnectionModal, setShowConnectionModal] = useState(false);
+  // Use centralized connection context (from ConnectionProvider in main.jsx)
+  const {
+    status: globalConnectionStatus,
+    loading: globalConnectionLoading,
+    testConnection: globalTestConnection,
+    showConnectionModal,
+    openConnectionModal,
+    closeConnectionModal,
+    setConnectionModalOpen: setShowConnectionModal
+  } = useConnectionContext();
+  
+  // Derive isConnected from context status
+  const isConnected = globalConnectionStatus?.connected ?? false;
   
   // Lineage flyout state
   const [showLineageFlyout, setShowLineageFlyout] = useState(false);
@@ -933,13 +955,6 @@ export default function App() {
 
   // Command palette state
   const [isCmdOpen, setIsCmdOpen] = useState(false);
-  
-  // Use global connection hook
-  const { 
-    status: globalConnectionStatus, 
-    testConnection: globalTestConnection, 
-    loading: globalConnectionLoading 
-  } = useConnection();
   
   // Use sample entities hook - loads real GUIDs from discovered tables
   const {
@@ -1078,110 +1093,38 @@ export default function App() {
   // Handle successful connection from global modal
   const handleGlobalConnectionSuccess = useCallback((status) => {
     uiLog.info('Connection success from modal', { database: status?.database });
-    setShowConnectionModal(false);
-    setIsConnected(true);
+    closeConnectionModal();
+    
+    // Update selected database/schema from connection if provided
+    if (status?.database && !selectedMDLHDatabase) {
+      setSelectedMDLHDatabase(status.database);
+    }
+    if (status?.schema && !selectedMDLHSchema) {
+      setSelectedMDLHSchema(status.schema);
+    }
+    
     // Table discovery will be triggered by the useEffect watching isConnected
-  }, []);
+    appLog.info('Connection state updated, table discovery should trigger', {
+      database: status?.database || selectedMDLHDatabase,
+      schema: status?.schema || selectedMDLHSchema
+    });
+  }, [selectedMDLHDatabase, selectedMDLHSchema, closeConnectionModal]);
   
-  // Check connection status on mount and when session changes
-  // FIX: Sync local isConnected state with globalConnectionStatus from useConnection hook
+  // Connection checking is now handled by ConnectionContext (see main.jsx)
+  // The context provides: status, loading, testConnection, showConnectionModal, etc.
+  // Local isConnected is derived from globalConnectionStatus.connected
+  
+  // Auto-open connection modal on mount if we have saved config but no session
   useEffect(() => {
-    let lastStatus = null; // Track last status to avoid spammy logs
-    
-    // Helper function with timeout to prevent hanging
-    const fetchWithTimeout = async (url, options, timeoutMs = 5000) => {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const response = await fetch(url, { ...options, signal: controller.signal });
-        return response;
-      } finally {
-        clearTimeout(id);
+    if (!isConnected && !globalConnectionLoading) {
+      const savedConfig = localStorage.getItem('snowflake_config');
+      const hasSession = sessionStorage.getItem('snowflake_session');
+      if (savedConfig && !hasSession) {
+        appLog.info('Found saved config but no active session - auto-opening connection modal');
+        setTimeout(() => openConnectionModal(), 500);
       }
-    };
-    
-    const checkConnection = async (source = 'poll') => {
-      const sessionData = sessionStorage.getItem('snowflake_session');
-      if (!sessionData) {
-        if (lastStatus !== 'disconnected') {
-          lastStatus = 'disconnected';
-          if (source !== 'poll') {
-            appLog.info('Connection status: Not connected (no session)');
-          }
-        }
-        setIsConnected(false);
-        return;
-      }
-      
-      // Validate session with backend (with timeout!)
-      try {
-        const { sessionId, database, schema } = JSON.parse(sessionData);
-        const response = await fetchWithTimeout(
-          `${API_BASE_URL}/api/session/status`,
-          { headers: { 'X-Session-ID': sessionId } },
-          5000 // 5-second timeout to match useConnection hook
-        );
-        const status = await response.json();
-        
-        if (status.valid) {
-          if (lastStatus !== 'connected') {
-            lastStatus = 'connected';
-            appLog.info('Connection status: Connected (session valid)', { database: status.database });
-          }
-          setIsConnected(true);
-        } else {
-          // Session expired or invalid - clear it
-          sessionStorage.removeItem('snowflake_session');
-          if (lastStatus !== 'expired') {
-            lastStatus = 'expired';
-            appLog.warn('Connection status: Session expired, cleared');
-          }
-          setIsConnected(false);
-        }
-      } catch (err) {
-        // FIX: On timeout or network error, assume session is still valid (like useConnection does)
-        if (err.name === 'AbortError') {
-          appLog.warn('Session check timed out - assuming still valid');
-          setIsConnected(true);
-        } else {
-          // For other errors, also assume valid if we have a session
-          appLog.warn('Session check error - assuming still valid', { error: err.message });
-          setIsConnected(true);
-        }
-      }
-    };
-    checkConnection('mount');
-    
-    // Listen for custom session change event (dispatched by ConnectionModal)
-    const handleSessionChange = (event) => {
-      appLog.info('Session change event received', { 
-          hasSession: !!event.detail?.sessionId,
-          database: event.detail?.database
-        });
-      lastStatus = null; // Reset so we log the new status
-      
-      // FIX: Immediately set connected if event indicates connected
-      if (event.detail?.connected || event.detail?.sessionId) {
-        setIsConnected(true);
-      }
-      
-      checkConnection('event');
-    };
-    window.addEventListener('snowflake-session-changed', handleSessionChange);
-    
-    // Also listen for storage changes (in case session is modified from another tab)
-    const handleStorageChange = () => checkConnection('storage');
-    window.addEventListener('storage', handleStorageChange);
-    
-    // Periodic check as fallback (less frequent - 30 seconds)
-    const interval = setInterval(() => checkConnection('poll'), 30000);
-    
-    return () => {
-      window.removeEventListener('snowflake-session-changed', handleSessionChange);
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
-  }, []);
+    }
+  }, [isConnected, globalConnectionLoading, openConnectionModal]);
   
   // Discover tables and pre-validate queries when database/schema changes or connection is made
   useEffect(() => {
@@ -1576,8 +1519,9 @@ export default function App() {
 
   return (
     <SystemConfigProvider>
+    <DynamicSchemaProvider>
     <EntityPanelProvider>
-    <div className="min-h-screen bg-white text-gray-900">
+    <div className="min-h-screen bg-white text-gray-900" data-testid="app-root" data-active-tab={activeTab}>
       {/* Navigation Bar - Atlan style: clean white, minimal */}
       <nav className="border-b border-gray-200 bg-white sticky top-0 z-30">
         <div className="max-w-full mx-auto px-6 py-3 flex items-center justify-between">
@@ -1640,7 +1584,8 @@ export default function App() {
 
         {/* Main Content Area */}
         <div className="flex-1 overflow-y-auto">
-          {/* Hero Section - Atlan style: white bg, bold headlines, blue highlights */}
+          {/* Hero Section - hide for editor/pivot/evaluation/modeling/home/tenant-config */}
+          {activeTab !== 'editor' && activeTab !== 'pivot' && activeTab !== 'evaluation' && activeTab !== 'modeling' && activeTab !== 'home' && activeTab !== 'tenant-config' && (
           <div className="mx-6 mt-8 mb-6">
         <div className="max-w-4xl">
           {/* Headline with highlighted keyword */}
@@ -1765,11 +1710,10 @@ export default function App() {
           )}
         </div>
       </div>
+      )}
       
-      {/* Lineage is now available in the flyout panel - click the lineage icon in Query Editor toolbar */}
-      
-      {/* Not Connected Banner */}
-      {!isConnected && !globalConnectionLoading && (
+      {/* Not Connected Banner - hide for editor/pivot/evaluation/modeling */}
+      {activeTab !== 'editor' && activeTab !== 'pivot' && activeTab !== 'evaluation' && activeTab !== 'modeling' && !isConnected && !globalConnectionLoading && (
         <div className="mx-6 mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-blue-100 rounded-lg">
@@ -1784,6 +1728,7 @@ export default function App() {
           </div>
           <button
             onClick={() => setShowConnectionModal(true)}
+            data-testid="connect-banner-button"
             className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-lg text-sm font-medium transition-colors"
           >
             <Snowflake size={14} />
@@ -1793,9 +1738,9 @@ export default function App() {
       )}
 
       {/* Main Content */}
-      <div className={`mx-auto ${activeTab === 'editor' || activeTab === 'pivot' ? 'px-4 py-3' : 'max-w-full px-6 py-6'}`}>
+      <div className={`mx-auto ${activeTab === 'editor' || activeTab === 'pivot' || activeTab === 'evaluation' || activeTab === 'modeling' || activeTab === 'tenant-config' ? 'px-4 py-3' : 'max-w-full px-6 py-6'}`}>
         {/* Tab Navigation - Atlan style when in editor/pivot mode */}
-        {activeTab === 'editor' || activeTab === 'pivot' ? (
+        {activeTab === 'editor' || activeTab === 'pivot' || activeTab === 'evaluation' || activeTab === 'modeling' || activeTab === 'tenant-config' ? (
           <div className="flex items-center gap-3 mb-3">
             {/* Language tabs like Atlan */}
             <div className="flex items-center gap-1 px-2 py-1.5 bg-slate-100 rounded-xl">
@@ -1876,6 +1821,26 @@ export default function App() {
             onOpenLineagePanel={handleOpenLineagePanel}
             onSelectEntity={setSelectedEntity}
           />
+        ) : activeTab === 'modeling' ? (
+          <ModelingApp 
+            database={selectedMDLHDatabase}
+            schema={selectedMDLHSchema}
+            discoveredTables={discoveredTables}
+          />
+        ) : activeTab === 'evaluation' ? (
+          <EvaluationApp 
+            database={selectedMDLHDatabase}
+            schema={selectedMDLHSchema}
+            discoveredTables={discoveredTables}
+          />
+        ) : activeTab === 'workbench' ? (
+          <WorkbenchPage />
+        ) : activeTab === 'enrichment' ? (
+          <MemoryRouter>
+            <ExploreDashboard />
+          </MemoryRouter>
+        ) : activeTab === 'tenant-config' ? (
+          <MDLHTenantConfigPage />
         ) : (
           <>
             {/* Filter bar - availability toggle */}
@@ -2320,6 +2285,7 @@ export default function App() {
       <CommandPalette open={isCmdOpen} onOpenChange={setIsCmdOpen} />
     </div>
     </EntityPanelProvider>
+    </DynamicSchemaProvider>
     </SystemConfigProvider>
   );
 }

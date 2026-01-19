@@ -148,9 +148,10 @@ export function ResizeHandle({
     <div
       onMouseDown={onMouseDown}
       className={`
-        absolute ${position}-0 top-0 bottom-0 w-1
-        cursor-col-resize group z-10
-        ${isResizing ? 'bg-blue-500' : 'hover:bg-blue-400'}
+        absolute ${position}-0 top-0 bottom-0
+        cursor-col-resize group z-20
+        ${isResizing ? 'bg-blue-500 w-1' : 'w-0.5 hover:w-1 hover:bg-blue-400'}
+        transition-all duration-150
       `}
       title="Drag to resize"
     >

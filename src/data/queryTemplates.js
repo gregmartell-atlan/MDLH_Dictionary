@@ -18,7 +18,23 @@ import {
   searchQueries as searchUserQueries,
 } from './mdlhUserQueries';
 
+import {
+  GOLD_LAYER_QUERIES,
+  GOLD_QUERY_CATEGORIES,
+  GOLD_FREQUENCY_LEVELS,
+  GOLD_FREQUENCY_STYLES,
+  GOLD_LAYER_TABLES,
+  GOLD_COMMON_FILTERS,
+  GOLD_QUERIES_METADATA,
+  getGoldQueriesByFrequency,
+  getGoldQueriesByCategory,
+  findGoldQueryById,
+  searchGoldQueries,
+  getQueriesByGoldTable,
+} from './goldLayerQueries';
+
 import { buildSafeFQN, escapeStringValue } from '../utils/queryHelpers';
+import { resolveGoldTablesInSQL, hasGoldTables } from '../utils/goldTableResolver';
 
 // =============================================================================
 // ENTITY CONTEXT TYPE
@@ -98,6 +114,16 @@ export function fillTemplate(sqlTemplate, ctx, samples = null) {
 
   // Start with the template
   let result = sqlTemplate;
+  
+  // PRE-PROCESS: Resolve Gold tables FIRST (before placeholder replacement)
+  // This allows the resolver to see GOLD.* patterns and convert them appropriately
+  if (ctx.discoveredTables && ctx.database && ctx.schema) {
+    result = resolveGoldTablesInSQL(result, ctx.database, ctx.schema, ctx.discoveredTables);
+  } else if (ctx.database && ctx.schema) {
+    // If no discoveredTables, default to current schema (PUBLIC)
+    // Replace GOLD.TABLENAME with DATABASE.SCHEMA.TABLENAME
+    result = result.replace(/\bGOLD\.(\w+)\b/gi, `${ctx.database}.${ctx.schema}.$1`);
+  }
 
   if (samples) {
     // Use sample GUIDs when context doesn't have them
@@ -144,8 +170,12 @@ export function fillTemplate(sqlTemplate, ctx, samples = null) {
   const effectiveTerm = ctx.term || ctx.searchTerm || '';
   const effectiveSource = ctx.source || ctx.connectionName || ctx.connectorName || '';
   const effectiveStartGuid = ctx.startGuid || effectiveGuid || '';
-
-  return result
+  
+  // Determine Gold schema - default to current schema (usually PUBLIC) if GOLD doesn't exist
+  // The resolver will check if GOLD schema exists and use it if available
+  const goldSchema = ctx.goldSchema || ctx.schema || 'PUBLIC';
+  
+  result = result
     // UPPERCASE placeholders (primary)
     .replace(/\{\{DATABASE\}\}/g, ctx.database || '<DATABASE>')
     .replace(/\{\{SCHEMA\}\}/g, ctx.schema || '<SCHEMA>')
@@ -176,7 +206,13 @@ export function fillTemplate(sqlTemplate, ctx, samples = null) {
     .replace(/<YOUR_GUID>/g, effectiveGuid || '<YOUR_GUID>')
     .replace(/<CORE_GLOSSARY_GUID>/g, effectiveGlossaryGuid || '<CORE_GLOSSARY_GUID>')
     .replace(/<GLOSSARY_GUID>/g, effectiveGlossaryGuid || '<GLOSSARY_GUID>')
-    .replace(/<COLUMN_GUID>/g, ctx.columnGuid || effectiveGuid || '<COLUMN_GUID>');
+    .replace(/<COLUMN_GUID>/g, ctx.columnGuid || effectiveGuid || '<COLUMN_GUID>')
+    
+    // Gold Layer placeholders (for queries that use {{GOLD_SCHEMA}} directly)
+    .replace(/\{\{GOLD_SCHEMA\}\}/g, goldSchema)
+    .replace(/\{\{gold_schema\}\}/g, goldSchema);
+  
+  return result;
 }
 
 /**
@@ -315,6 +351,7 @@ export function buildTableFQN(ctx) {
 export const QUERY_LAYERS = {
   MDLH: 'mdlh',
   SNOWFLAKE: 'snowflake',
+  GOLD: 'gold', // Curated Gold Layer views (GOLD.ASSETS, GOLD.FULL_LINEAGE, etc.)
 };
 
 export const QUERY_CATEGORIES = {
@@ -325,6 +362,11 @@ export const QUERY_CATEGORIES = {
   QUALITY: 'quality',
   GLOSSARY: 'glossary',
   COST: 'cost',
+  // Gold Layer specific categories
+  GOLD_ASSETS: 'gold_assets',
+  GOLD_LINEAGE: 'gold_lineage',
+  GOLD_COMPLETENESS: 'gold_completeness',
+  GOLD_HISTORY: 'gold_history',
 };
 
 // =============================================================================
@@ -1137,12 +1179,65 @@ LIMIT 20;`,
 };
 
 // =============================================================================
+// CONVERT GOLD LAYER QUERIES TO INTERNAL FORMAT
+// =============================================================================
+
+/**
+ * Convert Gold Layer queries to the internal query format
+ */
+function convertGoldLayerQuery(gq) {
+  return {
+    id: gq.id,
+    label: gq.name,
+    description: gq.description,
+    category: gq.category,
+    layer: QUERY_LAYERS.GOLD,
+    icon: getGoldCategoryIcon(gq.category),
+    requires: gq.requires || [],
+    sql: gq.sql,
+    // Gold Layer specific fields
+    userIntent: gq.userIntent,
+    frequency: gq.frequency,
+    frequencyDetail: gq.frequencyDetail,
+    source: gq.source,
+    confidence: gq.confidence || 'high',
+    goldTables: gq.goldTables,
+  };
+}
+
+/**
+ * Get icon for Gold Layer categories
+ */
+function getGoldCategoryIcon(category) {
+  const iconMap = {
+    'gold_assets': 'Database',
+    'gold_lineage': 'GitBranch',
+    'gold_governance': 'Shield',
+    'gold_glossary': 'BookOpen',
+    'gold_quality': 'AlertTriangle',
+    'gold_completeness': 'CheckCircle',
+    'gold_history': 'Clock',
+  };
+  return iconMap[category] || 'Layers';
+}
+
+// Convert all Gold Layer queries
+const CONVERTED_GOLD_QUERIES = GOLD_LAYER_QUERIES.map(convertGoldLayerQuery);
+
+// Create object for Gold queries (keyed by id)
+export const GOLD_QUERIES = {};
+CONVERTED_GOLD_QUERIES.forEach(q => {
+  GOLD_QUERIES[q.id] = q;
+});
+
+// =============================================================================
 // COMBINED QUERY REGISTRY
 // =============================================================================
 
 export const ALL_QUERIES = {
   ...MDLH_QUERIES,
   ...SNOWFLAKE_QUERIES,
+  ...GOLD_QUERIES,
 };
 
 // =============================================================================
@@ -1351,9 +1446,13 @@ export function getQueriesByLayerAndCategory() {
   const grouped = {
     [QUERY_LAYERS.MDLH]: {},
     [QUERY_LAYERS.SNOWFLAKE]: {},
+    [QUERY_LAYERS.GOLD]: {},
   };
 
   Object.values(ALL_QUERIES).forEach(query => {
+    if (!grouped[query.layer]) {
+      grouped[query.layer] = {};
+    }
     if (!grouped[query.layer][query.category]) {
       grouped[query.layer][query.category] = [];
     }
@@ -1557,9 +1656,9 @@ function deduplicateQueries(existingQueries, newQueries) {
 // Convert all user research queries
 const CONVERTED_USER_QUERIES = USER_RESEARCH_QUERIES.map(convertUserResearchQuery);
 
-// Merge and deduplicate all queries
+// Merge and deduplicate all queries (including Gold Layer)
 const MERGED_QUERIES_ARRAY = deduplicateQueries(
-  { ...MDLH_QUERIES, ...SNOWFLAKE_QUERIES },
+  { ...MDLH_QUERIES, ...SNOWFLAKE_QUERIES, ...GOLD_QUERIES },
   CONVERTED_USER_QUERIES
 );
 
@@ -1577,6 +1676,22 @@ export {
   getQueriesByFrequency,
   getQueriesByCategory,
   searchUserQueries,
+};
+
+// Re-export Gold Layer utilities
+export {
+  GOLD_LAYER_QUERIES,
+  GOLD_QUERY_CATEGORIES,
+  GOLD_FREQUENCY_LEVELS,
+  GOLD_FREQUENCY_STYLES,
+  GOLD_LAYER_TABLES,
+  GOLD_COMMON_FILTERS,
+  GOLD_QUERIES_METADATA,
+  getGoldQueriesByFrequency,
+  getGoldQueriesByCategory,
+  findGoldQueryById,
+  searchGoldQueries,
+  getQueriesByGoldTable,
 };
 
 /**
@@ -1620,6 +1735,7 @@ export default {
   QUERY_CATEGORIES,
   MDLH_QUERIES,
   SNOWFLAKE_QUERIES,
+  GOLD_QUERIES,
   ALL_QUERIES,
   MERGED_QUERIES,
   USER_RESEARCH_QUERIES,
@@ -1635,5 +1751,18 @@ export default {
   searchAllQueries,
   getQueriesByFrequency,
   getQueriesByCategory,
+  // Gold Layer exports
+  GOLD_LAYER_QUERIES,
+  GOLD_QUERY_CATEGORIES,
+  GOLD_FREQUENCY_LEVELS,
+  GOLD_FREQUENCY_STYLES,
+  GOLD_LAYER_TABLES,
+  GOLD_COMMON_FILTERS,
+  GOLD_QUERIES_METADATA,
+  getGoldQueriesByFrequency,
+  getGoldQueriesByCategory,
+  findGoldQueryById,
+  searchGoldQueries,
+  getQueriesByGoldTable,
 };
 

@@ -10,11 +10,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Database, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Info, Key } from 'lucide-react';
 import { createLogger } from '../utils/logger';
+import { getPythonApiUrl } from '../config/api';
 
 const log = createLogger('ConnectionModal');
 
-// API base URL - configurable for different environments
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// API base URL - use centralized config
+const API_BASE_URL = getPythonApiUrl();
 
 export default function ConnectionModal({ isOpen, onClose, onConnect, currentSession }) {
   const [authMethod, setAuthMethod] = useState('token');
@@ -188,6 +189,11 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
 
         // Notify parent component
         onConnect?.(sessionInfo);
+        
+        // Auto-close modal after successful connection (with a brief delay to show success message)
+        setTimeout(() => {
+          onClose();
+        }, 1500);
       } else if (result.connected) {
         // Legacy response without session_id (backward compatibility)
         setTestResult({
@@ -245,7 +251,10 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+      data-testid="connection-modal"
+    >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
         {/* Header */}
         <div className="bg-[#3366FF] p-5 text-white">
@@ -274,6 +283,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
               <button
                 type="button"
                 onClick={() => handleAuthMethodChange('token')}
+                data-testid="connection-auth-token"
                 className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
                   authMethod === 'token' ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]' : 'border-gray-200 text-gray-600 hover:border-gray-300'
                 }`}
@@ -284,6 +294,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
               <button
                 type="button"
                 onClick={() => handleAuthMethodChange('sso')}
+                data-testid="connection-auth-sso"
                 className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 transition-all ${
                   authMethod === 'sso' ? 'border-[#3366FF] bg-blue-50 text-[#3366FF]' : 'border-gray-200 text-gray-600 hover:border-gray-300'
                 }`}
@@ -302,6 +313,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
               value={formData.account}
               onChange={(e) => handleChange('account', e.target.value)}
               placeholder="abc12345.us-east-1"
+              data-testid="connection-account"
               className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
               required
             />
@@ -319,6 +331,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
               value={formData.user}
               onChange={(e) => handleChange('user', e.target.value)}
               placeholder="your_username@company.com"
+              data-testid="connection-user"
               className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
               required
             />
@@ -343,6 +356,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
                   value={formData.token}
                   onChange={(e) => handleChange('token', e.target.value)}
                   placeholder="Paste your PAT here..."
+                  data-testid="connection-token"
                   className="w-full px-4 py-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none font-mono text-sm"
                   required
                 />
@@ -380,6 +394,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
                 value={formData.warehouse}
                 onChange={(e) => handleChange('warehouse', e.target.value)}
                 placeholder="COMPUTE_WH"
+                data-testid="connection-warehouse"
                 className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
                 required
               />
@@ -391,6 +406,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
                 value={formData.database}
                 onChange={(e) => handleChange('database', e.target.value)}
                 placeholder="ATLAN_MDLH"
+                data-testid="connection-database"
                 className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
               />
             </div>
@@ -405,6 +421,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
                 value={formData.schema}
                 onChange={(e) => handleChange('schema', e.target.value)}
                 placeholder="PUBLIC"
+                data-testid="connection-schema"
                 className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
               />
             </div>
@@ -415,6 +432,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
                 value={formData.role}
                 onChange={(e) => handleChange('role', e.target.value)}
                 placeholder="ACCOUNTADMIN"
+                data-testid="connection-role"
                 className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
               />
             </div>
@@ -435,7 +453,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
           {testResult && (
             <div className={`p-4 rounded-lg flex items-start gap-3 ${
               testResult.connected ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
-            }`}>
+            }`} data-testid="connection-result">
               {testResult.connected ? (
                 <CheckCircle className="text-green-500 flex-shrink-0 mt-0.5" size={20} />
               ) : (
@@ -468,6 +486,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
             <button
               type="submit"
               disabled={testing || !formData.account || !formData.user || (authMethod === 'token' && !formData.token)}
+              data-testid="connection-submit"
               className="flex-1 px-4 py-2.5 bg-[#3366FF] text-white rounded-lg hover:bg-blue-600 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {testing ? (

@@ -1,8 +1,91 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Table2, GitBranch, FileText, Users, BarChart3, Database, Code2, ChevronRight, Sparkles, BookOpen, Filter, Tag, Clock, ShieldCheck, Zap, ArrowRight, AlertTriangle, Link2, Layers, Eye, MessageSquare, Lock, Activity, Workflow, Box } from 'lucide-react';
+import { Search, Table2, GitBranch, FileText, Users, BarChart3, Database, Code2, ChevronRight, Sparkles, BookOpen, Filter, Tag, Clock, ShieldCheck, Zap, ArrowRight, AlertTriangle, Link2, Layers, Eye, MessageSquare, Lock, Activity, Workflow, Box, Crown, Gem } from 'lucide-react';
 
 // Discovery question cards - organized by what users want to know
 const DISCOVERY_QUESTIONS = [
+  // ============ GOLD LAYER (Featured - Curated Views) ============
+  {
+    id: 'gold-asset-discovery',
+    question: 'What assets exist in my catalog? (Gold Layer)',
+    icon: Gem,
+    category: 'gold',
+    difficulty: 'beginner',
+    isGold: true,
+    queries: [
+      { id: 'gold-all-assets', label: '⭐ Browse all assets (GOLD.ASSETS)', sql: `SELECT ASSET_NAME, GUID, ASSET_TYPE, ASSET_QUALIFIED_NAME, DESCRIPTION, STATUS, CERTIFICATE_STATUS, OWNER_USERS, TAGS, POPULARITY_SCORE, HAS_LINEAGE FROM GOLD.ASSETS WHERE ASSET_TYPE IN ('Table','View') AND CONNECTOR_NAME = 'snowflake' LIMIT 100;`, isGold: true },
+      { id: 'gold-certified', label: 'Certified production assets', sql: `SELECT ASSET_NAME, ASSET_TYPE, CERTIFICATE_STATUS, OWNER_USERS FROM GOLD.ASSETS WHERE CERTIFICATE_STATUS = 'VERIFIED' AND STATUS = 'ACTIVE' LIMIT 50;`, isGold: true },
+      { id: 'gold-popular', label: 'Most popular assets', sql: `SELECT ASSET_NAME, ASSET_TYPE, POPULARITY_SCORE, OWNER_USERS FROM GOLD.ASSETS WHERE ASSET_TYPE IN ('Table','View') ORDER BY POPULARITY_SCORE DESC NULLS LAST LIMIT 30;`, isGold: true }
+    ],
+    tips: ['Gold Layer provides pre-joined, curated views', 'GOLD.ASSETS combines asset info with enrichments', 'Use for dashboards and reporting']
+  },
+  {
+    id: 'gold-lineage-discovery',
+    question: 'How does my data flow? (Gold Layer)',
+    icon: GitBranch,
+    category: 'gold',
+    difficulty: 'intermediate',
+    isGold: true,
+    queries: [
+      { id: 'gold-lineage-base', label: '⭐ Upstream & downstream lineage', sql: `SELECT AL.NAME, AL.TYPE_NAME, FL.RELATED_NAME, FL.RELATED_TYPE, FL.DIRECTION, FL.LEVEL FROM GOLD.ASSET_LOOKUP_TABLE AL JOIN GOLD.FULL_LINEAGE FL ON AL.GUID = FL.START_GUID WHERE AL.HAS_LINEAGE ORDER BY AL.QUALIFIED_NAME, FL.DIRECTION, FL.LEVEL LIMIT 200;`, isGold: true },
+      { id: 'gold-downstream-bi', label: 'Find downstream dashboards', sql: `SELECT FL.LEVEL AS HOPS, FL.RELATED_NAME AS DASHBOARD, FL.RELATED_TYPE FROM GOLD.ASSET_LOOKUP_TABLE AL JOIN GOLD.FULL_LINEAGE FL ON AL.GUID = FL.START_GUID WHERE FL.DIRECTION = 'DOWNSTREAM' AND FL.RELATED_TYPE IN ('TableauDashboard','PowerBIDashboard','LookerDashboard') ORDER BY FL.LEVEL LIMIT 50;`, isGold: true },
+      { id: 'gold-pipeline-touch', label: 'Pipeline touchpoints (dbt/Airflow)', sql: `SELECT ASSET_NAME, INPUT_GUIDS_TO_PROCESSES, OUTPUT_GUIDS_TO_PROCESSES FROM GOLD.PIPELINE_DETAILS WHERE ASSET_NAME ILIKE '%dbt%' OR ASSET_NAME ILIKE '%airflow%' LIMIT 50;`, isGold: true }
+    ],
+    tips: ['GOLD.FULL_LINEAGE provides complete lineage graph', 'Use DIRECTION = UPSTREAM/DOWNSTREAM', 'LEVEL indicates hop count from source']
+  },
+  {
+    id: 'gold-governance-discovery',
+    question: 'What data is tagged or classified? (Gold Layer)',
+    icon: ShieldCheck,
+    category: 'gold',
+    difficulty: 'beginner',
+    isGold: true,
+    queries: [
+      { id: 'gold-pii-tags', label: '⭐ PII & Confidential data', sql: `SELECT ASSET_NAME, ASSET_TYPE, TAG_NAME, TAG_VALUE, PROPAGATES FROM GOLD.TAGS WHERE TAG_NAME ILIKE 'PII' OR TAG_NAME ILIKE 'Confidential';`, isGold: true },
+      { id: 'gold-custom-metadata', label: 'Custom metadata (AI Readiness)', sql: `SELECT ASSET_NAME, ASSET_TYPE, CUSTOM_METADATA_NAME, ATTRIBUTE_NAME, ATTRIBUTE_VALUE FROM GOLD.CUSTOM_METADATA WHERE CUSTOM_METADATA_NAME = 'AI Readiness';`, isGold: true },
+      { id: 'gold-data-mesh', label: 'Data products & domains', sql: `SELECT ASSET_NAME AS DOMAIN_OR_PRODUCT, ASSET_TYPE, DATA_PRODUCT_STATUS, CRITICALITY, SENSITIVITY, STAKEHOLDERS FROM GOLD.DATA_MESH_DETAILS LIMIT 50;`, isGold: true }
+    ],
+    tips: ['GOLD.TAGS shows all tag relationships', 'GOLD.CUSTOM_METADATA has custom attribute values', 'Check PROPAGATES to see if tags flow downstream']
+  },
+  {
+    id: 'gold-glossary-discovery',
+    question: 'What business terms are defined? (Gold Layer)',
+    icon: BookOpen,
+    category: 'gold',
+    difficulty: 'beginner',
+    isGold: true,
+    queries: [
+      { id: 'gold-glossary-terms', label: '⭐ All glossary terms', sql: `SELECT ASSET_NAME AS TERM, ASSET_TYPE, TERMS, CATEGORIES, ASSIGNED_ASSETS, ANCHOR AS GLOSSARY FROM GOLD.GLOSSARY_DETAILS WHERE ASSET_TYPE = 'AtlasGlossaryTerm';`, isGold: true },
+      { id: 'gold-terms-linked', label: 'Terms with linked assets', sql: `SELECT ASSET_NAME, ASSIGNED_ASSETS, ANCHOR FROM GOLD.GLOSSARY_DETAILS WHERE ASSET_TYPE = 'AtlasGlossaryTerm' AND ASSIGNED_ASSETS IS NOT NULL LIMIT 50;`, isGold: true }
+    ],
+    tips: ['GOLD.GLOSSARY_DETAILS contains terms, categories, and assignments', 'ANCHOR links terms to their parent glossary', 'Use ASSIGNED_ASSETS to see linked data']
+  },
+  {
+    id: 'gold-quality-discovery',
+    question: 'What data quality checks exist? (Gold Layer)',
+    icon: Clock,
+    category: 'gold',
+    difficulty: 'intermediate',
+    isGold: true,
+    queries: [
+      { id: 'gold-dq-checks', label: '⭐ DQ checks (Anomalo/Soda/MC)', sql: `SELECT ASSET_NAME, ANOMALO_CHECK_TYPE, SODA_CHECK_DEFINITION, MC_MONITOR_TYPE, MC_MONITOR_STATUS FROM GOLD.DATA_QUALITY_DETAILS WHERE COALESCE(SODA_CHECK_DEFINITION, ANOMALO_CHECK_TYPE, MC_MONITOR_TYPE) IS NOT NULL;`, isGold: true },
+      { id: 'gold-relational-stats', label: 'Table sizes & usage', sql: `SELECT ASSET_NAME, TABLE_ROW_COUNT, TABLE_SIZE_BYTES, TABLE_RECENT_USERS, TABLE_TOTAL_READ_COUNT FROM GOLD.RELATIONAL_ASSET_DETAILS WHERE ASSET_TYPE = 'Table' AND CONNECTOR_NAME = 'snowflake' ORDER BY TABLE_ROW_COUNT DESC LIMIT 50;`, isGold: true }
+    ],
+    tips: ['GOLD.DATA_QUALITY_DETAILS integrates Anomalo, Soda, Monte Carlo', 'Check MC_MONITOR_STATUS for Monte Carlo status', 'GOLD.RELATIONAL_ASSET_DETAILS has table metrics']
+  },
+  {
+    id: 'gold-documented-assets',
+    question: 'What assets have documentation? (Gold Layer)',
+    icon: FileText,
+    category: 'gold',
+    difficulty: 'beginner',
+    isGold: true,
+    queries: [
+      { id: 'gold-with-readme', label: '⭐ Assets with README docs', sql: `SELECT A.ASSET_NAME, A.ASSET_TYPE, A.ASSET_QUALIFIED_NAME, R.DESCRIPTION AS README_TEXT FROM GOLD.ASSETS A LEFT JOIN GOLD.README R ON A.README_GUID = R.GUID WHERE R.DESCRIPTION IS NOT NULL LIMIT 50;`, isGold: true },
+      { id: 'gold-enrichment-coverage', label: 'Metadata completeness', sql: `SELECT type_name AS asset_type, COUNT(*) AS total_count, COUNT(CASE WHEN description IS NOT NULL AND description <> '' THEN 1 END) AS with_description, COUNT(CASE WHEN LOWER(certificate_status) = 'verified' THEN 1 END) AS certified, COUNT(CASE WHEN tag_names IS NOT NULL AND ARRAY_SIZE(tag_names) > 0 THEN 1 END) AS with_tags FROM GOLD.ASSET_LOOKUP_TABLE WHERE type_name IN ('Table','Schema','TableauDashboard') GROUP BY type_name;`, isGold: true }
+    ],
+    tips: ['GOLD.README joins asset READMEs automatically', 'Use README_GUID to link assets to documentation', 'Great for data catalog exports']
+  },
+
   // ============ DATA DISCOVERY ============
   {
     id: 'find-tables',
@@ -296,6 +379,7 @@ const DISCOVERY_QUESTIONS = [
 // Category metadata
 const CATEGORIES = [
   { id: 'all', label: 'All Questions', icon: Sparkles },
+  { id: 'gold', label: '⭐ Gold Layer', icon: Gem, isGold: true },
   { id: 'discovery', label: 'Data Discovery', icon: Search },
   { id: 'lineage', label: 'Lineage', icon: GitBranch },
   { id: 'governance', label: 'Governance', icon: ShieldCheck },
@@ -308,6 +392,7 @@ const CATEGORIES = [
 // Map sidebar categories to discovery card categories
 // Sidebar categories may map to multiple discovery categories
 const SIDEBAR_TO_DISCOVERY_MAP = {
+  gold: ['gold'],  // Gold Layer shows Gold-specific discovery cards
   core: ['discovery'],
   glossary: ['glossary'],
   datamesh: ['governance'],
@@ -325,6 +410,11 @@ const SIDEBAR_TO_DISCOVERY_MAP = {
 
 // Category info for landing pages
 const CATEGORY_INFO = {
+  gold: {
+    title: 'Gold Layer (Curated Views)',
+    description: 'Pre-joined, curated views for common MDLH use cases. Includes GOLD.ASSETS, GOLD.FULL_LINEAGE, GOLD.GLOSSARY_DETAILS, and more.',
+    icon: Sparkles
+  },
   core: {
     title: 'Core Metadata',
     description: 'Explore tables, columns, schemas, and database structure in your MDLH.',
@@ -519,19 +609,33 @@ export default function DiscoveryCards({
         <div className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-thin">
           {compactCards.map(question => {
             const Icon = question.icon;
+            const isGoldCard = question.isGold || question.category === 'gold';
             return (
               <button
                 key={question.id}
                 onClick={() => handleQueryClick(question.queries[0])}
-                className="flex-shrink-0 w-56 p-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all text-left group"
+                className={`flex-shrink-0 w-56 p-3 rounded-lg border transition-all text-left group ${
+                  isGoldCard 
+                    ? 'bg-gradient-to-br from-amber-50 to-yellow-50 border-amber-200 hover:border-amber-400 hover:shadow-lg ring-1 ring-amber-100' 
+                    : 'bg-white border-gray-200 hover:border-blue-300 hover:shadow-md'
+                }`}
               >
                 <div className="flex items-start gap-2">
-                  <div className="p-1.5 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
-                    <Icon size={16} className="text-blue-600" />
+                  <div className={`p-1.5 rounded-lg transition-colors ${
+                    isGoldCard 
+                      ? 'bg-amber-100 group-hover:bg-amber-200' 
+                      : 'bg-blue-50 group-hover:bg-blue-100'
+                  }`}>
+                    <Icon size={16} className={isGoldCard ? 'text-amber-600' : 'text-blue-600'} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-800 line-clamp-2">{question.question}</p>
+                    <p className={`text-sm font-medium line-clamp-2 ${isGoldCard ? 'text-amber-900' : 'text-gray-800'}`}>
+                      {question.question}
+                    </p>
                     <div className="flex items-center gap-2 mt-2">
+                      {isGoldCard && (
+                        <span className="px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-200 text-amber-800">GOLD</span>
+                      )}
                       <DifficultyBadge level={question.difficulty} />
                       <span className="text-xs text-gray-400">{question.queries.length} queries</span>
                     </div>
@@ -604,14 +708,19 @@ export default function DiscoveryCards({
             {CATEGORIES.map(cat => {
               const Icon = cat.icon;
               const isSelected = selectedCategory === cat.id;
+              const isGoldCat = cat.isGold || cat.id === 'gold';
               return (
                 <button
                   key={cat.id}
                   onClick={() => setSelectedCategory(cat.id)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg whitespace-nowrap transition-all ${
                     isSelected
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      ? isGoldCat 
+                        ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-white shadow-md' 
+                        : 'bg-blue-600 text-white'
+                      : isGoldCat 
+                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 ring-1 ring-amber-200' 
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
                   <Icon size={14} />
@@ -628,12 +737,19 @@ export default function DiscoveryCards({
         {filteredQuestions.map(question => {
           const Icon = question.icon;
           const isExpanded = expandedCard === question.id;
+          const isGoldCard = question.isGold || question.category === 'gold';
 
           return (
             <div
               key={question.id}
-              className={`bg-white rounded-xl border transition-all ${
-                isExpanded ? 'border-blue-300 shadow-lg' : 'border-gray-200 hover:border-gray-300 hover:shadow-md'
+              className={`rounded-xl border transition-all ${
+                isGoldCard 
+                  ? isExpanded 
+                    ? 'bg-gradient-to-br from-amber-50 to-yellow-50 border-amber-400 shadow-lg ring-2 ring-amber-200' 
+                    : 'bg-gradient-to-br from-amber-50 to-yellow-50 border-amber-200 hover:border-amber-400 hover:shadow-lg ring-1 ring-amber-100'
+                  : isExpanded 
+                    ? 'bg-white border-blue-300 shadow-lg' 
+                    : 'bg-white border-gray-200 hover:border-gray-300 hover:shadow-md'
               }`}
             >
               {/* Card header */}
@@ -642,15 +758,28 @@ export default function DiscoveryCards({
                 className="w-full p-4 text-left"
               >
                 <div className="flex items-start gap-3">
-                  <div className={`p-2 rounded-lg ${isExpanded ? 'bg-blue-100' : 'bg-gray-100'}`}>
-                    <Icon size={20} className={isExpanded ? 'text-blue-600' : 'text-gray-600'} />
+                  <div className={`p-2 rounded-lg ${
+                    isGoldCard 
+                      ? isExpanded ? 'bg-amber-200' : 'bg-amber-100' 
+                      : isExpanded ? 'bg-blue-100' : 'bg-gray-100'
+                  }`}>
+                    <Icon size={20} className={
+                      isGoldCard 
+                        ? 'text-amber-600' 
+                        : isExpanded ? 'text-blue-600' : 'text-gray-600'
+                    } />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
-                      <h3 className="font-semibold text-gray-900">{question.question}</h3>
+                      <div className="flex items-center gap-2">
+                        {isGoldCard && (
+                          <span className="px-1.5 py-0.5 text-xs font-bold rounded bg-amber-300 text-amber-900">GOLD</span>
+                        )}
+                        <h3 className={`font-semibold ${isGoldCard ? 'text-amber-900' : 'text-gray-900'}`}>{question.question}</h3>
+                      </div>
                       <ChevronRight
                         size={18}
-                        className={`text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-90' : ''}`}
+                        className={`${isGoldCard ? 'text-amber-400' : 'text-gray-400'} transition-transform flex-shrink-0 ${isExpanded ? 'rotate-90' : ''}`}
                       />
                     </div>
                     <div className="flex items-center gap-2 mt-2">
