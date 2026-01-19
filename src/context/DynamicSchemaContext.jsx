@@ -14,7 +14,6 @@
 
 import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
 import { useConnection, useMetadata, useQuery } from '../hooks/useSnowflake';
-import { buildSafeFQN } from '../utils/queryHelpers';
 import { UNIFIED_FIELD_CATALOG, getFieldById } from '../evaluation/catalog/unifiedFields';
 import { escapeIdentifier, escapeStringValue, buildSafeFQN } from '../utils/queryHelpers';
 import { createLogger } from '../utils/logger';
