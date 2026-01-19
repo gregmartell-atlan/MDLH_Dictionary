@@ -120,70 +120,79 @@ class MetadataCache:
         """Create a cache key from arguments."""
         key_str = json.dumps(args, sort_keys=True, default=str)
         return hashlib.md5(key_str.encode()).hexdigest()
+
+    def _scoped_key(self, scope: Optional[str], *args) -> str:
+        """Create a cache key including scope to avoid cross-tenant leaks."""
+        if scope:
+            return self._make_key(scope, *args)
+        return self._make_key(*args)
     
     # Database cache
-    def get_databases(self) -> Optional[Any]:
+    def get_databases(self, scope: Optional[str] = None) -> Optional[Any]:
         with self._lock:
-            return self._databases.get("all")
+            return self._databases.get(scope or "all")
     
-    def set_databases(self, data: Any):
+    def set_databases(self, data: Any, scope: Optional[str] = None):
         with self._lock:
-            self._databases["all"] = data
+            self._databases[scope or "all"] = data
     
     def clear_databases(self):
         with self._lock:
             self._databases.clear()
     
     # Schema cache
-    def get_schemas(self, database: str) -> Optional[Any]:
+    def get_schemas(self, database: str, scope: Optional[str] = None) -> Optional[Any]:
         with self._lock:
-            return self._schemas.get(database)
+            key = self._scoped_key(scope, database)
+            return self._schemas.get(key)
     
-    def set_schemas(self, database: str, data: Any):
+    def set_schemas(self, database: str, data: Any, scope: Optional[str] = None):
         with self._lock:
-            self._schemas[database] = data
+            key = self._scoped_key(scope, database)
+            self._schemas[key] = data
     
-    def clear_schemas(self, database: Optional[str] = None):
+    def clear_schemas(self, database: Optional[str] = None, scope: Optional[str] = None):
         with self._lock:
             if database:
-                self._schemas.pop(database, None)
+                key = self._scoped_key(scope, database)
+                self._schemas.pop(key, None)
             else:
                 self._schemas.clear()
     
     # Table cache
-    def get_tables(self, database: str, schema: str) -> Optional[Any]:
-        key = self._make_key(database, schema)
+    def get_tables(self, database: str, schema: str, scope: Optional[str] = None) -> Optional[Any]:
+        key = self._scoped_key(scope, database, schema)
         with self._lock:
             return self._tables.get(key)
     
-    def set_tables(self, database: str, schema: str, data: Any):
-        key = self._make_key(database, schema)
+    def set_tables(self, database: str, schema: str, data: Any, scope: Optional[str] = None):
+        key = self._scoped_key(scope, database, schema)
         with self._lock:
             self._tables[key] = data
     
-    def clear_tables(self, database: Optional[str] = None, schema: Optional[str] = None):
+    def clear_tables(self, database: Optional[str] = None, schema: Optional[str] = None, scope: Optional[str] = None):
         with self._lock:
             if database and schema:
-                key = self._make_key(database, schema)
+                key = self._scoped_key(scope, database, schema)
                 self._tables.pop(key, None)
             else:
                 self._tables.clear()
     
     # Column cache
-    def get_columns(self, database: str, schema: str, table: str) -> Optional[Any]:
-        key = self._make_key(database, schema, table)
+    def get_columns(self, database: str, schema: str, table: str, scope: Optional[str] = None) -> Optional[Any]:
+        key = self._scoped_key(scope, database, schema, table)
         with self._lock:
             return self._columns.get(key)
     
-    def set_columns(self, database: str, schema: str, table: str, data: Any):
-        key = self._make_key(database, schema, table)
+    def set_columns(self, database: str, schema: str, table: str, data: Any, scope: Optional[str] = None):
+        key = self._scoped_key(scope, database, schema, table)
         with self._lock:
             self._columns[key] = data
     
-    def clear_columns(self, database: Optional[str] = None, schema: Optional[str] = None, table: Optional[str] = None):
+    def clear_columns(self, database: Optional[str] = None, schema: Optional[str] = None, table: Optional[str] = None, scope: Optional[str] = None):
         with self._lock:
             if database and schema and table:
-                key = self._make_key(database, schema, table)
+                key = self._scoped_key(scope, database, schema, table)
                 self._columns.pop(key, None)
             else:
                 self._columns.clear()
@@ -199,4 +208,3 @@ class MetadataCache:
 
 # Global cache instance
 metadata_cache = MetadataCache()
-

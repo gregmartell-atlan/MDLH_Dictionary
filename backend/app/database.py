@@ -188,10 +188,12 @@ class QueryHistoryDB:
 
     @staticmethod
     def _redact_sql(sql: str) -> str:
-        """Redact string literals from SQL to avoid logging secrets/PII."""
-        return re.sub(r"'([^']|'')*'", "'***'", sql)
+        """Redact literals from SQL to avoid logging secrets/PII."""
+        redacted = re.sub(r"'([^']|'')*'", "'***'", sql)
+        redacted = re.sub(r'\b\d+(\.\d+)?\b', '***', redacted)
+        redacted = re.sub(r'\b(true|false|null)\b', '***', redacted, flags=re.IGNORECASE)
+        return redacted
 
 
 # Global instance
 query_history_db = QueryHistoryDB()
-

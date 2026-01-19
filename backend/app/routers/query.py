@@ -1,5 +1,6 @@
 """Query execution endpoints with session support."""
 
+import asyncio
 import logging
 import re
 import time
@@ -8,7 +9,7 @@ import threading
 from datetime import datetime
 from typing import Optional, List, Tuple
 from contextlib import contextmanager
-from fastapi import APIRouter, HTTPException, Query as QueryParam, Header
+from fastapi import APIRouter, HTTPException, Query as QueryParam, Header, Request
 from fastapi.responses import JSONResponse
 from snowflake.connector.errors import DatabaseError, OperationalError, ProgrammingError
 
@@ -55,11 +56,14 @@ SQL_KEYWORDS = frozenset({
 })
 SAFE_REQUEST_ID_PATTERN = re.compile(r'^[a-f0-9]{8}$', re.IGNORECASE)
 BLOCKED_STATEMENT_PATTERN = re.compile(
-    r'\b(DROP|DELETE|TRUNCATE|INSERT|UPDATE|CREATE|ALTER|GRANT|REVOKE|MERGE|COPY|PUT|GET)\b',
+    r'\b(DROP|DELETE|TRUNCATE|INSERT|UPDATE|CREATE|ALTER|GRANT|REVOKE|MERGE|COPY|PUT|GET|CALL|EXECUTE|EXECUTE\s+IMMEDIATE|USE)\b',
     re.IGNORECASE
 )
 DEFAULT_MAX_ROWS = 10000
 FETCH_BATCH_SIZE = 1000
+MAX_QUERY_TIMEOUT_SECONDS = 300
+MIN_QUERY_TIMEOUT_SECONDS = 1
+ASYNC_POLL_INTERVAL_SECONDS = 0.2
 
 
 @contextmanager
@@ -140,9 +144,18 @@ def _strip_string_literals(sql: str) -> str:
 
 
 def _is_query_allowed(sql: str) -> bool:
-    """Block DDL/DML statements to prevent destructive operations."""
+    """Allow only read-only, single-statement queries."""
     cleaned = _strip_comments(sql)
-    cleaned = _strip_string_literals(cleaned)
+    cleaned = _strip_string_literals(cleaned).lstrip()
+    if _count_statements(cleaned) != 1:
+        return False
+    match = re.match(r'^([A-Za-z]+)', cleaned)
+    if not match:
+        return False
+    first_token = match.group(1).upper()
+    allowed = {"SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN"}
+    if first_token not in allowed:
+        return False
     return BLOCKED_STATEMENT_PATTERN.search(cleaned) is None
 
 
@@ -169,6 +182,44 @@ def _fetch_rows_limited(cursor, max_rows: int, batch_size: int = FETCH_BATCH_SIZ
         rows.extend([list(row) for row in batch])
         remaining = max_rows - len(rows)
     return rows
+
+
+def _cancel_query_best_effort(session, sf_query_id: Optional[str]) -> None:
+    """Best-effort server-side cancel using Snowflake query ID."""
+    if not sf_query_id:
+        return
+    try:
+        with get_cursor(session) as cancel_cursor:
+            cancel_cursor.execute("SELECT SYSTEM$CANCEL_QUERY(%s)", (sf_query_id,))
+    except Exception as e:
+        logger.warning(f"Failed to cancel Snowflake query {sf_query_id}: {e}")
+
+
+async def _execute_sql_with_cancellation(session, cursor, sql: str, timeout_seconds: int, request: Request):
+    """Execute SQL with best-effort cancellation if client disconnects."""
+    conn = session.conn
+    if hasattr(cursor, "execute_async") and hasattr(conn, "is_still_running"):
+        async_result = cursor.execute_async(sql)
+        sf_query_id = None
+        if isinstance(async_result, dict):
+            sf_query_id = async_result.get("queryId") or async_result.get("query_id")
+        sf_query_id = sf_query_id or getattr(cursor, "sfqid", None)
+        start = time.time()
+        while sf_query_id and conn.is_still_running(sf_query_id):
+            if await request.is_disconnected():
+                _cancel_query_best_effort(session, sf_query_id)
+                raise HTTPException(status_code=499, detail="Client disconnected")
+            if time.time() - start > timeout_seconds + 5:
+                _cancel_query_best_effort(session, sf_query_id)
+                raise TimeoutError("Query exceeded timeout")
+            await asyncio.sleep(ASYNC_POLL_INTERVAL_SECONDS)
+        if hasattr(cursor, "get_results_from_sfqid") and sf_query_id:
+            result_cursor = cursor.get_results_from_sfqid(sf_query_id)
+            return result_cursor, sf_query_id
+        return cursor, sf_query_id
+
+    cursor.execute(sql)
+    return cursor, getattr(cursor, "sfqid", None)
 
 
 def _extract_tables_from_sql(sql: str) -> List[Tuple[str, str, str]]:
@@ -203,6 +254,15 @@ def _extract_tables_from_sql(sql: str) -> List[Tuple[str, str, str]]:
     return tables
 
 
+def _quote_identifier(name: str) -> str:
+    """Quote a Snowflake identifier defensively."""
+    if not name:
+        raise ValueError("Identifier cannot be empty")
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_$]*$', name):
+        name = name.replace('"', '""')
+    return f'"{name}"'
+
+
 def _check_table_exists(cursor, database: str, schema: str, table: str) -> dict:
     """Check if a table exists and get its row count."""
     result = {
@@ -214,16 +274,21 @@ def _check_table_exists(cursor, database: str, schema: str, table: str) -> dict:
     
     try:
         # Try to get table info
-        fqn = f'"{database}"."{schema}"."{table}"'
+        fqn = f"{_quote_identifier(database)}.{_quote_identifier(schema)}.{_quote_identifier(table)}"
         cursor.execute(f"DESCRIBE TABLE {fqn}")
         columns = [row[0] for row in cursor.fetchall()]
         result["columns"] = columns
         result["exists"] = True
         
-        # Get approximate row count (fast)
-        cursor.execute(f"SELECT COUNT(*) FROM {fqn} LIMIT 1")
+        # Get approximate row count from INFORMATION_SCHEMA (cheap, not exact)
+        safe_db = _quote_identifier(database)
+        cursor.execute(
+            f"SELECT row_count FROM {safe_db}.INFORMATION_SCHEMA.TABLES "
+            "WHERE table_schema = %s AND table_name = %s",
+            (schema, table)
+        )
         row = cursor.fetchone()
-        result["row_count"] = row[0] if row else 0
+        result["row_count"] = row[0] if row else None
         
     except Exception as e:
         error_msg = str(e)
@@ -527,6 +592,7 @@ async def preflight_check(
 @router.post("/execute", response_model=QuerySubmitResponse)
 async def execute_query(
     request: QueryRequest,
+    http_request: Request,
     x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
 ):
     """
@@ -553,14 +619,16 @@ async def execute_query(
         QUERY_METRICS.inc("queries_blocked")
         raise HTTPException(
             status_code=400,
-            detail="Only read-only queries (SELECT/SHOW/DESCRIBE) are allowed."
+            detail="Only single-statement, read-only queries (SELECT/SHOW/DESCRIBE/EXPLAIN) are allowed."
         )
 
     session = _get_session_or_401(x_session_id)
     query_id = str(uuid.uuid4())
     start_time = time.time()
     timeout_seconds = request.timeout or 60  # Define early for error handlers
-    max_rows = min(request.limit or DEFAULT_MAX_ROWS, DEFAULT_MAX_ROWS)
+    timeout_seconds = min(max(timeout_seconds, MIN_QUERY_TIMEOUT_SECONDS), MAX_QUERY_TIMEOUT_SECONDS)
+    requested_limit = request.limit if request.limit is not None else DEFAULT_MAX_ROWS
+    max_rows = min(max(requested_limit, 1), DEFAULT_MAX_ROWS)
     
     # Use context manager for safe cursor cleanup
     with get_cursor(session) as cursor:
@@ -575,56 +643,24 @@ async def execute_query(
             
             logger.info(f"[{req_id}] Executing query with {timeout_seconds}s timeout")
             
-            # Count statements (properly handles comments and strings)
-            statement_count = _count_statements(request.sql)
-            
-            # Execute query (enable multi-statement if needed)
+            # Execute query (single-statement only)
             columns = []
             rows = []
             result_sf_query_id = None
-            
-            if statement_count > 1:
-                logger.info(f"[{req_id}] Executing {statement_count} statements")
-                cursor.execute(request.sql, num_statements=statement_count)
-                
-                # FIX: Wrap multi-statement loop in try/except to handle cursor.nextset() failures
+            sql = request.sql.strip().rstrip(";")
+            if _is_select_like(sql) and not _has_limit(sql):
+                QUERY_METRICS.inc("queries_limit_wrapped")
+                sql = f"SELECT * FROM ({sql}) LIMIT {max_rows}"
+            result_cursor, result_sf_query_id = await _execute_sql_with_cancellation(
+                session, cursor, sql, timeout_seconds, http_request
+            )
+            columns = [desc[0] for desc in result_cursor.description] if result_cursor.description else []
+            rows = _fetch_rows_limited(result_cursor, max_rows)
+            if result_cursor is not cursor:
                 try:
-                    # For multi-statement, collect results from each statement
-                    # Keep the last non-empty result set (usually the SELECT/SHOW)
-                    while True:
-                        try:
-                            if cursor.description:
-                                current_columns = [desc[0] for desc in cursor.description]
-                                current_rows = _fetch_rows_limited(cursor, max_rows)
-                                # Keep results if this statement returned rows
-                                if current_rows or not rows:
-                                    columns = current_columns
-                                    rows = current_rows
-                                if getattr(cursor, "sfqid", None):
-                                    result_sf_query_id = cursor.sfqid
-                                    logger.info(f"[{req_id}] Statement returned {len(rows)} rows, {len(columns)} columns")
-                        except Exception as stmt_err:
-                            logger.warning(f"[{req_id}] Error processing statement result: {stmt_err}")
-                        
-                        # Move to next result set, break if none left
-                        try:
-                            if not cursor.nextset():
-                                break
-                        except Exception as next_err:
-                            logger.warning(f"[{req_id}] Error in nextset(): {next_err}")
-                            break
-                except Exception as multi_err:
-                    logger.warning(f"[{req_id}] Multi-statement processing error: {multi_err}")
-                    # Continue with whatever results we have
-            else:
-                sql = request.sql.strip().rstrip(";")
-                if _is_select_like(sql) and not _has_limit(sql):
-                    QUERY_METRICS.inc("queries_limit_wrapped")
-                    sql = f"SELECT * FROM ({sql}) LIMIT {max_rows}"
-                cursor.execute(sql)
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                rows = _fetch_rows_limited(cursor, max_rows)
-                result_sf_query_id = getattr(cursor, "sfqid", None)
+                    result_cursor.close()
+                except Exception:
+                    pass
             
             execution_time_ms = int((time.time() - start_time) * 1000)
             if len(rows) >= max_rows:
@@ -718,6 +754,8 @@ async def execute_query(
                 execution_time_ms=execution_time_ms
             )
             
+        except HTTPException:
+            raise
         except Exception as e:
             execution_time_ms = int((time.time() - start_time) * 1000)
             error_msg = str(e)
@@ -994,6 +1032,7 @@ def _execute_and_sample(cursor, sql: str, sample_limit: int = 3) -> dict:
     """Execute a query and return sample results."""
     result = {
         "success": False,
+        "has_rows": False,
         "row_count": 0,
         "columns": [],
         "sample_data": [],
@@ -1003,10 +1042,18 @@ def _execute_and_sample(cursor, sql: str, sample_limit: int = 3) -> dict:
     
     try:
         start = time.time()
-        cursor.execute(sql)
+        sql_to_run = sql
+        if sample_limit > 0 and _is_select_like(sql) and not _has_limit(sql):
+            sql_to_run = f"SELECT * FROM ({sql.rstrip(';')}) LIMIT {sample_limit}"
+        cursor.execute(sql_to_run)
         
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
-        rows = cursor.fetchall()
+        if sample_limit > 0:
+            rows = cursor.fetchmany(sample_limit)
+        else:
+            rows = cursor.fetchmany(1)
+            result["has_rows"] = len(rows) > 0
+            rows = []
         
         result["success"] = True
         result["row_count"] = len(rows)
@@ -1032,12 +1079,6 @@ def _execute_and_sample(cursor, sql: str, sample_limit: int = 3) -> dict:
     
     return result
 
-
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-
-# Thread pool for parallel query execution (batch validation)
-_batch_executor = ThreadPoolExecutor(max_workers=5)
 
 
 def _validate_single_query(session, query_req, default_db, default_schema, include_samples, sample_limit):
@@ -1065,6 +1106,8 @@ def _validate_single_query(session, query_req, default_db, default_schema, inclu
         # Determine status
         if exec_result["error_message"]:
             status = "error"
+        elif exec_result.get("has_rows"):
+            status = "success"
         elif exec_result["row_count"] == 0:
             status = "empty"
         else:
@@ -1135,83 +1178,31 @@ async def validate_batch(
     default_db = request.database or session.database or "FIELD_METADATA"
     default_schema = request.schema_name or session.schema or "PUBLIC"
     
-    # For small batches, run sequentially (overhead of parallelism not worth it)
-    if len(request.queries) <= 2:
-        results = []
-        summary = {"success": 0, "empty": 0, "error": 0}
-        
-        for query_req in request.queries:
-            try:
-                result, status = _validate_single_query(
-                    session, query_req, default_db, default_schema,
-                    request.include_samples, request.sample_limit
-                )
-                results.append(result)
-                summary[status] += 1
-            except Exception as e:
-                logger.error(f"Query validation failed: {e}")
-                results.append(QueryValidationResult(
-                    query_id=query_req.query_id,
-                    status="error",
-                    error_message=str(e)
-                ))
-                summary["error"] += 1
-        
-        return BatchValidationResponse(
-            results=results,
-            summary=summary,
-            validated_at=datetime.utcnow().isoformat()
-        )
-    
-    # For larger batches, run in parallel with semaphore for concurrency control
-    loop = asyncio.get_event_loop()
-    
-    async def validate_with_semaphore(query_req, semaphore):
-        async with semaphore:
-            return await loop.run_in_executor(
-                _batch_executor,
-                _validate_single_query,
+    results = []
+    summary = {"success": 0, "empty": 0, "error": 0}
+
+    for query_req in request.queries:
+        try:
+            result, status = _validate_single_query(
                 session, query_req, default_db, default_schema,
                 request.include_samples, request.sample_limit
             )
-    
-    try:
-        # Limit concurrent queries to prevent overwhelming Snowflake
-        semaphore = asyncio.Semaphore(5)
-        
-        tasks = [
-            validate_with_semaphore(query_req, semaphore)
-            for query_req in request.queries
-        ]
-        
-        task_results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        results = []
-        summary = {"success": 0, "empty": 0, "error": 0}
-        
-        for i, task_result in enumerate(task_results):
-            if isinstance(task_result, Exception):
-                logger.error(f"Parallel validation failed for query {i}: {task_result}")
-                results.append(QueryValidationResult(
-                    query_id=request.queries[i].query_id,
-                    status="error",
-                    error_message=str(task_result)
-                ))
-                summary["error"] += 1
-            else:
-                validation_result, status = task_result
-                results.append(validation_result)
-                summary[status] += 1
-        
-        return BatchValidationResponse(
-            results=results,
-            summary=summary,
-            validated_at=datetime.utcnow().isoformat()
-        )
-        
-    except Exception as e:
-        logger.error(f"Batch validation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            results.append(result)
+            summary[status] += 1
+        except Exception as e:
+            logger.error(f"Query validation failed: {e}")
+            results.append(QueryValidationResult(
+                query_id=query_req.query_id,
+                status="error",
+                error_message=str(e)
+            ))
+            summary["error"] += 1
+
+    return BatchValidationResponse(
+        results=results,
+        summary=summary,
+        validated_at=datetime.utcnow().isoformat()
+    )
 
 
 @router.post("/explain", response_model=QueryExplanationResponse)

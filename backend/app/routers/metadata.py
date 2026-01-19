@@ -31,6 +31,11 @@ def _get_session_or_none(session_id: Optional[str]):
     return session_manager.get_session(session_id)
 
 
+def _cache_scope(session) -> str:
+    """Scope cache entries by identity to avoid cross-tenant leaks."""
+    return f"{session.account}:{session.user}:{session.role}:{session.warehouse}"
+
+
 def _handle_snowflake_error(e: Exception, context: str):
     """
     Handle Snowflake errors gracefully.
@@ -73,10 +78,11 @@ async def list_databases(
     session = _get_session_or_none(x_session_id)
     if not session:
         return []
+    scope = _cache_scope(session)
     
     # Check cache first
     if not refresh:
-        cached = metadata_cache.get_databases()
+        cached = metadata_cache.get_databases(scope)
         if cached:
             return cached
     
@@ -95,7 +101,7 @@ async def list_databases(
             })
         cursor.close()
         
-        metadata_cache.set_databases(databases)
+        metadata_cache.set_databases(databases, scope)
         return [DatabaseInfo(**db) for db in databases]
     except Exception as e:
         return _handle_snowflake_error(e, "list_databases")
@@ -111,10 +117,11 @@ async def list_schemas(
     session = _get_session_or_none(x_session_id)
     if not session:
         return []
+    scope = _cache_scope(session)
     
     # Check cache first
     if not refresh:
-        cached = metadata_cache.get_schemas(database)
+        cached = metadata_cache.get_schemas(database, scope)
         if cached:
             return cached
     
@@ -134,7 +141,7 @@ async def list_schemas(
             })
         cursor.close()
         
-        metadata_cache.set_schemas(database, schemas)
+        metadata_cache.set_schemas(database, schemas, scope)
         return [SchemaInfo(**s) for s in schemas]
     except Exception as e:
         return _handle_snowflake_error(e, f"list_schemas({database})")
@@ -155,10 +162,11 @@ async def list_tables(
     session = _get_session_or_none(x_session_id)
     if not session:
         return []
+    scope = _cache_scope(session)
     
     # Check cache first
     if not refresh:
-        cached = metadata_cache.get_tables(database, schema)
+        cached = metadata_cache.get_tables(database, schema, scope)
         if cached:
             return cached
     
@@ -200,7 +208,7 @@ async def list_tables(
             })
         cursor.close()
         
-        metadata_cache.set_tables(database, schema, tables)
+        metadata_cache.set_tables(database, schema, tables, scope)
         logger.info(f"[Metadata] list_tables({database}.{schema}): Found {len(tables)} tables/views (sorted by row_count)")
         
         # Create TableInfo models - wrap in try/except to see validation errors
@@ -228,10 +236,11 @@ async def list_columns(
     session = _get_session_or_none(x_session_id)
     if not session:
         return []
+    scope = _cache_scope(session)
     
     # Check cache first
     if not refresh:
-        cached = metadata_cache.get_columns(database, schema, table)
+        cached = metadata_cache.get_columns(database, schema, table, scope)
         if cached:
             return cached
     
@@ -258,7 +267,7 @@ async def list_columns(
             })
         cursor.close()
         
-        metadata_cache.set_columns(database, schema, table, columns)
+        metadata_cache.set_columns(database, schema, table, columns, scope)
         return [ColumnInfo(**c) for c in columns]
     except Exception as e:
         return _handle_snowflake_error(e, f"list_columns({database}.{schema}.{table})")
@@ -268,15 +277,20 @@ async def list_columns(
 async def refresh_cache(
     database: str = None,
     schema: str = None,
-    table: str = None
+    table: str = None,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
 ):
     """Manually refresh cached metadata."""
+    session = _get_session_or_none(x_session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session not found or expired")
+    scope = _cache_scope(session)
     if table and schema and database:
-        metadata_cache.clear_columns(database, schema, table)
+        metadata_cache.clear_columns(database, schema, table, scope)
     elif schema and database:
-        metadata_cache.clear_tables(database, schema)
+        metadata_cache.clear_tables(database, schema, scope)
     elif database:
-        metadata_cache.clear_schemas(database)
+        metadata_cache.clear_schemas(database, scope)
     else:
         metadata_cache.clear_all()
     

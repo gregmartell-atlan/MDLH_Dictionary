@@ -7,6 +7,19 @@
 import type { MdlhAssetRow } from '../types/mdlh.js';
 
 const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
+const DEFAULT_EXECUTE_TIMEOUT_MS = 30_000;
+const DEFAULT_RESULTS_TIMEOUT_MS = 30_000;
+const DEFAULT_STATUS_TIMEOUT_MS = 5_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 interface QueryResult<T> {
   success: boolean;
@@ -26,14 +39,14 @@ export async function executeQuery<T>(
 ): Promise<QueryResult<T>> {
   try {
     // Step 1: Execute the query
-    const executeResponse = await fetch(`${PYTHON_BACKEND_URL}/api/query/execute`, {
+    const executeResponse = await fetchWithTimeout(`${PYTHON_BACKEND_URL}/api/query/execute`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Session-ID': sessionId,
       },
       body: JSON.stringify({ sql: query }),
-    });
+    }, DEFAULT_EXECUTE_TIMEOUT_MS);
 
     if (!executeResponse.ok) {
       const error = await executeResponse.text();
@@ -57,11 +70,11 @@ export async function executeQuery<T>(
     }
 
     // Step 2: Fetch results
-    const resultsResponse = await fetch(`${PYTHON_BACKEND_URL}/api/query/${queryId}/results`, {
+    const resultsResponse = await fetchWithTimeout(`${PYTHON_BACKEND_URL}/api/query/${queryId}/results`, {
       headers: {
         'X-Session-ID': sessionId,
       },
-    });
+    }, DEFAULT_RESULTS_TIMEOUT_MS);
 
     if (!resultsResponse.ok) {
       const error = await resultsResponse.text();
@@ -130,16 +143,16 @@ export async function fetchMdlhAssets(
  */
 export async function checkSession(sessionId: string): Promise<boolean> {
   try {
-    const response = await fetch(`${PYTHON_BACKEND_URL}/api/session/status`, {
+    const response = await fetchWithTimeout(`${PYTHON_BACKEND_URL}/api/session/status`, {
       headers: {
         'X-Session-ID': sessionId,
       },
-    });
+    }, DEFAULT_STATUS_TIMEOUT_MS);
 
     if (!response.ok) return false;
     
-    const result = await response.json() as { connected?: boolean };
-    return result.connected === true;
+    const result = await response.json() as { valid?: boolean };
+    return result.valid === true;
   } catch {
     return false;
   }
@@ -152,11 +165,11 @@ export async function getConnectionInfo(
   sessionId: string
 ): Promise<{ database?: string; schema?: string; warehouse?: string } | null> {
   try {
-    const response = await fetch(`${PYTHON_BACKEND_URL}/api/session/status`, {
+    const response = await fetchWithTimeout(`${PYTHON_BACKEND_URL}/api/session/status`, {
       headers: {
         'X-Session-ID': sessionId,
       },
-    });
+    }, DEFAULT_STATUS_TIMEOUT_MS);
 
     if (!response.ok) return null;
     
