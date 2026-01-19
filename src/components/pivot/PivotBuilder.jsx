@@ -194,7 +194,7 @@ export function PivotBuilder({ database: propDatabase, schema: propSchema }) {
   const { status: connectionStatus } = useConnection();
   const isConnected = connectionStatus?.connected === true;
   const { executeQuery, loading: queryLoading } = useQuery(connectionStatus);
-  const { discoveredTables, mdlhTableTypes } = useDynamicSchema();
+  const { discoveredTables = [], mdlhTableTypes = {} } = useDynamicSchema() || {};
   
   // State
   const [activeTab, setActiveTab] = useState('gallery'); // 'gallery' | 'custom'
