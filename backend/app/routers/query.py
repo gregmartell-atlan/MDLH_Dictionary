@@ -218,6 +218,8 @@ async def _execute_sql_with_cancellation(session, cursor, sql: str, timeout_seco
             await asyncio.sleep(ASYNC_POLL_INTERVAL_SECONDS)
         if hasattr(cursor, "get_results_from_sfqid") and sf_query_id:
             result_cursor = cursor.get_results_from_sfqid(sf_query_id)
+            if result_cursor is None:
+                return cursor, sf_query_id
             return result_cursor, sf_query_id
         return cursor, sf_query_id
 
@@ -657,8 +659,12 @@ async def execute_query(
             result_cursor, result_sf_query_id = await _execute_sql_with_cancellation(
                 session, cursor, sql, timeout_seconds, http_request
             )
-            columns = [desc[0] for desc in result_cursor.description] if result_cursor.description else []
-            rows = _fetch_rows_limited(result_cursor, max_rows)
+            if result_cursor is None or not getattr(result_cursor, "description", None):
+                columns = []
+                rows = []
+            else:
+                columns = [desc[0] for desc in result_cursor.description]
+                rows = _fetch_rows_limited(result_cursor, max_rows)
             if result_cursor is not cursor:
                 try:
                     result_cursor.close()
