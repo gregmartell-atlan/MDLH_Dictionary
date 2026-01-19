@@ -26,6 +26,7 @@ import { createLogger } from './utils/logger';
 import { buildSafeFQN, escapeStringValue } from './utils/queryHelpers';
 import { SystemConfigProvider } from './context/SystemConfigContext';
 import { useBackendInstanceGuard } from './hooks/useBackendInstanceGuard';
+import { useDynamicSchema } from './context/DynamicSchemaContext';
 import { EvaluationApp } from './evaluation';
 import { ModelingApp } from './evaluation/ModelingApp';
 import { WorkbenchPage } from './evaluation/components/workbench/WorkbenchPage';
@@ -932,6 +933,8 @@ export default function App() {
     closeConnectionModal,
     setConnectionModalOpen: setShowConnectionModal
   } = useConnectionContext();
+
+  const { discoveredTables: dynamicDiscoveredTables = [] } = useDynamicSchema();
   
   // Derive isConnected from context status
   const isConnected = globalConnectionStatus?.connected ?? false;
@@ -1129,8 +1132,23 @@ export default function App() {
   // Discover tables and pre-validate queries when database/schema changes or connection is made
   useEffect(() => {
     if (isConnected && selectedMDLHDatabase && selectedMDLHSchema) {
+      const dynamicTablesForSelection = new Set(
+        dynamicDiscoveredTables
+          .filter(
+            (t) =>
+              t.database === selectedMDLHDatabase &&
+              t.schema === selectedMDLHSchema
+          )
+          .map((t) => t.name?.toUpperCase())
+          .filter(Boolean)
+      );
       setIsDiscovering(true);
-      discoverMDLHTables(selectedMDLHDatabase, selectedMDLHSchema)
+      const discoveryPromise =
+        dynamicTablesForSelection.size > 0
+          ? Promise.resolve(dynamicTablesForSelection)
+          : discoverMDLHTables(selectedMDLHDatabase, selectedMDLHSchema);
+
+      discoveryPromise
         .then(tables => {
           setDiscoveredTables(tables);
           appLog.info('Discovered tables', { count: tables.size, database: selectedMDLHDatabase, schema: selectedMDLHSchema });
@@ -1179,7 +1197,7 @@ export default function App() {
         })
         .finally(() => setIsDiscovering(false));
     }
-  }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema, loadSampleEntities]);
+  }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema, loadSampleEntities, dynamicDiscoveredTables]);
   
   // Run batch validation on entity example queries to get sample data and suggestions
   const runBatchValidation = useCallback(async () => {
