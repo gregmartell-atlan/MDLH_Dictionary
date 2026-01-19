@@ -201,6 +201,8 @@ export function PivotBuilder({ database: propDatabase, schema: propSchema }) {
   const [selectedDimensions, setSelectedDimensions] = useState([]);
   const [selectedMeasures, setSelectedMeasures] = useState([]);
   const [selectedTable, setSelectedTable] = useState(null);
+  const [selectedDatabase, setSelectedDatabase] = useState(propDatabase || '');
+  const [selectedSchema, setSelectedSchema] = useState(propSchema || '');
   const [generatedSQL, setGeneratedSQL] = useState('');
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -208,13 +210,59 @@ export function PivotBuilder({ database: propDatabase, schema: propSchema }) {
   const [showSQL, setShowSQL] = useState(false);
   const [copiedSQL, setCopiedSQL] = useState(false);
   
+  useEffect(() => {
+    if (propDatabase && propDatabase !== selectedDatabase) {
+      setSelectedDatabase(propDatabase);
+    }
+    if (propSchema && propSchema !== selectedSchema) {
+      setSelectedSchema(propSchema);
+    }
+  }, [propDatabase, propSchema, selectedDatabase, selectedSchema]);
+
+  const availableDatabases = useMemo(() => {
+    const dbs = new Set(discoveredTables.map((t) => t.database).filter(Boolean));
+    if (propDatabase) dbs.add(propDatabase);
+    return Array.from(dbs).sort();
+  }, [discoveredTables, propDatabase]);
+
+  const availableSchemas = useMemo(() => {
+    const schemas = new Set(
+      discoveredTables
+        .filter((t) => !selectedDatabase || t.database === selectedDatabase)
+        .map((t) => t.schema)
+        .filter(Boolean)
+    );
+    if (propSchema && (!selectedDatabase || propDatabase === selectedDatabase)) {
+      schemas.add(propSchema);
+    }
+    return Array.from(schemas).sort();
+  }, [discoveredTables, selectedDatabase, propSchema, propDatabase]);
+
+  useEffect(() => {
+    if (!selectedDatabase && availableDatabases.length > 0) {
+      setSelectedDatabase(availableDatabases[0]);
+    }
+  }, [selectedDatabase, availableDatabases]);
+
+  useEffect(() => {
+    if (!selectedSchema && availableSchemas.length > 0) {
+      setSelectedSchema(availableSchemas[0]);
+    }
+  }, [selectedSchema, availableSchemas]);
+
+  useEffect(() => {
+    if (selectedSchema && availableSchemas.length > 0 && !availableSchemas.includes(selectedSchema)) {
+      setSelectedSchema(availableSchemas[0]);
+    }
+  }, [selectedSchema, availableSchemas]);
+
   // Available MDLH tables (ASSETS, LINEAGE, etc.)
   const availableTables = useMemo(() => {
     return discoveredTables.filter(t => 
-      (t.database === propDatabase && t.schema === propSchema) ||
+      (t.database === selectedDatabase && t.schema === selectedSchema) ||
       mdlhTableTypes[t.fqn]
     );
-  }, [discoveredTables, propDatabase, propSchema, mdlhTableTypes]);
+  }, [discoveredTables, selectedDatabase, selectedSchema, mdlhTableTypes]);
   
   // Default to ASSETS table
   useEffect(() => {
@@ -226,15 +274,24 @@ export function PivotBuilder({ database: propDatabase, schema: propSchema }) {
       setSelectedTable(assetsTable?.fqn || availableTables[0].fqn);
     }
   }, [availableTables, selectedTable, mdlhTableTypes]);
+
+  useEffect(() => {
+    if (selectedTable && availableTables.length > 0) {
+      const tableExists = availableTables.some((t) => t.fqn === selectedTable);
+      if (!tableExists) {
+        setSelectedTable(null);
+      }
+    }
+  }, [availableTables, selectedTable]);
   
   // Table FQN for queries
   const tableFqn = useMemo(() => {
     if (selectedTable) return selectedTable;
-    if (propDatabase && propSchema) {
-      return buildSafeFQN(propDatabase, propSchema, 'ASSETS');
+    if (selectedDatabase && selectedSchema) {
+      return buildSafeFQN(selectedDatabase, selectedSchema, 'ASSETS');
     }
     return null;
-  }, [selectedTable, propDatabase, propSchema]);
+  }, [selectedTable, selectedDatabase, selectedSchema]);
   
   // ==========================================================================
   // HANDLERS
@@ -296,8 +353,8 @@ export function PivotBuilder({ database: propDatabase, schema: propSchema }) {
     
     try {
       const result = await executeQuery(generatedSQL, { 
-        database: propDatabase, 
-        schema: propSchema 
+        database: selectedDatabase || propDatabase, 
+        schema: selectedSchema || propSchema 
       });
       
       // Normalize results
@@ -314,7 +371,7 @@ export function PivotBuilder({ database: propDatabase, schema: propSchema }) {
     } finally {
       setLoading(false);
     }
-  }, [generatedSQL, isConnected, executeQuery, propDatabase, propSchema]);
+  }, [generatedSQL, isConnected, executeQuery, propDatabase, propSchema, selectedDatabase, selectedSchema]);
   
   const copySQL = useCallback(() => {
     navigator.clipboard.writeText(generatedSQL);
@@ -362,6 +419,34 @@ export function PivotBuilder({ database: propDatabase, schema: propSchema }) {
           
           {/* Table selector */}
           <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Database size={16} className="text-slate-400" />
+              <select
+                value={selectedDatabase}
+                onChange={(e) => setSelectedDatabase(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500"
+                disabled={!isConnected || availableDatabases.length === 0}
+              >
+                {availableDatabases.length === 0 && <option value="">No databases</option>}
+                {availableDatabases.map((db) => (
+                  <option key={db} value={db}>{db}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Layers size={16} className="text-slate-400" />
+              <select
+                value={selectedSchema}
+                onChange={(e) => setSelectedSchema(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500"
+                disabled={!isConnected || availableSchemas.length === 0}
+              >
+                {availableSchemas.length === 0 && <option value="">No schemas</option>}
+                {availableSchemas.map((schema) => (
+                  <option key={schema} value={schema}>{schema}</option>
+                ))}
+              </select>
+            </div>
             <div className="flex items-center gap-2">
               <Table2 size={16} className="text-slate-400" />
               <select
