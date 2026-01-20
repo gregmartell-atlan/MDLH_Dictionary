@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useConnection, useQuery } from './useSnowflake';
 import { UNIFIED_FIELD_CATALOG, getFieldById } from '../evaluation/catalog/unifiedFields';
 import { buildSafeFQN } from '../utils/queryHelpers';
+import { matchFieldToColumn, matchCatalogToColumns, MATCH_CONFIDENCE } from '../utils/columnMatcher';
 
 /**
  * Discover columns available in a specific MDLH table
@@ -99,13 +100,28 @@ export function useMDLHSchema(database, schema, tableName = 'ASSETS') {
   }, [isConnected, database, schema, discoverColumns]);
 
   /**
-   * Check if a specific column exists
+   * Get list of column names for matching
+   */
+  const columnList = useMemo(() => Array.from(columns.keys()), [columns]);
+
+  /**
+   * Check if a specific column exists (exact match)
    */
   const hasColumn = useCallback((columnName) => {
     if (!columnName) return false;
     // Check both exact match and uppercase (MDLH uses uppercase)
     return columns.has(columnName) || columns.has(columnName.toUpperCase());
   }, [columns]);
+
+  /**
+   * Find a column using fuzzy matching (for schema variations)
+   * Returns the matched column name or null
+   */
+  const findColumn = useCallback((fieldId, mdlhColumn = null) => {
+    if (columnList.length === 0) return null;
+    const result = matchFieldToColumn(fieldId, columnList, mdlhColumn);
+    return result.matched ? result.column : null;
+  }, [columnList]);
 
   /**
    * Get column info for a specific column
@@ -117,7 +133,8 @@ export function useMDLHSchema(database, schema, tableName = 'ASSETS') {
 
   /**
    * Check field availability - combines Atlan catalog check with MDLH column check
-   * Returns: { inCatalog, mdlhColumn, inMDLH, status, message }
+   * Now uses fuzzy matching to find columns even with naming variations
+   * Returns: { inCatalog, mdlhColumn, actualColumn, inMDLH, status, message, matchConfidence, matchMethod }
    */
   const getFieldAvailability = useCallback((fieldId) => {
     const field = getFieldById(fieldId);
@@ -126,9 +143,12 @@ export function useMDLHSchema(database, schema, tableName = 'ASSETS') {
       return {
         inCatalog: false,
         mdlhColumn: null,
+        actualColumn: null,
         inMDLH: false,
         status: 'unknown',
         message: `Field "${fieldId}" not found in catalog`,
+        matchConfidence: 0,
+        matchMethod: 'none',
       };
     }
     
@@ -138,10 +158,13 @@ export function useMDLHSchema(database, schema, tableName = 'ASSETS') {
       return {
         inCatalog: true,
         mdlhColumn: null,
+        actualColumn: null,
         inMDLH: false,
         status: 'no_mapping',
         message: `Field "${field.displayName}" has no MDLH column mapping`,
         field,
+        matchConfidence: 0,
+        matchMethod: 'none',
       };
     }
     
@@ -150,27 +173,64 @@ export function useMDLHSchema(database, schema, tableName = 'ASSETS') {
       return {
         inCatalog: true,
         mdlhColumn,
+        actualColumn: null,
         inMDLH: null, // Unknown
         status: 'pending',
         message: `Connect to Snowflake to verify column "${mdlhColumn}"`,
         field,
+        matchConfidence: 0,
+        matchMethod: 'none',
       };
     }
     
-    const exists = hasColumn(mdlhColumn);
+    // Try exact match first
+    if (hasColumn(mdlhColumn)) {
+      const actualCol = mdlhColumn.toUpperCase();
+      return {
+        inCatalog: true,
+        mdlhColumn,
+        actualColumn: actualCol,
+        inMDLH: true,
+        status: 'available',
+        message: `Column "${actualCol}" available in MDLH`,
+        field,
+        columnInfo: getColumn(actualCol),
+        matchConfidence: 1.0,
+        matchMethod: 'exact_mdlh',
+      };
+    }
+    
+    // Try fuzzy matching
+    const fuzzyMatch = matchFieldToColumn(fieldId, columnList, mdlhColumn);
+    
+    if (fuzzyMatch.matched) {
+      return {
+        inCatalog: true,
+        mdlhColumn,
+        actualColumn: fuzzyMatch.column,
+        inMDLH: true,
+        status: fuzzyMatch.confidence >= MATCH_CONFIDENCE.thresholds.high ? 'available' : 'available_fuzzy',
+        message: `Column "${fuzzyMatch.column}" matched (${Math.round(fuzzyMatch.confidence * 100)}% confidence via ${fuzzyMatch.method})`,
+        field,
+        columnInfo: getColumn(fuzzyMatch.column),
+        matchConfidence: fuzzyMatch.confidence,
+        matchMethod: fuzzyMatch.method,
+      };
+    }
     
     return {
       inCatalog: true,
       mdlhColumn,
-      inMDLH: exists,
-      status: exists ? 'available' : 'missing',
-      message: exists 
-        ? `Column "${mdlhColumn}" available in MDLH`
-        : `Column "${mdlhColumn}" not found in ${tableName} table`,
+      actualColumn: null,
+      inMDLH: false,
+      status: 'missing',
+      message: `Column "${mdlhColumn}" not found in ${tableName} table`,
       field,
-      columnInfo: exists ? getColumn(mdlhColumn) : null,
+      columnInfo: null,
+      matchConfidence: 0,
+      matchMethod: 'none',
     };
-  }, [columns, loading, error, hasColumn, getColumn, tableName]);
+  }, [columns, loading, error, hasColumn, getColumn, tableName, columnList]);
 
   /**
    * Get availability for multiple fields at once
@@ -183,24 +243,68 @@ export function useMDLHSchema(database, schema, tableName = 'ASSETS') {
   }, [getFieldAvailability]);
 
   /**
-   * Get all fields that are available in MDLH
+   * Match all catalog fields to available columns (with fuzzy matching)
+   */
+  const catalogMatch = useMemo(() => {
+    if (columnList.length === 0) return null;
+    
+    const catalog = UNIFIED_FIELD_CATALOG.map(f => ({
+      id: f.id,
+      displayName: f.displayName,
+      mdlhColumn: f.mdlhColumn,
+    }));
+    
+    return matchCatalogToColumns(catalog, columnList);
+  }, [columnList]);
+
+  /**
+   * Get all fields that are available in MDLH (including fuzzy matches)
    */
   const availableFields = useMemo(() => {
+    if (!catalogMatch) {
+      // Fallback to exact matching if catalog match not available
+      return UNIFIED_FIELD_CATALOG.filter(field => {
+        if (!field.mdlhColumn) return false;
+        return hasColumn(field.mdlhColumn);
+      });
+    }
+    
     return UNIFIED_FIELD_CATALOG.filter(field => {
-      if (!field.mdlhColumn) return false;
-      return hasColumn(field.mdlhColumn);
+      const match = catalogMatch.catalog.find(m => m.fieldId === field.id);
+      return match?.matched || false;
     });
-  }, [hasColumn]);
+  }, [hasColumn, catalogMatch]);
 
   /**
    * Get all fields missing from MDLH
    */
   const missingFields = useMemo(() => {
+    if (!catalogMatch) {
+      return UNIFIED_FIELD_CATALOG.filter(field => {
+        if (!field.mdlhColumn) return true;
+        return !hasColumn(field.mdlhColumn);
+      });
+    }
+    
     return UNIFIED_FIELD_CATALOG.filter(field => {
-      if (!field.mdlhColumn) return true; // No mapping = missing
-      return !hasColumn(field.mdlhColumn);
+      const match = catalogMatch.catalog.find(m => m.fieldId === field.id);
+      return !match?.matched;
     });
-  }, [hasColumn]);
+  }, [hasColumn, catalogMatch]);
+
+  /**
+   * Get match statistics
+   */
+  const matchStats = useMemo(() => {
+    return catalogMatch?.stats || {
+      total: UNIFIED_FIELD_CATALOG.length,
+      matched: availableFields.length,
+      highConfidence: 0,
+      mediumConfidence: 0,
+      lowConfidence: 0,
+      unmatched: missingFields.length,
+    };
+  }, [catalogMatch, availableFields.length, missingFields.length]);
 
   /**
    * Build a dynamic coverage query for available fields only
@@ -251,7 +355,7 @@ export function useMDLHSchema(database, schema, tableName = 'ASSETS') {
     // Column data
     columns,
     columnCount: columns.size,
-    columnList: Array.from(columns.keys()),
+    columnList,
     
     // Loading state
     loading: loading || queryLoading,
@@ -262,12 +366,17 @@ export function useMDLHSchema(database, schema, tableName = 'ASSETS') {
     // Column checks
     hasColumn,
     getColumn,
+    findColumn, // Fuzzy column finder
     
-    // Field availability (two-phase check)
+    // Field availability (two-phase check with fuzzy matching)
     getFieldAvailability,
     getFieldsAvailability,
     availableFields,
     missingFields,
+    
+    // Match statistics
+    matchStats,
+    catalogMatch,
     
     // Query building
     buildCoverageQuery,

@@ -204,7 +204,7 @@ export function MdlhProvider({ children }) {
     discoverTablesFast(context.database, context.schema, false);
   }, [status?.connected, context.database, context.schema, discoverTablesFast]);
 
-  const fetchCapabilities = useCallback(async (refresh = false) => {
+  const fetchCapabilities = useCallback(async (refresh = false, includeAllTables = false) => {
     if (!status?.connected || !context.database || !context.schema) return;
     if (capabilitiesAbortRef.current) {
       capabilitiesAbortRef.current.abort();
@@ -212,7 +212,8 @@ export function MdlhProvider({ children }) {
     const controller = new AbortController();
     capabilitiesAbortRef.current = controller;
 
-    if (!refresh) {
+    // Skip cache if requesting all tables (more comprehensive scan)
+    if (!refresh && !includeAllTables) {
       const cached = loadCapabilitiesCache(context.database, context.schema);
       if (cached) {
         setCapabilities(cached);
@@ -226,6 +227,7 @@ export function MdlhProvider({ children }) {
         database: context.database,
         schema: context.schema,
         refresh: refresh ? 'true' : 'false',
+        include_all_tables: includeAllTables ? 'true' : 'false',
       });
       const response = await fetch(`${API_URL}/api/metadata/capabilities?${params.toString()}`, {
         headers: buildHeaders(),
@@ -261,8 +263,12 @@ export function MdlhProvider({ children }) {
     }
   }, [status?.connected, context.database, context.schema, discoverDatabases, discoverSchemas, discoverTablesFast]);
 
-  const refreshCapabilities = useCallback(() => {
-    fetchCapabilities(true);
+  const refreshCapabilities = useCallback((includeAllTables = false) => {
+    fetchCapabilities(true, includeAllTables);
+  }, [fetchCapabilities]);
+
+  const fetchAllTableColumns = useCallback(() => {
+    fetchCapabilities(false, true);
   }, [fetchCapabilities]);
 
   useEffect(() => {
@@ -285,7 +291,8 @@ export function MdlhProvider({ children }) {
     setTable,
     refreshDiscovery,
     refreshCapabilities,
-  }), [context, source, capabilities, capabilitiesLoading, setContext, setDatabase, setSchema, setTable, refreshDiscovery, refreshCapabilities]);
+    fetchAllTableColumns,
+  }), [context, source, capabilities, capabilitiesLoading, setContext, setDatabase, setSchema, setTable, refreshDiscovery, refreshCapabilities, fetchAllTableColumns]);
 
   return (
     <MdlhContext.Provider value={value}>

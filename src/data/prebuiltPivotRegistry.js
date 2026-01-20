@@ -13,6 +13,7 @@
  */
 
 import { resolveAvailableColumns, resolveTableFqn } from '../utils/contextResolver.js';
+import { matchFieldToColumn, calculateSimilarity, normalizeColumnName } from '../utils/columnMatcher.js';
 
 // =============================================================================
 // DIMENSION DEFINITIONS
@@ -403,6 +404,8 @@ function mergeColumnAliases() {
 function resolveColumnName(column, aliasMap, lookup) {
   if (!column) return { resolved: null, missing: null, alternate: null };
   const candidates = [column, ...(aliasMap[column] || [])];
+  
+  // Try exact matching first
   for (const candidate of candidates) {
     const normalized = normalizeIdentifier(candidate);
     const compact = compactIdentifier(candidate);
@@ -413,6 +416,47 @@ function resolveColumnName(column, aliasMap, lookup) {
       return { resolved: lookup.get(compact), missing: null, alternate: candidate !== column ? candidate : null };
     }
   }
+  
+  // Try fuzzy matching using column matcher
+  const availableColumns = Array.from(lookup.values());
+  if (availableColumns.length > 0) {
+    // Try the column name as a field ID for fuzzy matching
+    const fuzzyResult = matchFieldToColumn(
+      column.toLowerCase().replace(/_/g, '_'),
+      availableColumns,
+      column
+    );
+    
+    if (fuzzyResult.matched && fuzzyResult.confidence >= 0.7) {
+      return { 
+        resolved: fuzzyResult.column, 
+        missing: null, 
+        alternate: `${fuzzyResult.column} (${Math.round(fuzzyResult.confidence * 100)}% match via ${fuzzyResult.method})` 
+      };
+    }
+    
+    // Last resort: normalized column name similarity
+    const normalizedCol = normalizeColumnName(column);
+    let bestMatch = null;
+    let bestSimilarity = 0;
+    
+    for (const availCol of availableColumns) {
+      const sim = calculateSimilarity(normalizedCol, normalizeColumnName(availCol));
+      if (sim > bestSimilarity && sim >= 0.75) {
+        bestSimilarity = sim;
+        bestMatch = availCol;
+      }
+    }
+    
+    if (bestMatch) {
+      return {
+        resolved: bestMatch,
+        missing: null,
+        alternate: `${bestMatch} (${Math.round(bestSimilarity * 100)}% similarity)`
+      };
+    }
+  }
+  
   return { resolved: null, missing: column, alternate: null };
 }
 

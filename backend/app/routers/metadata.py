@@ -13,7 +13,9 @@ from app.utils.logger import logger
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 METADATA_STATEMENT_TIMEOUT_SECONDS = 30
-CAPABILITY_TABLE_CANDIDATES = [
+
+# Priority tables to always discover columns for (these are most commonly used)
+PRIORITY_TABLES = [
     "ASSETS",
     "CUSTOM_METADATA",
     "LINEAGE",
@@ -24,6 +26,9 @@ CAPABILITY_TABLE_CANDIDATES = [
     "COLUMN_ENTITY",
     "PROCESS_ENTITY",
 ]
+
+# Maximum tables to discover columns for (to avoid overwhelming queries)
+MAX_COLUMN_DISCOVERY_TABLES = 25
 
 
 def _validate_identifier(name: str) -> str:
@@ -323,15 +328,28 @@ async def get_capabilities(
     database: str = Query(..., description="Database name"),
     schema: str = Query(..., description="Schema name"),
     refresh: bool = False,
+    include_all_tables: bool = Query(False, description="Discover columns for all tables, not just priority tables"),
     x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
 ):
-    """Discover tables/columns for a database+schema and infer profile."""
+    """Discover tables/columns for a database+schema and infer profile.
+
+    This endpoint scans the schema to discover:
+    - All tables and views in the schema
+    - Columns for priority tables (ASSETS, LINEAGE, etc.) by default
+    - Columns for ALL tables if include_all_tables=true
+
+    The profile is inferred from the available tables:
+    - ATLAN_GOLD: Has ASSETS + TAGS tables
+    - FIELD_METADATA: Has TABLE_ENTITY + COLUMN_ENTITY tables
+    - CUSTOM: Other schemas
+    """
     session = _get_session_or_none(x_session_id)
     if not session:
         return JSONResponse(status_code=401, content={"error": "SESSION_NOT_FOUND"})
     scope = _cache_scope(session)
 
-    if not refresh:
+    # Check cache (but skip if include_all_tables to ensure full scan)
+    if not refresh and not include_all_tables:
         cached = metadata_cache.get_capabilities(database, schema, scope)
         if cached:
             return cached
@@ -342,44 +360,78 @@ async def get_capabilities(
 
         cursor = session.conn.cursor()
         cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {METADATA_STATEMENT_TIMEOUT_SECONDS}")
+
+        # Discover all tables and views with row counts for better context
         cursor.execute(f"""
-            SELECT TABLE_NAME
+            SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT
             FROM {safe_db}.INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = '{safe_schema_literal}'
+              AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+            ORDER BY ROW_COUNT DESC NULLS LAST
         """)
-        tables = [row[0] for row in cursor.fetchall()]
+        table_rows = cursor.fetchall()
+        tables = [row[0] for row in table_rows]
+        table_metadata = {row[0]: {"type": row[1], "row_count": row[2]} for row in table_rows}
+
+        # Fallback to ATLAN_GOLD if schema is empty
         if not tables and database.upper() != "ATLAN_GOLD":
             cursor.execute(f"""
-                SELECT TABLE_NAME
+                SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT
                 FROM "ATLAN_GOLD".INFORMATION_SCHEMA.TABLES
                 WHERE TABLE_SCHEMA = '{safe_schema_literal}'
+                  AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+                ORDER BY ROW_COUNT DESC NULLS LAST
             """)
-            gold_tables = [row[0] for row in cursor.fetchall()]
-            if gold_tables:
-                tables = gold_tables
+            gold_rows = cursor.fetchall()
+            if gold_rows:
+                tables = [row[0] for row in gold_rows]
+                table_metadata = {row[0]: {"type": row[1], "row_count": row[2]} for row in gold_rows}
                 database = "ATLAN_GOLD"
-        candidate_tables = [t for t in tables if t.upper() in {c.upper() for c in CAPABILITY_TABLE_CANDIDATES}]
-        if not candidate_tables:
-            candidate_tables = tables
+                logger.info(f"[Metadata] Fell back to ATLAN_GOLD for schema {schema}")
 
-        columns_by_table = _discover_columns(cursor, database, schema, candidate_tables)
+        # Determine which tables to discover columns for
+        if include_all_tables:
+            # Discover columns for all tables (up to limit)
+            tables_for_columns = tables[:MAX_COLUMN_DISCOVERY_TABLES]
+            logger.info(f"[Metadata] Discovering columns for ALL tables: {len(tables_for_columns)}")
+        else:
+            # Prioritize important tables, then add others up to limit
+            priority_set = {t.upper() for t in PRIORITY_TABLES}
+            priority_tables = [t for t in tables if t.upper() in priority_set]
+            other_tables = [t for t in tables if t.upper() not in priority_set]
+
+            # Start with priority tables, then add others up to limit
+            tables_for_columns = priority_tables + other_tables[:MAX_COLUMN_DISCOVERY_TABLES - len(priority_tables)]
+            logger.info(f"[Metadata] Discovering columns for {len(priority_tables)} priority + {len(tables_for_columns) - len(priority_tables)} other tables")
+
+        # Discover columns for selected tables
+        columns_by_table = _discover_columns(cursor, database, schema, tables_for_columns) if tables_for_columns else {}
         cursor.close()
 
+        # Infer profile from available tables
         profile = _detect_profile(tables)
+
         payload = {
             "database": database,
             "schema": schema,
             "profile": profile,
             "tables": sorted(list({t.upper() for t in tables})),
+            "table_metadata": table_metadata,
             "columns": columns_by_table,
+            "column_discovery_scope": "all" if include_all_tables else "priority",
+            "tables_with_columns": list(columns_by_table.keys()),
         }
+
+        # Cache the result
         metadata_cache.set_capabilities(database, schema, payload, scope)
+        logger.info(f"[Metadata] capabilities({database}.{schema}): {len(tables)} tables, {len(columns_by_table)} with columns")
+
         return payload
     except Exception as e:
         error = _handle_snowflake_error(e, f"capabilities({database}.{schema})")
         if isinstance(error, JSONResponse):
             return error
-        return {"database": database, "schema": schema, "profile": "UNKNOWN", "tables": [], "columns": {}}
+        return {"database": database, "schema": schema, "profile": "UNKNOWN", "tables": [], "columns": {}, "table_metadata": {}}
 
 
 @router.post("/refresh")
