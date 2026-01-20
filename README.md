@@ -2,14 +2,7 @@
 
 An interactive reference guide for Atlan Metadata Lakehouse (MDLH) entity types, tables, and attributes. Built with React, Vite, and Tailwind CSS.
 
-## 🌐 Live Demo
-
-Once deployed, your site will be available at:
-```
-https://<your-username>.github.io/mdlh-entity-dictionary/
-```
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Local Development
 
@@ -20,6 +13,9 @@ npm install
 # Start development server
 npm run dev
 
+# Run tests
+npm test
+
 # Build for production
 npm run build
 
@@ -27,11 +23,11 @@ npm run build
 npm run preview
 ```
 
-## 📦 Deploying to GitHub Pages
+## Deploying to GitHub Pages
 
 ### Option 1: Automatic Deployment (Recommended)
 
-1. **Create a new GitHub repository** named `mdlh-entity-dictionary`
+1. **Create a new GitHub repository** named `MDLH_Dictionary` (or your preferred name)
 
 2. **Push this code to GitHub:**
    ```bash
@@ -39,13 +35,13 @@ npm run preview
    git add .
    git commit -m "Initial commit"
    git branch -M main
-   git remote add origin https://github.com/<your-username>/mdlh-entity-dictionary.git
+   git remote add origin https://github.com/<your-username>/MDLH_Dictionary.git
    git push -u origin main
    ```
 
 3. **Enable GitHub Pages:**
    - Go to your repository on GitHub
-   - Navigate to **Settings** → **Pages**
+   - Navigate to **Settings** > **Pages**
    - Under "Build and deployment", select **GitHub Actions** as the source
    - The workflow will automatically run on push to `main`
 
@@ -63,11 +59,11 @@ npm run deploy
 
 Note: For manual deployment, you may need to configure the repository URL in `package.json`.
 
-## ⚙️ Configuration
+## Configuration
 
 ### Changing the Repository Name
 
-If your repository has a different name than `mdlh-entity-dictionary`, update the `base` path in `vite.config.js`:
+If your repository has a different name, update the `base` path in `vite.config.js`:
 
 ```js
 export default defineConfig({
@@ -84,42 +80,64 @@ If deploying to a custom domain or the root of your user pages (`username.github
 base: '/',
 ```
 
-## 📋 Features
+## Features
 
 - **11 Category Tabs**: Core, Glossary, Data Mesh, Relational DB, Query Org, BI Tools, dbt, Object Storage, Orchestration, Governance, AI/ML
-- **Search Functionality**: Filter entities across all columns
+- **Search Functionality**: Filter entities across all columns with keyboard shortcut (Cmd/Ctrl + K)
+- **Example Queries**: SQL query examples for each category with copy-to-clipboard
 - **CSV Export**: Export individual tabs or all data
 - **Responsive Design**: Works on desktop and mobile
-- **Dark Theme**: Easy on the eyes for technical documentation
+- **Slide-out Query Panel**: Browse and copy example queries
 
-## 🛠️ Tech Stack
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd/Ctrl + K` | Focus search input |
+| `Escape` | Close query panel |
+
+## Tech Stack
 
 - [React 18](https://react.dev/)
 - [Vite 5](https://vitejs.dev/)
 - [Tailwind CSS 3](https://tailwindcss.com/)
 - [Lucide React Icons](https://lucide.dev/)
+- [Vitest](https://vitest.dev/) for testing
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-mdlh-entity-dictionary/
+MDLH_Dictionary/
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml      # GitHub Actions workflow
+│       └── deploy.yml          # GitHub Actions workflow
 ├── public/
-│   └── favicon.svg         # Site favicon
+│   └── favicon.svg             # Site favicon
 ├── src/
-│   ├── App.jsx             # Main React component
-│   ├── main.jsx            # React entry point
-│   └── index.css           # Tailwind CSS imports
-├── index.html              # HTML template
-├── package.json            # Dependencies and scripts
-├── vite.config.js          # Vite configuration
-├── tailwind.config.js      # Tailwind configuration
-└── postcss.config.js       # PostCSS configuration
+│   ├── components/
+│   │   ├── CopyButton.jsx      # Copy-to-clipboard buttons
+│   │   └── QueryPanel.jsx      # Slide-out query panel
+│   ├── data/
+│   │   ├── entityData.js       # Entity definitions and tab config
+│   │   └── exampleQueries.js   # SQL query examples
+│   ├── utils/
+│   │   ├── csvExport.js        # CSV generation utilities
+│   │   ├── filterData.js       # Search/filter utilities
+│   │   └── queryMatcher.js     # Query matching utilities
+│   ├── test/
+│   │   └── setup.js            # Test setup and mocks
+│   ├── App.jsx                 # Main React component
+│   ├── App.test.jsx            # App component tests
+│   ├── main.jsx                # React entry point
+│   └── index.css               # Tailwind CSS imports and custom styles
+├── index.html                  # HTML template
+├── package.json                # Dependencies and scripts
+├── vite.config.js              # Vite configuration
+├── vitest.config.js            # Test configuration
+├── tailwind.config.js          # Tailwind configuration
+└── postcss.config.js           # PostCSS configuration
 ```
 
-## 📝 License
+## License
 
 MIT
-
