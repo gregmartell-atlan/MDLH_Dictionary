@@ -489,7 +489,7 @@ export function isFlowSupported(flowType, entityType) {
 // =============================================================================
 
 // Validate recipes when module loads (development/debugging aid)
-if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
+if (typeof window !== 'undefined' && typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
   const validationIssues = validateAllRecipes(QUERY_FLOW_RECIPES);
   if (validationIssues.length > 0) {
     console.error('[QueryFlowRegistry] Flow recipe validation failed. Some flows may not work correctly.');
@@ -505,4 +505,3 @@ export default {
   validateRecipe,
   validateAllRecipes,
 };
-

@@ -57,9 +57,11 @@ export async function ingestRun(options: IngestionOptions): Promise<{ ingested: 
   const { runId, scope } = options;
   
   // Get base URL from config (if available)
-  const baseUrl = typeof window !== 'undefined' 
+  const baseUrl = typeof window !== 'undefined'
     ? sessionStorage.getItem('atlan_base_url') || 'https://atlan.com'
-    : process.env.ATLAN_BASE_URL || 'https://atlan.com';
+    : (typeof process !== 'undefined' && process.env?.ATLAN_BASE_URL
+        ? process.env.ATLAN_BASE_URL
+        : 'https://atlan.com');
 
   // Build base fetch options from scope
   const baseOptions: Parameters<typeof fetchAssetsForModel>[0] = {};
@@ -234,4 +236,3 @@ export async function ingestRun(options: IngestionOptions): Promise<{ ingested: 
   
   return { ingested: filteredAssets.length };
 }
-

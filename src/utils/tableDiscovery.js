@@ -12,7 +12,9 @@ const log = createLogger('tableDiscovery');
 
 // API base URL for fetching metadata
 const metaEnv = typeof import.meta !== 'undefined' ? import.meta.env : undefined;
-const API_BASE_URL = metaEnv?.VITE_API_URL || process.env.VITE_API_URL || 'http://localhost:8000';
+const processEnv =
+  typeof process !== 'undefined' && process.env ? process.env : {};
+const API_BASE_URL = metaEnv?.VITE_API_URL || processEnv.VITE_API_URL || 'http://localhost:8000';
 
 // Cache for discovered tables (LRU with 5-minute TTL)
 const tableCache = new LRUCache(10, 5 * 60 * 1000);

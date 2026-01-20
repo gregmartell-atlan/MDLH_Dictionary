@@ -14,11 +14,13 @@
  */
 
 const metaEnv = typeof import.meta !== 'undefined' ? import.meta.env : undefined;
+const processEnv =
+  typeof process !== 'undefined' && process.env ? process.env : {};
 const DEBUG_ENABLED =
   metaEnv?.MODE === 'development' ||
   metaEnv?.VITE_DEBUG_LOGS === 'true' ||
-  process.env.VITE_DEBUG_LOGS === 'true' ||
-  process.env.DEBUG_LOGS === 'true';
+  processEnv.VITE_DEBUG_LOGS === 'true' ||
+  processEnv.DEBUG_LOGS === 'true';
 
 /**
  * Create a scoped logger instance

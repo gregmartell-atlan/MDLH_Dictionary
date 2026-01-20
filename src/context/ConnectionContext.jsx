@@ -521,7 +521,7 @@ export function useConnectionContext() {
   const context = useContext(ConnectionContext);
   
   // In development, warn if used outside provider
-  if (context === defaultContextValue && process.env.NODE_ENV === 'development') {
+  if (context === defaultContextValue && typeof process !== 'undefined' && process.env?.NODE_ENV === 'development') {
     console.warn('useConnectionContext used outside ConnectionProvider - using defaults');
   }
   

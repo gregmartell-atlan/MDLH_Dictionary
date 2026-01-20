@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-01-19T20:36:16.406Z",
+  "generated_at": "2026-01-20T05:16:29.319Z",
   "table": "ATLAN_GOLD.PUBLIC.ASSETS",
   "pivots_tested": 8,
   "results": [
@@ -10,24 +10,18 @@
       "table": "ATLAN_GOLD.PUBLIC.ASSETS",
       "required_columns": [
         "ASSET_TYPE",
-        "CERTIFICATESTATUS",
-        "CONNECTORNAME",
+        "CERTIFICATE_STATUS",
+        "CONNECTOR_NAME",
         "DESCRIPTION",
-        "OWNERGROUPS",
-        "OWNERUSERS",
+        "OWNER_USERS",
         "STATUS",
-        "TERMGUIDS"
+        "TERM_GUIDS"
       ],
       "missing_columns": [],
-      "alternate_suggestions": [
-        {
-          "column": "CONNECTORNAME",
-          "alternate": "CONNECTOR_NAME"
-        }
-      ],
+      "alternate_suggestions": [],
       "execution": {
         "status": "SUCCESS",
-        "query_id": "cceb7fc2-f699-4dd9-afbf-3824ded3f28c",
+        "query_id": "3bf9e56b-46f3-4b0f-a626-3bfa15a8d382",
         "row_count": 568,
         "columns": [
           "status"
@@ -74,7 +68,7 @@
             "50.0"
           ]
         ],
-        "execution_time_ms": 1125
+        "execution_time_ms": 2152
       }
     },
     {
@@ -83,33 +77,25 @@
       "category": "Quality",
       "table": "ATLAN_GOLD.PUBLIC.ASSETS",
       "required_columns": [
-        "CERTIFICATESTATUS",
-        "CLASSIFICATIONNAMES",
+        "CERTIFICATE_STATUS",
         "DESCRIPTION",
-        "DOMAINGUIDS",
-        "OWNERGROUPS",
-        "OWNERUSERS",
+        "OWNER_USERS",
         "STATUS",
         "TAGS",
-        "TERMGUIDS"
+        "TERM_GUIDS"
       ],
       "missing_columns": [],
-      "alternate_suggestions": [
-        {
-          "column": "DOMAINGUIDS",
-          "alternate": "TAGS"
-        }
-      ],
+      "alternate_suggestions": [],
       "execution": {
         "status": "SUCCESS",
-        "query_id": "5679b339-17e9-45b3-9039-899b425d5160",
+        "query_id": "636303ed-f4d7-49e1-9002-eb955b4190ba",
         "row_count": 65,
         "columns": [
           "status"
         ],
         "rows_sample": [
           [
-            "No Domain",
+            "No Tag",
             750458,
             "48.3",
             "7.8",
@@ -154,7 +140,7 @@
             "100.0"
           ]
         ],
-        "execution_time_ms": 1278
+        "execution_time_ms": 1692
       }
     },
     {
@@ -163,16 +149,15 @@
       "category": "Accountability",
       "table": "ATLAN_GOLD.PUBLIC.ASSETS",
       "required_columns": [
-        "CERTIFICATESTATUS",
-        "OWNERGROUPS",
-        "OWNERUSERS",
+        "CERTIFICATE_STATUS",
+        "OWNER_USERS",
         "STATUS"
       ],
       "missing_columns": [],
       "alternate_suggestions": [],
       "execution": {
         "status": "SUCCESS",
-        "query_id": "bb4cc953-0758-4da6-92a9-1662cfdd4ff7",
+        "query_id": "7c4acc0f-d483-4c57-b4d2-cce442fa9148",
         "row_count": 98,
         "columns": [
           "status"
@@ -224,7 +209,7 @@
             "3.6"
           ]
         ],
-        "execution_time_ms": 1079
+        "execution_time_ms": 1099
       }
     },
     {
@@ -233,23 +218,17 @@
       "category": "Lineage",
       "table": "ATLAN_GOLD.PUBLIC.ASSETS",
       "required_columns": [
+        "ASSET_QUALIFIED_NAME",
         "ASSET_TYPE",
-        "CONNECTORNAME",
-        "DATABASEQUALIFIEDNAME",
-        "HASLINEAGE",
-        "SCHEMAQUALIFIEDNAME",
+        "CONNECTOR_NAME",
+        "HAS_LINEAGE",
         "STATUS"
       ],
       "missing_columns": [],
-      "alternate_suggestions": [
-        {
-          "column": "CONNECTORNAME",
-          "alternate": "CONNECTOR_NAME"
-        }
-      ],
+      "alternate_suggestions": [],
       "execution": {
         "status": "SUCCESS",
-        "query_id": "d86c7036-6d27-4801-a261-d782bd06bddc",
+        "query_id": "14f860db-177b-4813-a971-355cf76d01d3",
         "row_count": 1000,
         "columns": [
           "status"
@@ -257,46 +236,46 @@
         "rows_sample": [
           [
             "Unknown",
-            "ColorName",
-            "ColorName",
+            "default/bigquery/1702640629/gcp-demo-project-407919/telco/bronze_Contracts",
+            "",
             1,
             "0.0",
             1
           ],
           [
             "Unknown",
-            "bronze_Contracts",
-            "bronze_Contracts",
+            "default/bigquery/1702640629/gcp-demo-project-407919/telco/bronze_Customers",
+            "",
             1,
             "0.0",
             1
           ],
           [
             "Unknown",
-            "bronze_Customers",
-            "bronze_Customers",
+            "default/bigquery/1702640629/gcp-demo-project-407919/telco/bronze_DS_MAPPING_VAL",
+            "",
             1,
             "0.0",
             1
           ],
           [
             "Unknown",
-            "bronze_DS_MAPPING_VAL",
-            "bronze_DS_MAPPING_VAL",
+            "default/bigquery/1702640629/gcp-demo-project-407919/telco/bronze_GEO",
+            "",
             1,
             "0.0",
             1
           ],
           [
             "Unknown",
-            "bronze_GEO",
-            "bronze_GEO",
+            "default/bigquery/1702640629/gcp-demo-project-407919/telco/bronze_Products",
+            "",
             1,
             "0.0",
             1
           ]
         ],
-        "execution_time_ms": 1236
+        "execution_time_ms": 2013
       }
     },
     {
@@ -306,22 +285,17 @@
       "table": "ATLAN_GOLD.PUBLIC.ASSETS",
       "required_columns": [
         "ASSET_TYPE",
-        "CERTIFICATESTATUS",
-        "CLASSIFICATIONNAMES",
+        "CERTIFICATE_STATUS",
         "DESCRIPTION",
         "STATUS",
-        "TERMGUIDS"
+        "TAGS",
+        "TERM_GUIDS"
       ],
       "missing_columns": [],
-      "alternate_suggestions": [
-        {
-          "column": "CERTIFICATESTATUS",
-          "alternate": "CERTIFICATE_STATUS"
-        }
-      ],
+      "alternate_suggestions": [],
       "execution": {
         "status": "SUCCESS",
-        "query_id": "63560fd2-531a-451b-aa32-fd9f167dd217",
+        "query_id": "9e9a52af-ae3b-4d0f-80e9-9362d839a082",
         "row_count": 350,
         "columns": [
           "status"
@@ -368,7 +342,7 @@
             "75.0"
           ]
         ],
-        "execution_time_ms": 1967
+        "execution_time_ms": 1318
       }
     },
     {
@@ -378,23 +352,17 @@
       "table": "ATLAN_GOLD.PUBLIC.ASSETS",
       "required_columns": [
         "ASSET_TYPE",
-        "CERTIFICATESTATUS",
+        "CERTIFICATE_STATUS",
         "DESCRIPTION",
-        "OWNERGROUPS",
-        "OWNERUSERS",
-        "POPULARITYSCORE",
+        "OWNER_USERS",
+        "POPULARITY_SCORE",
         "STATUS"
       ],
       "missing_columns": [],
-      "alternate_suggestions": [
-        {
-          "column": "POPULARITYSCORE",
-          "alternate": "POPULARITY_SCORE"
-        }
-      ],
+      "alternate_suggestions": [],
       "execution": {
         "status": "SUCCESS",
-        "query_id": "2fda5cfb-2c5b-4d66-84ce-7046d02a23ab",
+        "query_id": "e79a6363-6d3b-48b7-b572-17c9c41721b9",
         "row_count": 238,
         "columns": [
           "status"
@@ -441,7 +409,7 @@
             "100.0"
           ]
         ],
-        "execution_time_ms": 1000
+        "execution_time_ms": 1026
       }
     },
     {
@@ -450,23 +418,17 @@
       "category": "Freshness",
       "table": "ATLAN_GOLD.PUBLIC.ASSETS",
       "required_columns": [
-        "CERTIFICATESTATUS",
-        "CONNECTORNAME",
-        "OWNERGROUPS",
-        "OWNERUSERS",
+        "CERTIFICATE_STATUS",
+        "CONNECTOR_NAME",
+        "OWNER_USERS",
         "STATUS",
         "UPDATED_AT"
       ],
       "missing_columns": [],
-      "alternate_suggestions": [
-        {
-          "column": "CONNECTORNAME",
-          "alternate": "CONNECTOR_NAME"
-        }
-      ],
+      "alternate_suggestions": [],
       "execution": {
         "status": "SUCCESS",
-        "query_id": "43237e14-63b3-4af8-a5e7-730842207e81",
+        "query_id": "e8cbe4e1-3817-45b8-b1f9-49f0d99c2efb",
         "row_count": 216,
         "columns": [
           "status"
@@ -508,7 +470,7 @@
             "2.7"
           ]
         ],
-        "execution_time_ms": 1576
+        "execution_time_ms": 1473
       }
     },
     {
@@ -518,20 +480,15 @@
       "table": "ATLAN_GOLD.PUBLIC.ASSETS",
       "required_columns": [
         "ASSET_TYPE",
-        "CLASSIFICATIONNAMES",
-        "CONNECTORNAME",
-        "STATUS"
+        "CONNECTOR_NAME",
+        "STATUS",
+        "TAGS"
       ],
       "missing_columns": [],
-      "alternate_suggestions": [
-        {
-          "column": "CONNECTORNAME",
-          "alternate": "CONNECTOR_NAME"
-        }
-      ],
+      "alternate_suggestions": [],
       "execution": {
         "status": "SUCCESS",
-        "query_id": "6c8a22ae-58e0-4734-bb14-dc5da2db4eb8",
+        "query_id": "8e1fb881-5fe8-4f38-a596-82acedcfd5a0",
         "row_count": 568,
         "columns": [
           "status"
@@ -568,7 +525,7 @@
             "60.0"
           ]
         ],
-        "execution_time_ms": 1133
+        "execution_time_ms": 1032
       }
     }
   ],
