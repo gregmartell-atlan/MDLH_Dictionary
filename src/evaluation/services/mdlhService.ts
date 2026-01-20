@@ -4,6 +4,7 @@
 // ============================================
 
 import type { FieldCoverage, AuditResult, AssetBreakdown } from '../types/priority';
+import { normalizeQueryRows } from '../../utils/queryResults';
 import {
   FIELD_COVERAGE_QUERY,
   FIELD_COVERAGE_BY_TYPE_QUERY,
@@ -99,8 +100,9 @@ export async function executeQuery<T = Record<string, unknown>>(
     }
 
     const data = await response.json();
+    const normalizedRows = normalizeQueryRows(data);
     return {
-      rows: data.rows || [],
+      rows: normalizedRows as T[],
       columns: data.columns || [],
     };
   } catch (error) {

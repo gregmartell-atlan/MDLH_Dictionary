@@ -7,9 +7,13 @@ import { createLogger } from '../utils/logger';
 import { DEFAULT_DATABASE, DEFAULT_SCHEMA } from '../data/constants';
 import { useConnectionContext } from './ConnectionContext';
 import { useDynamicSchema } from './DynamicSchemaContext';
+import { buildHeaders, getPythonApiUrl } from '../config/api';
 
 const log = createLogger('MdlhContext');
 const MDLH_CONTEXT_KEY = 'mdlh_context';
+const CAPABILITIES_CACHE_PREFIX = 'mdlh_capabilities';
+const CAPABILITIES_TTL_MS = 10 * 60 * 1000;
+const API_URL = getPythonApiUrl();
 
 const defaultContextValue = {
   context: {
@@ -18,32 +22,67 @@ const defaultContextValue = {
     warehouse: null,
     table: null,
   },
+  capabilities: null,
+  capabilitiesLoading: false,
   source: 'default',
   setContext: () => {},
   setDatabase: () => {},
   setSchema: () => {},
   setTable: () => {},
   refreshDiscovery: () => {},
+  refreshCapabilities: () => {},
 };
 
 const MdlhContext = createContext(defaultContextValue);
 
 function loadStoredContext() {
-  const raw = sessionStorage.getItem(MDLH_CONTEXT_KEY);
+  const raw = localStorage.getItem(MDLH_CONTEXT_KEY);
   if (!raw) return null;
   try {
     return JSON.parse(raw);
   } catch {
-    sessionStorage.removeItem(MDLH_CONTEXT_KEY);
+    localStorage.removeItem(MDLH_CONTEXT_KEY);
     return null;
   }
 }
 
 function persistContext(next) {
   try {
-    sessionStorage.setItem(MDLH_CONTEXT_KEY, JSON.stringify(next));
+    localStorage.setItem(MDLH_CONTEXT_KEY, JSON.stringify(next));
   } catch {
     // Ignore storage errors (private mode/quotas)
+  }
+}
+
+function buildCapabilitiesKey(database, schema) {
+  return `${CAPABILITIES_CACHE_PREFIX}:${database || ''}.${schema || ''}`;
+}
+
+function loadCapabilitiesCache(database, schema) {
+  if (!database || !schema) return null;
+  const key = buildCapabilitiesKey(database, schema);
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed?.timestamp || Date.now() - parsed.timestamp > CAPABILITIES_TTL_MS) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return parsed.data || null;
+  } catch {
+    localStorage.removeItem(key);
+    return null;
+  }
+}
+
+function persistCapabilitiesCache(database, schema, data) {
+  if (!database || !schema || !data) return;
+  const key = buildCapabilitiesKey(database, schema);
+  try {
+    localStorage.setItem(key, JSON.stringify({ timestamp: Date.now(), data }));
+  } catch {
+    // Ignore storage errors
   }
 }
 
@@ -76,8 +115,11 @@ export function MdlhProvider({ children }) {
     const stored = loadStoredContext();
     return stored?.source || 'default';
   });
+  const [capabilities, setCapabilities] = useState(null);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
 
   const lastSessionIdRef = useRef(null);
+  const capabilitiesAbortRef = useRef(null);
 
   const setContext = useCallback((partial, options = {}) => {
     const nextSource = options.source || 'manual';
@@ -162,6 +204,52 @@ export function MdlhProvider({ children }) {
     discoverTablesFast(context.database, context.schema, false);
   }, [status?.connected, context.database, context.schema, discoverTablesFast]);
 
+  const fetchCapabilities = useCallback(async (refresh = false) => {
+    if (!status?.connected || !context.database || !context.schema) return;
+    if (capabilitiesAbortRef.current) {
+      capabilitiesAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    capabilitiesAbortRef.current = controller;
+
+    if (!refresh) {
+      const cached = loadCapabilitiesCache(context.database, context.schema);
+      if (cached) {
+        setCapabilities(cached);
+        return;
+      }
+    }
+
+    setCapabilitiesLoading(true);
+    try {
+      const params = new URLSearchParams({
+        database: context.database,
+        schema: context.schema,
+        refresh: refresh ? 'true' : 'false',
+      });
+      const response = await fetch(`${API_URL}/api/metadata/capabilities?${params.toString()}`, {
+        headers: buildHeaders(),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch capabilities (${response.status})`);
+      }
+      const data = await response.json();
+      setCapabilities(data);
+      persistCapabilitiesCache(data.database || context.database, data.schema || context.schema, data);
+
+      if (data.database && data.database !== context.database && source !== 'manual') {
+        setContext({ database: data.database }, { source: 'auto' });
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        log.warn('Capabilities fetch failed', { error: err.message });
+      }
+    } finally {
+      setCapabilitiesLoading(false);
+    }
+  }, [status?.connected, context.database, context.schema, source, setContext]);
+
   const refreshDiscovery = useCallback(() => {
     if (!status?.connected) return;
     discoverDatabases?.(true);
@@ -173,15 +261,31 @@ export function MdlhProvider({ children }) {
     }
   }, [status?.connected, context.database, context.schema, discoverDatabases, discoverSchemas, discoverTablesFast]);
 
+  const refreshCapabilities = useCallback(() => {
+    fetchCapabilities(true);
+  }, [fetchCapabilities]);
+
+  useEffect(() => {
+    fetchCapabilities(false);
+    return () => {
+      if (capabilitiesAbortRef.current) {
+        capabilitiesAbortRef.current.abort();
+      }
+    };
+  }, [fetchCapabilities]);
+
   const value = useMemo(() => ({
     context,
     source,
+    capabilities,
+    capabilitiesLoading,
     setContext,
     setDatabase,
     setSchema,
     setTable,
     refreshDiscovery,
-  }), [context, source, setContext, setDatabase, setSchema, setTable, refreshDiscovery]);
+    refreshCapabilities,
+  }), [context, source, capabilities, capabilitiesLoading, setContext, setDatabase, setSchema, setTable, refreshDiscovery, refreshCapabilities]);
 
   return (
     <MdlhContext.Provider value={value}>

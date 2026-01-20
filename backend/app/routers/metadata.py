@@ -13,6 +13,17 @@ from app.utils.logger import logger
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 METADATA_STATEMENT_TIMEOUT_SECONDS = 30
+CAPABILITY_TABLE_CANDIDATES = [
+    "ASSETS",
+    "CUSTOM_METADATA",
+    "LINEAGE",
+    "TAGS",
+    "PIPELINE_DETAILS",
+    "RELATIONAL_ASSET_DETAILS",
+    "TABLE_ENTITY",
+    "COLUMN_ENTITY",
+    "PROCESS_ENTITY",
+]
 
 
 def _validate_identifier(name: str) -> str:
@@ -67,6 +78,40 @@ def _handle_snowflake_error(e: Exception, context: str):
     # For other errors, still return empty list but log it
     # This prevents the UI from breaking on edge cases
     return []
+
+
+def _detect_profile(tables: List[str]) -> str:
+    """Infer schema profile from available tables."""
+    upper = {t.upper() for t in tables}
+    has_gold = "ASSETS" in upper and "TAGS" in upper
+    has_field_metadata = "TABLE_ENTITY" in upper and "COLUMN_ENTITY" in upper
+    if has_gold:
+        return "ATLAN_GOLD"
+    if has_field_metadata:
+        return "FIELD_METADATA"
+    return "CUSTOM"
+
+
+def _discover_columns(cursor, database: str, schema: str, tables: List[str]) -> dict:
+    """Discover columns for selected tables."""
+    safe_db = _validate_identifier(database)
+    safe_schema_literal = schema.replace("'", "''")
+    table_list = ", ".join([f"'{t.upper()}'" for t in tables])
+    cursor.execute(f"""
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE
+        FROM {safe_db}.INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = '{safe_schema_literal}'
+          AND TABLE_NAME IN ({table_list})
+        ORDER BY TABLE_NAME, ORDINAL_POSITION
+    """)
+    columns_by_table: dict = {}
+    for row in cursor.fetchall():
+        table_name = row[0]
+        columns_by_table.setdefault(table_name, []).append({
+            "name": row[1],
+            "type": row[2],
+        })
+    return columns_by_table
 
 
 @router.get("/databases", response_model=List[DatabaseInfo])
@@ -271,6 +316,70 @@ async def list_columns(
         return [ColumnInfo(**c) for c in columns]
     except Exception as e:
         return _handle_snowflake_error(e, f"list_columns({database}.{schema}.{table})")
+
+
+@router.get("/capabilities")
+async def get_capabilities(
+    database: str = Query(..., description="Database name"),
+    schema: str = Query(..., description="Schema name"),
+    refresh: bool = False,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
+):
+    """Discover tables/columns for a database+schema and infer profile."""
+    session = _get_session_or_none(x_session_id)
+    if not session:
+        return JSONResponse(status_code=401, content={"error": "SESSION_NOT_FOUND"})
+    scope = _cache_scope(session)
+
+    if not refresh:
+        cached = metadata_cache.get_capabilities(database, schema, scope)
+        if cached:
+            return cached
+
+    try:
+        safe_db = _validate_identifier(database)
+        safe_schema_literal = schema.replace("'", "''")
+
+        cursor = session.conn.cursor()
+        cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {METADATA_STATEMENT_TIMEOUT_SECONDS}")
+        cursor.execute(f"""
+            SELECT TABLE_NAME
+            FROM {safe_db}.INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = '{safe_schema_literal}'
+        """)
+        tables = [row[0] for row in cursor.fetchall()]
+        if not tables and database.upper() != "ATLAN_GOLD":
+            cursor.execute(f"""
+                SELECT TABLE_NAME
+                FROM "ATLAN_GOLD".INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = '{safe_schema_literal}'
+            """)
+            gold_tables = [row[0] for row in cursor.fetchall()]
+            if gold_tables:
+                tables = gold_tables
+                database = "ATLAN_GOLD"
+        candidate_tables = [t for t in tables if t.upper() in {c.upper() for c in CAPABILITY_TABLE_CANDIDATES}]
+        if not candidate_tables:
+            candidate_tables = tables
+
+        columns_by_table = _discover_columns(cursor, database, schema, candidate_tables)
+        cursor.close()
+
+        profile = _detect_profile(tables)
+        payload = {
+            "database": database,
+            "schema": schema,
+            "profile": profile,
+            "tables": sorted(list({t.upper() for t in tables})),
+            "columns": columns_by_table,
+        }
+        metadata_cache.set_capabilities(database, schema, payload, scope)
+        return payload
+    except Exception as e:
+        error = _handle_snowflake_error(e, f"capabilities({database}.{schema})")
+        if isinstance(error, JSONResponse):
+            return error
+        return {"database": database, "schema": schema, "profile": "UNKNOWN", "tables": [], "columns": {}}
 
 
 @router.post("/refresh")

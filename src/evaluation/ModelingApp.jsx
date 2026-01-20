@@ -34,6 +34,7 @@ import {
   ArrowRight,
   Search,
   Settings2,
+  ShieldCheck,
 } from 'lucide-react';
 import { useConnection } from '../hooks/useSnowflake';
 import { AssetContextSelector, SELECTION_MODE } from '../components/common/AssetContextSelector';
@@ -43,6 +44,7 @@ import { MetadataAssistantWizard } from '../components/evaluation/assistant/Meta
 import { FieldPresenceChecker } from '../components/evaluation/modelBuilder/FieldPresenceChecker';
 import { MDLHTableAnalyzer } from '../components/evaluation/modelBuilder/MDLHTableAnalyzer';
 import { PivotBuilder } from '../components/pivot/PivotBuilder';
+import { ScoringDashboard } from './components/scoring/ScoringDashboard';
 import { useAssistantStore } from '../stores/assistantStore';
 
 // ============================================
@@ -95,6 +97,14 @@ function ModelingHome({ database, schema, isConnected }) {
       icon: LayoutGrid,
       color: 'violet',
       path: '/pivot',
+    },
+    {
+      id: 'scoring',
+      title: 'Scoring Dashboard',
+      description: 'Monitor metadata scoring runs, evidence coverage, and readiness status across assets',
+      icon: ShieldCheck,
+      color: 'emerald',
+      path: '/scoring',
     },
   ];
 
@@ -163,6 +173,12 @@ function ModelingHome({ database, schema, isConnected }) {
               icon: 'bg-violet-100 text-violet-600',
               hover: 'hover:border-violet-300 hover:shadow-violet-100',
               button: 'bg-violet-600 hover:bg-violet-700',
+            },
+            emerald: {
+              bg: 'bg-emerald-50',
+              icon: 'bg-emerald-100 text-emerald-600',
+              hover: 'hover:border-emerald-300 hover:shadow-emerald-100',
+              button: 'bg-emerald-600 hover:bg-emerald-700',
             },
           };
           const colors = colorClasses[tool.color];
@@ -414,6 +430,35 @@ function PivotView({ database, schema }) {
 }
 
 // ============================================
+// SCORING DASHBOARD VIEW
+// ============================================
+
+function ScoringView({ database, schema }) {
+  const navigate = useNavigate();
+  
+  return (
+    <div className="h-full flex flex-col">
+      {/* Breadcrumb Header */}
+      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-2 text-sm">
+        <button
+          onClick={() => navigate('/')}
+          className="text-emerald-600 hover:text-emerald-700 font-medium"
+        >
+          Modeling
+        </button>
+        <ChevronRight size={14} className="text-gray-400" />
+        <span className="text-gray-700">Scoring Dashboard</span>
+      </div>
+      
+      {/* Scoring Dashboard */}
+      <div className="flex-1 overflow-auto">
+        <ScoringDashboard database={database} schema={schema} />
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // INNER ROUTES
 // ============================================
 
@@ -487,6 +532,17 @@ function ModelingRoutes({ database, schema, isConnected, discoveredTables }) {
               schema={schema}
             />
           } 
+        />
+
+        {/* Scoring Dashboard */}
+        <Route
+          path="scoring"
+          element={
+            <ScoringView
+              database={database}
+              schema={schema}
+            />
+          }
         />
         
         {/* Catch-all */}

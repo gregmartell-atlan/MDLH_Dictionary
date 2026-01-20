@@ -512,6 +512,14 @@ export function useQuery(connectionStatus = null) {
     }
 
     const sessionId = getSessionId();
+    const placeholderPattern = /(\{\{[^}]+\}\}|<DATABASE>|<SCHEMA>|<TABLE>|<COLUMN>|<GUID>)/i;
+    if (placeholderPattern.test(sql)) {
+      queryLog.warn('executeQuery() - unresolved placeholders', {
+        sqlPreview: sql.substring(0, 120)
+      });
+      setError('Query contains unresolved placeholders. Select a database/schema/table or render templates first.');
+      return null;
+    }
     
     queryLog.info('executeQuery() called', {
       hasSession: !!sessionId,

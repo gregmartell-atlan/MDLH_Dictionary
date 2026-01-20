@@ -35,6 +35,7 @@ import {
 
 import { buildSafeFQN, escapeStringValue } from '../utils/queryHelpers';
 import { resolveGoldTablesInSQL, hasGoldTables } from '../utils/goldTableResolver';
+import { mapSqlForCapabilities } from '../utils/contextSqlMapper.js';
 
 // =============================================================================
 // ENTITY CONTEXT TYPE
@@ -124,6 +125,8 @@ export function fillTemplate(sqlTemplate, ctx, samples = null) {
     // Replace GOLD.TABLENAME with DATABASE.SCHEMA.TABLENAME
     result = result.replace(/\bGOLD\.(\w+)\b/gi, `${ctx.database}.${ctx.schema}.$1`);
   }
+
+  result = mapSqlForCapabilities(result, ctx.capabilities);
 
   if (samples) {
     // Use sample GUIDs when context doesn't have them
@@ -293,7 +296,7 @@ export function fillTemplateSafe(sqlTemplate, ctx) {
   const effectiveSource = ctx.source || ctx.connectionName || ctx.connectorName || '';
   const effectiveStartGuid = ctx.startGuid || ctx.guid || '';
   
-  return sqlTemplate
+  const filled = sqlTemplate
     // For FQN pattern {{DATABASE}}.{{SCHEMA}}.{{TABLE}}, replace entire pattern if we have all parts
     .replace(/\{\{DATABASE\}\}\.\{\{SCHEMA\}\}\.\{\{TABLE\}\}/g, 
       safeFQN || `${ctx.database || '<DATABASE>'}.${ctx.schema || '<SCHEMA>'}.${ctx.table || '<TABLE>'}`)
@@ -328,6 +331,8 @@ export function fillTemplateSafe(sqlTemplate, ctx) {
     .replace(/<YOUR_GUID>/g, ctx.guid || '<YOUR_GUID>')
     .replace(/<CORE_GLOSSARY_GUID>/g, ctx.glossaryGuid || '<CORE_GLOSSARY_GUID>')
     .replace(/<COLUMN_GUID>/g, ctx.columnGuid || ctx.guid || '<COLUMN_GUID>');
+
+  return mapSqlForCapabilities(filled, ctx.capabilities);
 }
 
 /**
@@ -1765,4 +1770,3 @@ export default {
   searchGoldQueries,
   getQueriesByGoldTable,
 };
-

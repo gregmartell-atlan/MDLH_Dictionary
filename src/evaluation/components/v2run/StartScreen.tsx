@@ -13,6 +13,7 @@ import { useNavigate } from 'react-router-dom';
 import { Play, Database, RefreshCw, AlertCircle, Settings2, CheckCircle, XCircle, Zap, Eye } from 'lucide-react';
 import { useEvaluationStore } from '../../stores/evaluationStore';
 import { healthApi, type RunScope, type MethodologyType, type ScoringConfig } from '../../services/evaluationApi';
+import { normalizeQueryRows } from '../../../utils/queryResults';
 
 // Capabilities - could be loaded from a config file
 const CAPABILITIES = [
@@ -123,14 +124,14 @@ export function StartScreen() {
       }
       
       // Query INFORMATION_SCHEMA to get columns
-      const response = await fetch('/api/query', {
+      const response = await fetch('/api/query/execute', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Session-ID': sessionId,
         },
         body: JSON.stringify({
-          query: `
+          sql: `
             SELECT COLUMN_NAME, DATA_TYPE
             FROM "${database}".INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = '${schema}'
@@ -142,17 +143,27 @@ export function StartScreen() {
         }),
       });
       
-      if (!response.ok) {
+      const submitData = await response.json();
+      if (!response.ok || submitData.status !== 'SUCCESS') {
         throw new Error('Failed to fetch schema');
       }
       
-      const data = await response.json();
+      const resultsRes = await fetch(`/api/query/${submitData.query_id}/results`, {
+        headers: { 'X-Session-ID': sessionId },
+      });
+
+      if (!resultsRes.ok) {
+        throw new Error('Failed to fetch schema results');
+      }
+
+      const data = await resultsRes.json();
       const columns: string[] = [];
       
       // Normalize response
-      if (data.rows) {
-        for (const row of data.rows) {
-          const colName = Array.isArray(row) ? row[0] : (row.COLUMN_NAME || row.column_name);
+      const normalizedRows = normalizeQueryRows(data);
+      if (normalizedRows.length) {
+        for (const row of normalizedRows) {
+          const colName = row.COLUMN_NAME || row.column_name;
           if (colName) columns.push(colName.toUpperCase());
         }
       }

@@ -45,6 +45,7 @@ import { useDynamicFieldCatalog } from '../../../hooks/useDynamicFieldCatalog';
 import { createDynamicSignalEvaluator, CANONICAL_SIGNALS } from '../../../evaluation/engines/dynamicSignalEvaluator';
 import { UNIFIED_FIELD_CATALOG } from '../../../evaluation/catalog/unifiedFields';
 import { escapeIdentifier, escapeStringValue, buildSafeFQN } from '../../../utils/queryHelpers';
+import { normalizeQueryRows } from '../../../utils/queryResults';
 
 // =============================================================================
 // CONSTANTS
@@ -369,10 +370,10 @@ export function MDLHTableAnalyzer({ database, schema, table = 'ASSETS' }) {
         `;
         
         const result = await executeQuery(query, { database, schema });
-        
-        // Normalize result
-        if (result?.rows?.[0]) {
-          const row = result.rows[0];
+
+        const normalizedRows = normalizeQueryRows(result);
+        if (normalizedRows[0]) {
+          const row = normalizedRows[0];
           
           if (i === 0) {
             totalCount = row.TOTAL_COUNT || row.total_count || 0;
@@ -414,9 +415,10 @@ export function MDLHTableAnalyzer({ database, schema, table = 'ASSETS' }) {
       `;
       
       const result = await executeQuery(query, { database, schema });
-      
-      if (result?.rows?.[0]) {
-        const row = result.rows[0];
+
+      const normalizedRows = normalizeQueryRows(result);
+      if (normalizedRows[0]) {
+        const row = normalizedRows[0];
         const samples = {};
         
         for (const [key, value] of Object.entries(row)) {

@@ -17,6 +17,8 @@
  * @see https://openlineage.io/docs/spec/
  */
 
+import { buildSafeFQN } from '../utils/queryHelpers';
+
 // Default entity tables in MDLH (will be filtered by discovered tables)
 const DEFAULT_ENTITY_TABLES = [
   'TABLE_ENTITY',
@@ -80,7 +82,7 @@ export function extractEntitiesFromSQL(sql) {
  * Build FQN for a table
  */
 export function buildFQN(database, schema, table) {
-  return `${database}.${schema}.${table}`;
+  return buildSafeFQN(database, schema, table);
 }
 
 /**
@@ -735,4 +737,3 @@ export function autoDetectLineage(queryResult, focusEntity = null) {
 }
 
 export default LineageService;
-

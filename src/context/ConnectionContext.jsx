@@ -46,6 +46,28 @@ import { TIMEOUTS, CONNECTION_CONFIG } from '../data/constants';
 
 const log = createLogger('ConnectionContext');
 const API_URL = getPythonApiUrl();
+const PREFERRED_DATABASES = ['ATLAN_GOLD', 'FIELD_METADATA', 'ATLAN_MDLH'];
+
+function normalizeDbName(value) {
+  if (!value) return '';
+  return String(value).trim();
+}
+
+function extractDatabaseNames(payload) {
+  if (!Array.isArray(payload)) return [];
+  return payload
+    .map((entry) => normalizeDbName(entry?.name ?? entry))
+    .filter(Boolean);
+}
+
+function pickFallbackDatabase(names) {
+  for (const preferred of PREFERRED_DATABASES) {
+    if (names.includes(preferred)) {
+      return preferred;
+    }
+  }
+  return names[0] || '';
+}
 
 // Default context value (for components outside provider)
 const defaultContextValue = {
@@ -108,6 +130,7 @@ export function ConnectionProvider({ children }) {
   const abortControllerRef = useRef(null);
   const mountedRef = useRef(true);
   const statusRef = useRef(status); // Track current status for use in callbacks
+  const dbValidationRef = useRef({ sessionId: null, database: null });
   statusRef.current = status; // Keep ref in sync with state
   
   /**
@@ -184,14 +207,61 @@ export function ConnectionProvider({ children }) {
         
         if (data.valid) {
           consecutiveTimeoutsRef.current = 0;
+          let resolvedDatabase = normalizeDbName(data.database || stored.database);
+          let resolvedSchema = normalizeDbName(data.schema_name || stored.schema);
+
+          if (stored?.sessionId && resolvedDatabase) {
+            const validationKey = `${stored.sessionId}:${resolvedDatabase}`;
+            const lastKey = dbValidationRef.current.sessionId && dbValidationRef.current.database
+              ? `${dbValidationRef.current.sessionId}:${dbValidationRef.current.database}`
+              : null;
+
+            if (validationKey !== lastKey) {
+              try {
+                const dbRes = await fetchWithTimeout(
+                  `${API_URL}/api/metadata/databases?refresh=false`,
+                  { headers: { 'X-Session-ID': stored.sessionId } },
+                  TIMEOUTS.METADATA_DB_MS || 8000
+                );
+                if (dbRes.ok) {
+                  const dbPayload = await dbRes.json();
+                  const dbNames = extractDatabaseNames(dbPayload);
+                  if (dbNames.length > 0 && !dbNames.includes(resolvedDatabase)) {
+                    const fallbackDatabase = pickFallbackDatabase(dbNames);
+                    if (fallbackDatabase) {
+                      log.warn('Stored database not accessible, switching', {
+                        from: resolvedDatabase,
+                        to: fallbackDatabase
+                      });
+                      resolvedDatabase = fallbackDatabase;
+                      resolvedSchema = 'PUBLIC';
+                      const updatedSession = {
+                        ...stored,
+                        database: resolvedDatabase,
+                        schema: resolvedSchema
+                      };
+                      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updatedSession));
+                    }
+                  }
+                }
+              } catch (err) {
+                log.warn('Database validation failed', { error: err.message });
+              } finally {
+                dbValidationRef.current = {
+                  sessionId: stored.sessionId,
+                  database: resolvedDatabase
+                };
+              }
+            }
+          }
           const validStatus = {
             connected: true,
             unreachable: false,
             sessionId: stored.sessionId,
             user: data.user,
             warehouse: data.warehouse,
-            database: data.database,
-            schema: data.schema_name,
+            database: resolvedDatabase || data.database,
+            schema: resolvedSchema || data.schema_name,
             role: data.role,
           };
           
@@ -201,7 +271,7 @@ export function ConnectionProvider({ children }) {
             setError(null);
           }
           
-          log.info('Session valid', { user: data.user, database: data.database });
+          log.info('Session valid', { user: data.user, database: validStatus.database });
           return validStatus;
         } else {
           log.warn('Session marked invalid by backend');

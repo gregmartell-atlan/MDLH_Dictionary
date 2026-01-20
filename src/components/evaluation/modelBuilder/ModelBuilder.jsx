@@ -53,6 +53,7 @@ import { isCustomMetadataField, getAtlanTypeNames, toAtlanAttributeCandidates } 
 import { UNIFIED_FIELD_CATALOG, getFieldById } from '../../../evaluation/catalog/unifiedFields';
 import { AssetContextSelector, SELECTION_MODE } from '../../common/AssetContextSelector';
 import { escapeIdentifier, escapeStringValue, buildSafeFQN } from '../../../utils/queryHelpers';
+import { normalizeQueryRows } from '../../../utils/queryResults';
 
 // Build centralized field-to-MDLH-column mapping from unified catalog
 const FIELD_TO_MDLH_COLUMN = UNIFIED_FIELD_CATALOG.reduce((acc, field) => {
@@ -79,6 +80,7 @@ const COMPLETE_FIELD_TO_COLUMN = { ...FIELD_TO_MDLH_COLUMN, ...ADDITIONAL_FIELD_
 const MODEL_DATA = fieldCatalog;
 
 const DEFAULT_USE_CASES = ['Self-service discovery', 'Business glossary & metrics'];
+
 
 const FIELD_REASON_RULES = [
   { test: /owner|raci/i, reason: 'Accountability and stewardship' },
@@ -227,23 +229,7 @@ export function ModelBuilder({ database: propDatabase, schema: propSchema, disco
         
         const result = await executeQuery(query, { database, schema });
         
-        // Normalize result
-        const normalizeRows = (rawResult) => {
-          const columns = rawResult?.columns || [];
-          const rows = rawResult?.rows || [];
-          if (!Array.isArray(rows)) return [];
-          return rows.map((row) => {
-            if (Array.isArray(row)) {
-              return columns.reduce((acc, col, idx) => {
-                acc[col] = row[idx];
-                return acc;
-              }, {});
-            }
-            return row || {};
-          });
-        };
-        
-        const tables = normalizeRows(result).map(r => ({
+        const tables = normalizeQueryRows(result).map(r => ({
           name: r.TABLE_NAME || r.table_name,
           type: r.TABLE_TYPE || r.table_type,
         })).filter(t => t.name);
@@ -566,11 +552,12 @@ export function ModelBuilder({ database: propDatabase, schema: propSchema, disco
       console.log('[ModelBuilder] Coverage query:', coverageQuery);
       
       const result = await executeQuery(coverageQuery, { database, schema });
-      
+
       console.log('[ModelBuilder] Coverage result:', result);
-      
-      if (result && result.length > 0) {
-        const row = result[0];
+
+      const rows = normalizeQueryRows(result);
+      if (rows.length > 0) {
+        const row = rows[0];
         console.log('[ModelBuilder] Coverage row:', row);
         setCoverage({
           total: row.TOTAL || row.total || 0,
@@ -665,9 +652,10 @@ export function ModelBuilder({ database: propDatabase, schema: propSchema, disco
       `;
 
       const result = await executeQuery(populationQuery, { database, schema });
-      
-      if (result && result.length > 0) {
-        const row = result[0];
+
+      const rows = normalizeQueryRows(result);
+      if (rows.length > 0) {
+        const row = rows[0];
         const total = row.TOTAL || row.total || 0;
         const populated = [];
         const missing = [];

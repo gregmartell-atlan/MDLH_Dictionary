@@ -9,6 +9,7 @@ import { useState, useCallback, useMemo } from 'react';
 import { useQuery } from './useSnowflake';
 import { createLogger } from '../utils/logger';
 import { escapeIdentifier, escapeStringValue } from '../utils/queryHelpers';
+import { normalizeQueryRows } from '../utils/queryResults';
 import { UNIFIED_FIELD_CATALOG, getFieldById } from '../evaluation/catalog/unifiedFields';
 
 const log = createLogger('useFieldPresence');
@@ -237,8 +238,9 @@ export function useFieldPresence() {
       try {
         const coverageResult = await executeQuery(coverageQuery, { database, schema });
         
-        if (!coverageResult.error && coverageResult.rows?.[0]) {
-          const row = coverageResult.rows[0];
+        const normalizedRows = normalizeQueryRows(coverageResult);
+        if (!coverageResult.error && normalizedRows[0]) {
+          const row = normalizedRows[0];
           totalCount = row.TOTAL_COUNT || row.total_count || 0;
           
           for (const fr of fieldResults) {

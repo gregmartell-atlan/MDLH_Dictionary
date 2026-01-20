@@ -119,7 +119,41 @@ mdlh-entity-dictionary/
 └── postcss.config.js       # PostCSS configuration
 ```
 
+## 🧮 Snowflake Scoring Framework
+
+Execution order (00 → 09):
+1. `sql/00_bootstrap.sql`
+2. `sql/01_intent_schema.sql`
+3. `sql/02_evidence_schema.sql`
+4. `sql/03_score_schema.sql`
+5. `sql/04_scoring_procedure.sql`
+6. `sql/05_template_seed_pack.sql`
+7. `sql/06_atlan_gold_adapter.sql`
+8. `sql/07_snowflake_account_usage_adapter.sql`
+9. `sql/08_gap_playbook.sql`
+10. `sql/09_runbook_examples.sql`
+
+Run evidence refresh + scoring:
+```
+CALL EVIDENCE.REFRESH_FROM_ATLAN_GOLD('snowflake');
+CALL EVIDENCE.REFRESH_FROM_SNOWFLAKE_ACCOUNT_USAGE();
+CALL SCORE.RUN_ALL_ACTIVE_TEMPLATES('daily_atlan_gold_plus_snowflake');
+```
+
+Validation snippets:
+```
+SELECT evidence_key, COUNT(*) AS row_count
+FROM EVIDENCE.EVIDENCE_OBSERVATION
+GROUP BY evidence_key
+ORDER BY row_count DESC;
+
+SELECT asset_key, parameter_result, evidence_key_used
+FROM SCORE.PARAMETER_RESULT
+WHERE parameter_key = 'TPL_JOINABILITY'
+ORDER BY observation_ts DESC
+LIMIT 50;
+```
+
 ## 📝 License
 
 MIT
-

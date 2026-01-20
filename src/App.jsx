@@ -933,7 +933,12 @@ export default function App() {
   } = useConnectionContext();
 
   const { discoveredTables: dynamicDiscoveredTables = [] } = useDynamicSchema();
-  const { context: mdlhContext, setDatabase: setSelectedMDLHDatabase, setSchema: setSelectedMDLHSchema } = useMdlhContext();
+  const {
+    context: mdlhContext,
+    setDatabase: setSelectedMDLHDatabase,
+    setSchema: setSelectedMDLHSchema,
+    capabilities,
+  } = useMdlhContext();
   
   // Derive isConnected from context status
   const isConnected = globalConnectionStatus?.connected ?? false;
@@ -1167,7 +1172,8 @@ export default function App() {
               staticExampleQueries,
               selectedMDLHDatabase,
               selectedMDLHSchema,
-              tables
+              tables,
+              capabilities
             );
             setExampleQueries(transformedQueries);
             
@@ -1175,7 +1181,8 @@ export default function App() {
               staticMergedQueries,
               selectedMDLHDatabase,
               selectedMDLHSchema,
-              tables
+              tables,
+              capabilities
             );
             setMergedExampleQueries(transformedMerged);
             
@@ -1199,7 +1206,7 @@ export default function App() {
         })
         .finally(() => setIsDiscovering(false));
     }
-  }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema, loadSampleEntities, dynamicDiscoveredTables]);
+  }, [isConnected, selectedMDLHDatabase, selectedMDLHSchema, loadSampleEntities, dynamicDiscoveredTables, capabilities]);
   
   // Run batch validation on entity example queries to get sample data and suggestions
   const runBatchValidation = useCallback(async () => {

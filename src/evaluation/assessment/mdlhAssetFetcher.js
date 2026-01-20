@@ -8,6 +8,8 @@
  */
 
 import { buildSafeFQN, escapeStringValue } from '../../utils/queryHelpers';
+import { normalizeQueryRows } from '../../utils/queryResults';
+import { createLogger } from '../../utils/logger';
 import { getAllMdlhColumnsForSignals, UNIFIED_FIELD_CATALOG } from '../catalog/unifiedFields';
 
 // =============================================================================
@@ -81,6 +83,66 @@ const DEFAULT_ASSET_TYPES_BY_LEVEL = {
   'domain': ['Table', 'View', 'Column'],
 };
 
+const GOLD_ASSET_TABLE = 'ASSETS';
+
+const GOLD_ASSET_COLUMNS = new Set([
+  'GUID',
+  'ASSET_TYPE',
+  'ASSET_NAME',
+  'ASSET_QUALIFIED_NAME',
+  'DESCRIPTION',
+  'README_GUID',
+  'STATUS',
+  'UPDATED_AT',
+  'CREATED_AT',
+  'CREATED_BY',
+  'SOURCE_CREATED_AT',
+  'SOURCE_CREATED_BY',
+  'SOURCE_UPDATED_AT',
+  'SOURCE_UPDATED_BY',
+  'CERTIFICATE_STATUS',
+  'CERTIFICATE_UPDATED_AT',
+  'CERTIFICATE_UPDATED_BY',
+  'CONNECTOR_NAME',
+  'CONNECTOR_QUALIFIED_NAME',
+  'POPULARITY_SCORE',
+  'OWNER_USERS',
+  'TERM_GUIDS',
+  'TAGS',
+  'HAS_LINEAGE',
+]);
+
+const GOLD_COLUMN_MAP = {
+  GUID: 'GUID',
+  TYPENAME: 'ASSET_TYPE',
+  NAME: 'ASSET_NAME',
+  QUALIFIEDNAME: 'ASSET_QUALIFIED_NAME',
+  DISPLAYNAME: 'ASSET_NAME',
+  DESCRIPTION: 'DESCRIPTION',
+  USERDESCRIPTION: 'DESCRIPTION',
+  OWNERUSERS: 'OWNER_USERS',
+  OWNERGROUPS: 'OWNER_USERS',
+  CERTIFICATESTATUS: 'CERTIFICATE_STATUS',
+  CERTIFICATESTATUSMESSAGE: 'CERTIFICATE_STATUS',
+  HASLINEAGE: 'HAS_LINEAGE',
+  __HASLINEAGE: 'HAS_LINEAGE',
+  CLASSIFICATIONNAMES: 'TAGS',
+  ASSIGNEDTERMS: 'TERM_GUIDS',
+  MEANINGS: 'TERM_GUIDS',
+  READMENAME: 'README_GUID',
+  READMEGUID: 'README_GUID',
+  README: 'README_GUID',
+  UPDATETIME: 'UPDATED_AT',
+  UPDATE_TIME: 'UPDATED_AT',
+  CONNECTORNAME: 'CONNECTOR_NAME',
+  CONNECTIONQUALIFIEDNAME: 'CONNECTOR_QUALIFIED_NAME',
+  DATABASEQUALIFIEDNAME: 'ASSET_QUALIFIED_NAME',
+  SCHEMAQUALIFIEDNAME: 'ASSET_QUALIFIED_NAME',
+  DOMAINGUIDS: 'TAGS',
+};
+
+const log = createLogger('MDLHAssetFetcher');
+
 // =============================================================================
 // MDLH ASSET FETCHER
 // =============================================================================
@@ -100,6 +162,9 @@ export class MDLHAssetFetcher {
     this.database = config.database;
     this.schema = config.schema || 'PUBLIC';
     this.executeQuery = config.executeQuery;
+    this.capabilities = config.capabilities || null;
+    this.isGoldLayer = (this.database || '').toUpperCase() === 'ATLAN_GOLD'
+      || this.capabilities?.profile === 'ATLAN_GOLD';
   }
 
   /**
@@ -114,15 +179,29 @@ export class MDLHAssetFetcher {
     
     // Get all required columns for signal evaluation
     const columns = this.getRequiredColumns(tenantConfig);
+    log.info('Fetching assets', {
+      database: this.database,
+      schema: this.schema,
+      isGoldLayer: this.isGoldLayer,
+      scope,
+      assetTypes,
+      limit,
+      columnCount: columns.length,
+    });
     
     // Build queries for each asset type
     const queries = [];
-    for (const assetType of assetTypes) {
-      const tableName = ASSET_TYPE_TO_TABLE[assetType];
-      if (!tableName) continue;
-      
-      const sql = this.buildAssetQuery(tableName, columns, scope, limit);
-      queries.push({ assetType, tableName, sql });
+    if (this.isGoldLayer) {
+      const sql = this.buildAssetQuery(GOLD_ASSET_TABLE, columns, scope, limit, assetTypes);
+      queries.push({ assetType: 'GoldAsset', tableName: GOLD_ASSET_TABLE, sql });
+    } else {
+      for (const assetType of assetTypes) {
+        const tableName = ASSET_TYPE_TO_TABLE[assetType];
+        if (!tableName) continue;
+        
+        const sql = this.buildAssetQuery(tableName, columns, scope, limit, assetType);
+        queries.push({ assetType, tableName, sql });
+      }
     }
     
     // Execute queries and combine results
@@ -130,8 +209,8 @@ export class MDLHAssetFetcher {
     for (const { assetType, sql } of queries) {
       try {
         const result = await this.executeQuery(sql);
-        const rows = result.rows || result.data || [];
-        for (const row of rows) {
+        const normalizedRows = normalizeQueryRows(result);
+        for (const row of normalizedRows) {
           allAssets.push(this.mapToAssetRecord(row, assetType));
         }
       } catch (error) {
@@ -141,6 +220,7 @@ export class MDLHAssetFetcher {
     
     // Sort by popularity and limit
     allAssets.sort((a, b) => (b.attributes.popularityScore || 0) - (a.attributes.popularityScore || 0));
+    log.info('Fetched assets', { assetCount: allAssets.length });
     return allAssets.slice(0, limit);
   }
 
@@ -154,6 +234,28 @@ export class MDLHAssetFetcher {
     const columns = this.getRequiredColumns(tenantConfig);
     const escapedGuid = escapeStringValue(guid);
     
+    if (this.isGoldLayer) {
+      const fqn = buildSafeFQN(this.database, this.schema, GOLD_ASSET_TABLE);
+      const sql = `
+        SELECT ${columns.join(', ')}
+        FROM ${fqn}
+        WHERE GUID = '${escapedGuid}'
+        LIMIT 1
+      `;
+      
+      try {
+        const result = await this.executeQuery(sql);
+        const normalizedRows = normalizeQueryRows(result);
+        if (normalizedRows.length > 0) {
+          return this.mapToAssetRecord(normalizedRows[0], 'GoldAsset');
+        }
+      } catch (error) {
+        // Table might not exist, continue
+      }
+      
+      return null;
+    }
+
     // Try each entity table
     for (const [assetType, tableName] of Object.entries(ASSET_TYPE_TO_TABLE)) {
       const fqn = buildSafeFQN(this.database, this.schema, tableName);
@@ -166,9 +268,9 @@ export class MDLHAssetFetcher {
       
       try {
         const result = await this.executeQuery(sql);
-        const rows = result.rows || result.data || [];
-        if (rows.length > 0) {
-          return this.mapToAssetRecord(rows[0], assetType);
+        const normalizedRows = normalizeQueryRows(result);
+        if (normalizedRows.length > 0) {
+          return this.mapToAssetRecord(normalizedRows[0], assetType);
         }
       } catch (error) {
         // Table might not exist, continue
@@ -188,6 +290,24 @@ export class MDLHAssetFetcher {
     const assetTypes = scope.assetTypes || DEFAULT_ASSET_TYPES_BY_LEVEL[scope.level] || ['Table', 'View'];
     let totalCount = 0;
     
+    if (this.isGoldLayer) {
+      const fqn = buildSafeFQN(this.database, this.schema, GOLD_ASSET_TABLE);
+      const whereClause = this.buildWhereClause(scope, assetTypes);
+      const sql = `SELECT COUNT(*) as cnt FROM ${fqn} ${whereClause}`;
+      
+      try {
+        const result = await this.executeQuery(sql);
+        const normalizedRows = normalizeQueryRows(result);
+        if (normalizedRows.length > 0) {
+          totalCount += normalizedRows[0].cnt || normalizedRows[0].CNT || 0;
+        }
+      } catch (error) {
+        // Table might not exist
+      }
+      
+      return totalCount;
+    }
+
     for (const assetType of assetTypes) {
       const tableName = ASSET_TYPE_TO_TABLE[assetType];
       if (!tableName) continue;
@@ -198,9 +318,9 @@ export class MDLHAssetFetcher {
       
       try {
         const result = await this.executeQuery(sql);
-        const rows = result.rows || result.data || [];
-        if (rows.length > 0) {
-          totalCount += rows[0].cnt || rows[0].CNT || 0;
+        const normalizedRows = normalizeQueryRows(result);
+        if (normalizedRows.length > 0) {
+          totalCount += normalizedRows[0].cnt || normalizedRows[0].CNT || 0;
         }
       } catch (error) {
         // Table might not exist
@@ -248,7 +368,24 @@ export class MDLHAssetFetcher {
       }
     }
     
-    return Array.from(allColumns);
+    if (!this.isGoldLayer) {
+      return Array.from(allColumns);
+    }
+
+    const goldColumns = new Set();
+    for (const column of allColumns) {
+      const mapped = this.resolveGoldColumn(column);
+      if (mapped) {
+        goldColumns.add(mapped);
+      }
+    }
+
+    // Always include core asset columns for Gold Layer
+    ['GUID', 'ASSET_TYPE', 'ASSET_NAME', 'ASSET_QUALIFIED_NAME', 'STATUS', 'UPDATED_AT'].forEach((col) => {
+      goldColumns.add(col);
+    });
+
+    return Array.from(goldColumns);
   }
 
   /**
@@ -259,15 +396,16 @@ export class MDLHAssetFetcher {
    * @param {number} limit
    * @returns {string}
    */
-  buildAssetQuery(tableName, columns, scope, limit) {
+  buildAssetQuery(tableName, columns, scope, limit, assetTypes) {
     const fqn = buildSafeFQN(this.database, this.schema, tableName);
-    const whereClause = this.buildWhereClause(scope);
+    const whereClause = this.buildWhereClause(scope, assetTypes);
+    const selectColumns = columns.length > 0 ? columns.join(', ') : '*';
     
     return `
-      SELECT ${columns.join(', ')}
+      SELECT ${selectColumns}
       FROM ${fqn}
       ${whereClause}
-      ORDER BY POPULARITYSCORE DESC NULLS LAST
+      ${this.isGoldLayer ? 'ORDER BY UPDATED_AT DESC NULLS LAST' : 'ORDER BY POPULARITYSCORE DESC NULLS LAST'}
       LIMIT ${limit}
     `;
   }
@@ -277,28 +415,53 @@ export class MDLHAssetFetcher {
    * @param {AssessmentScope} scope
    * @returns {string}
    */
-  buildWhereClause(scope) {
+  buildWhereClause(scope, assetTypes) {
     const conditions = [];
     
+    if (this.isGoldLayer && Array.isArray(assetTypes) && assetTypes.length > 0) {
+      const types = assetTypes.map((type) => escapeStringValue(type));
+      conditions.push(`ASSET_TYPE IN (${types.join(', ')})`);
+    }
+
     // Scope filtering
     if (scope.level !== 'tenant' && scope.scopeId) {
       const escapedScopeId = escapeStringValue(scope.scopeId);
       
       switch (scope.level) {
         case 'connection':
-          conditions.push(`CONNECTIONQUALIFIEDNAME = '${escapedScopeId}'`);
+          if (this.isGoldLayer) {
+            conditions.push(`CONNECTOR_QUALIFIED_NAME = '${escapedScopeId}'`);
+          } else {
+            conditions.push(`CONNECTIONQUALIFIEDNAME = '${escapedScopeId}'`);
+          }
           break;
         case 'database':
-          conditions.push(`DATABASEQUALIFIEDNAME = '${escapedScopeId}'`);
+          if (this.isGoldLayer) {
+            conditions.push(`ASSET_QUALIFIED_NAME ILIKE '${escapedScopeId}%'`);
+          } else {
+            conditions.push(`DATABASEQUALIFIEDNAME = '${escapedScopeId}'`);
+          }
           break;
         case 'schema':
-          conditions.push(`SCHEMAQUALIFIEDNAME = '${escapedScopeId}'`);
+          if (this.isGoldLayer) {
+            conditions.push(`ASSET_QUALIFIED_NAME ILIKE '${escapedScopeId}%'`);
+          } else {
+            conditions.push(`SCHEMAQUALIFIEDNAME = '${escapedScopeId}'`);
+          }
           break;
         case 'table':
-          conditions.push(`(QUALIFIEDNAME = '${escapedScopeId}' OR QUALIFIEDNAME LIKE '${escapedScopeId}/%')`);
+          if (this.isGoldLayer) {
+            conditions.push(`(ASSET_QUALIFIED_NAME = '${escapedScopeId}' OR ASSET_QUALIFIED_NAME ILIKE '${escapedScopeId}%')`);
+          } else {
+            conditions.push(`(QUALIFIEDNAME = '${escapedScopeId}' OR QUALIFIEDNAME LIKE '${escapedScopeId}/%')`);
+          }
           break;
         case 'domain':
-          conditions.push(`ARRAY_CONTAINS('${escapedScopeId}'::VARIANT, DOMAINGUIDS)`);
+          if (this.isGoldLayer) {
+            conditions.push(`ARRAY_CONTAINS('${escapedScopeId}'::VARIANT, TAGS)`);
+          } else {
+            conditions.push(`ARRAY_CONTAINS('${escapedScopeId}'::VARIANT, DOMAINGUIDS)`);
+          }
           break;
       }
     }
@@ -331,11 +494,13 @@ export class MDLHAssetFetcher {
     
     const record = {
       guid: normalizedRow.guid || '',
-      typeName: normalizedRow.typename || assetType,
-      qualifiedName: normalizedRow.qualifiedname || '',
-      displayName: normalizedRow.displayname || normalizedRow.name || '',
+      typeName: this.isGoldLayer ? normalizedRow.asset_type || assetType : (normalizedRow.typename || assetType),
+      qualifiedName: this.isGoldLayer ? normalizedRow.asset_qualified_name || '' : (normalizedRow.qualifiedname || ''),
+      displayName: this.isGoldLayer ? normalizedRow.asset_name || '' : (normalizedRow.displayname || normalizedRow.name || ''),
       attributes: this.extractAttributes(normalizedRow),
-      classifications: this.parseJsonArray(normalizedRow.classificationnames) || [],
+      classifications: this.isGoldLayer
+        ? (this.parseJsonArray(normalizedRow.tags) || [])
+        : (this.parseJsonArray(normalizedRow.classificationnames) || []),
       customMetadata: this.parseJsonObject(normalizedRow.businessattributes) || {},
       hierarchy: this.extractHierarchy(normalizedRow),
     };
@@ -354,21 +519,32 @@ export class MDLHAssetFetcher {
     // Map known attributes
     const attributeMapping = {
       name: 'name',
+      asset_name: 'name',
       description: 'description',
       userdescription: 'userDescription',
       ownerusers: 'ownerUsers',
+      owner_users: 'ownerUsers',
       ownergroups: 'ownerGroups',
       certificatestatus: 'certificateStatus',
+      certificate_status: 'certificateStatus',
       certificatestatusmessage: 'certificateStatusMessage',
       popularityscore: 'popularityScore',
+      popularity_score: 'popularityScore',
       querycount: 'queryCount',
       queryusercount: 'queryUserCount',
+      haslineage: 'hasLineage',
+      has_lineage: 'hasLineage',
       __haslineage: '__hasLineage',
       assignedterms: 'meanings',
+      term_guids: 'meanings',
       classificationnames: 'classificationNames',
+      tags: 'classificationNames',
       readme: 'readme',
+      readme_guid: 'readme',
       createtime: 'createTime',
+      created_at: 'createTime',
       updatetime: 'updateTime',
+      updated_at: 'updateTime',
       __modificationtimestamp: '__modificationTimestamp',
     };
     
@@ -396,6 +572,18 @@ export class MDLHAssetFetcher {
    * @returns {HierarchyPath}
    */
   extractHierarchy(row) {
+    if (this.isGoldLayer) {
+      return {
+        connectionQualifiedName: row.connector_qualified_name,
+        connectionName: row.connector_name,
+        databaseQualifiedName: row.asset_qualified_name,
+        databaseName: this.extractDatabaseName(row.asset_qualified_name),
+        schemaQualifiedName: row.asset_qualified_name,
+        schemaName: this.extractSchemaName(row.asset_qualified_name),
+        domainGuid: this.parseJsonArray(row.tags)?.[0],
+      };
+    }
+
     return {
       connectionQualifiedName: row.connectionqualifiedname,
       connectionName: this.extractName(row.connectionqualifiedname),
@@ -416,6 +604,25 @@ export class MDLHAssetFetcher {
     if (!qualifiedName) return undefined;
     const parts = qualifiedName.split('/');
     return parts[parts.length - 1];
+  }
+
+  extractDatabaseName(qualifiedName) {
+    if (!qualifiedName) return undefined;
+    const parts = qualifiedName.split('.');
+    return parts[0] || undefined;
+  }
+
+  extractSchemaName(qualifiedName) {
+    if (!qualifiedName) return undefined;
+    const parts = qualifiedName.split('.');
+    return parts[1] || undefined;
+  }
+
+  resolveGoldColumn(column) {
+    if (!column) return null;
+    const upper = column.toUpperCase();
+    const mapped = GOLD_COLUMN_MAP[upper] || upper;
+    return GOLD_ASSET_COLUMNS.has(mapped) ? mapped : null;
   }
 
   /**
@@ -472,6 +679,7 @@ export function createMDLHAssetFetcher(connectionConfig, executeQuery) {
     database: connectionConfig.database,
     schema: connectionConfig.schema || 'PUBLIC',
     executeQuery,
+    capabilities: connectionConfig.capabilities,
   });
 }
 

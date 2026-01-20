@@ -9,6 +9,8 @@
 // This module provides a singleton that can be configured with the Explorer's
 // query execution function and connection state.
 
+import { normalizeQueryRows } from '../../utils/queryResults';
+
 let queryExecutor = null;
 let connectionState = { connected: false, database: null, schema: null };
 let sessionId = null;
@@ -88,8 +90,25 @@ export async function executeQuery(sql, options = {}) {
     return { rows: [], columns: [], error: 'Not connected to Snowflake' };
   }
 
+  if (queryExecutor) {
+    const result = await queryExecutor(sql, {
+      database: options.database || connectionState.database,
+      schema: options.schema || connectionState.schema,
+      limit: options.limit || 10000,
+    });
+
+    if (!result) {
+      return { rows: [], columns: [], error: 'Query failed' };
+    }
+
+    return {
+      rows: normalizeQueryRows(result),
+      columns: result.columns || [],
+    };
+  }
+
   try {
-    const response = await fetch(`${API_URL}/api/query`, {
+    const response = await fetch(`${API_URL}/api/query/execute`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -103,15 +122,26 @@ export async function executeQuery(sql, options = {}) {
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      return { rows: [], columns: [], error: errorText };
+    const submitData = await response.json();
+    if (!response.ok || submitData.status !== 'SUCCESS') {
+      return { rows: [], columns: [], error: submitData?.message || submitData?.detail || 'Query failed' };
     }
 
-    const data = await response.json();
+    const resultsRes = await fetch(
+      `${API_URL}/api/query/${submitData.query_id}/results`,
+      { headers: { 'X-Session-ID': currentSessionId } }
+    );
+
+    if (!resultsRes.ok) {
+      const errorText = await resultsRes.text().catch(() => '');
+      return { rows: [], columns: [], error: errorText || `Results fetch failed (${resultsRes.status})` };
+    }
+
+    const resultsData = await resultsRes.json();
+    const normalizedRows = normalizeQueryRows(resultsData);
     return {
-      rows: data.rows || data.data || [],
-      columns: data.columns || Object.keys(data.rows?.[0] || {}),
+      rows: normalizedRows,
+      columns: resultsData.columns || [],
     };
   } catch (error) {
     console.error('[MDLHBridge] Query error:', error);

@@ -12,6 +12,8 @@
  * - Display configuration
  */
 
+import { resolveAvailableColumns, resolveTableFqn } from '../utils/contextResolver.js';
+
 // =============================================================================
 // DIMENSION DEFINITIONS
 // =============================================================================
@@ -22,26 +24,26 @@ export const PIVOT_DIMENSIONS = {
     id: 'connection',
     label: 'Connection',
     icon: '🔗',
-    mdlhColumn: 'CONNECTORNAME',
-    alternates: ['CONNECTOR_NAME', 'CONNECTIONNAME', 'CONNECTION_NAME'],
+    mdlhColumn: 'CONNECTOR_NAME',
+    alternates: ['CONNECTORNAME', 'CONNECTIONNAME', 'CONNECTION_NAME'],
     description: 'Source system connection (Snowflake, BigQuery, etc.)',
   },
   database: {
     id: 'database',
     label: 'Database',
     icon: '🗄️',
-    mdlhColumn: 'DATABASEQUALIFIEDNAME',
-    alternates: ['DATABASE_NAME', 'DATABASENAME'],
-    extractFn: `SPLIT_PART(DATABASEQUALIFIEDNAME, '/', -1)`,
+    mdlhColumn: 'ASSET_QUALIFIED_NAME',
+    alternates: ['DATABASE_NAME', 'DATABASENAME', 'ASSET_QUALIFIED_NAME'],
+    extractFn: `SPLIT_PART(ASSET_QUALIFIED_NAME, '.', 1)`,
     description: 'Database name within connection',
   },
   schema: {
     id: 'schema',
     label: 'Schema',
     icon: '📁',
-    mdlhColumn: 'SCHEMAQUALIFIEDNAME',
-    alternates: ['SCHEMA_NAME', 'SCHEMANAME'],
-    extractFn: `SPLIT_PART(SCHEMAQUALIFIEDNAME, '/', -1)`,
+    mdlhColumn: 'ASSET_QUALIFIED_NAME',
+    alternates: ['SCHEMA_NAME', 'SCHEMANAME', 'ASSET_QUALIFIED_NAME'],
+    extractFn: `SPLIT_PART(ASSET_QUALIFIED_NAME, '.', 2)`,
     description: 'Schema within database',
   },
   type: {
@@ -58,9 +60,9 @@ export const PIVOT_DIMENSIONS = {
     id: 'owner',
     label: 'Owner',
     icon: '👤',
-    mdlhColumn: 'OWNERUSERS',
-    alternates: ['OWNER_USERS'],
-    extractFn: `COALESCE(OWNERUSERS[0]::STRING, 'Unowned')`,
+    mdlhColumn: 'OWNER_USERS',
+    alternates: ['OWNERUSERS', 'OWNER_USERS'],
+    extractFn: `COALESCE(OWNER_USERS[0]::STRING, 'Unowned')`,
     isArray: true,
     description: 'Primary owner user',
   },
@@ -68,31 +70,31 @@ export const PIVOT_DIMENSIONS = {
     id: 'ownerGroup',
     label: 'Owner Group',
     icon: '👥',
-    mdlhColumn: 'OWNERGROUPS',
-    alternates: ['OWNER_GROUPS'],
-    extractFn: `COALESCE(OWNERGROUPS[0]::STRING, 'Unowned')`,
+    mdlhColumn: 'OWNER_USERS',
+    alternates: ['OWNERGROUPS', 'OWNER_GROUPS', 'OWNERUSERS', 'OWNER_USERS'],
+    extractFn: `COALESCE(OWNER_USERS[0]::STRING, 'Unowned')`,
     isArray: true,
-    description: 'Primary owner group',
+    description: 'Primary owner (fallbacks to user list)',
   },
   
   // Governance dimensions
   domain: {
     id: 'domain',
-    label: 'Domain',
+    label: 'Tag',
     icon: '🏢',
-    mdlhColumn: 'DOMAINGUIDS',
-    alternates: ['DOMAIN_GUIDS', '__DOMAINGUIDS', 'TAGS'],
-    extractFn: `COALESCE(DOMAINGUIDS[0]::STRING, TAGS[0]::STRING, 'No Domain')`,
+    mdlhColumn: 'TAGS',
+    alternates: ['DOMAIN_GUIDS', '__DOMAINGUIDS', 'DOMAINGUIDS', 'CLASSIFICATIONNAMES', 'CLASSIFICATION_NAMES'],
+    extractFn: `COALESCE(TAGS[0]::STRING, 'No Tag')`,
     isArray: true,
-    description: 'Business domain assignment',
+    description: 'Primary tag assignment',
   },
   certificationStatus: {
     id: 'certificationStatus',
     label: 'Certification',
     icon: '✓',
-    mdlhColumn: 'CERTIFICATESTATUS',
-    alternates: ['CERTIFICATE_STATUS'],
-    extractFn: `COALESCE(CERTIFICATESTATUS, 'None')`,
+    mdlhColumn: 'CERTIFICATE_STATUS',
+    alternates: ['CERTIFICATESTATUS', 'CERTIFICATE_STATUS'],
+    extractFn: `COALESCE(CERTIFICATE_STATUS, 'None')`,
     description: 'Certification status (VERIFIED, DRAFT, DEPRECATED, None)',
   },
   
@@ -101,9 +103,9 @@ export const PIVOT_DIMENSIONS = {
     id: 'hasTerms',
     label: 'Has Terms',
     icon: '📘',
-    mdlhColumn: 'TERMGUIDS',
-    alternates: ['TERM_GUIDS', 'MEANINGS'],
-    extractFn: `CASE WHEN ARRAY_SIZE(TERMGUIDS) > 0 THEN 'Yes' ELSE 'No' END`,
+    mdlhColumn: 'TERM_GUIDS',
+    alternates: ['TERMGUIDS', 'MEANINGS', 'TERM_GUIDS'],
+    extractFn: `CASE WHEN ARRAY_SIZE(TERM_GUIDS) > 0 THEN 'Yes' ELSE 'No' END`,
     isArray: true,
     description: 'Whether asset has linked glossary terms',
   },
@@ -111,11 +113,11 @@ export const PIVOT_DIMENSIONS = {
     id: 'hasTags',
     label: 'Has Tags',
     icon: '🏷️',
-    mdlhColumn: 'CLASSIFICATIONNAMES',
-    alternates: ['CLASSIFICATION_NAMES', 'TAGS'],
-    extractFn: `CASE WHEN ARRAY_SIZE(CLASSIFICATIONNAMES) > 0 THEN 'Yes' ELSE 'No' END`,
+    mdlhColumn: 'TAGS',
+    alternates: ['CLASSIFICATIONNAMES', 'CLASSIFICATION_NAMES', 'TAGS'],
+    extractFn: `CASE WHEN ARRAY_SIZE(TAGS) > 0 THEN 'Yes' ELSE 'No' END`,
     isArray: true,
-    description: 'Whether asset has classification tags',
+    description: 'Whether asset has tags',
   },
   hasReadme: {
     id: 'hasReadme',
@@ -132,12 +134,12 @@ export const PIVOT_DIMENSIONS = {
     id: 'popularityBucket',
     label: 'Popularity',
     icon: '🔥',
-    mdlhColumn: 'POPULARITYSCORE',
-    alternates: ['POPULARITY_SCORE'],
+    mdlhColumn: 'POPULARITY_SCORE',
+    alternates: ['POPULARITY_SCORE', 'POPULARITYSCORE'],
     extractFn: `CASE 
-      WHEN POPULARITYSCORE >= 0.8 THEN 'Hot'
-      WHEN POPULARITYSCORE >= 0.5 THEN 'Warm'
-      WHEN POPULARITYSCORE > 0 THEN 'Normal'
+      WHEN POPULARITY_SCORE >= 0.8 THEN 'Hot'
+      WHEN POPULARITY_SCORE >= 0.5 THEN 'Warm'
+      WHEN POPULARITY_SCORE > 0 THEN 'Normal'
       ELSE 'No Data'
     END`,
     description: 'Popularity bucket based on usage',
@@ -162,9 +164,9 @@ export const PIVOT_DIMENSIONS = {
     id: 'lineageStatus',
     label: 'Lineage Status',
     icon: '🔗',
-    mdlhColumn: 'HASLINEAGE',
-    alternates: ['HAS_LINEAGE', '__HASLINEAGE'],
-    extractFn: `CASE WHEN HASLINEAGE = TRUE THEN 'Has Lineage' ELSE 'No Lineage' END`,
+    mdlhColumn: 'HAS_LINEAGE',
+    alternates: ['HAS_LINEAGE', '__HASLINEAGE', 'HASLINEAGE'],
+    extractFn: `CASE WHEN HAS_LINEAGE = TRUE THEN 'Has Lineage' ELSE 'No Lineage' END`,
     description: 'Whether asset has lineage',
   },
 };
@@ -197,7 +199,7 @@ export const PIVOT_MEASURES = {
     id: 'ownerCoverage',
     label: '% Owned',
     icon: '👤',
-    sql: `ROUND(COUNT_IF(ARRAY_SIZE(OWNERUSERS) > 0 OR ARRAY_SIZE(OWNERGROUPS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1)`,
+    sql: `ROUND(COUNT_IF(ARRAY_SIZE(OWNER_USERS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1)`,
     format: 'percent',
     description: 'Percentage of assets with owners assigned',
   },
@@ -205,7 +207,7 @@ export const PIVOT_MEASURES = {
     id: 'certificationCoverage',
     label: 'Cert Rate',
     icon: '✓',
-    sql: `ROUND(COUNT_IF(CERTIFICATESTATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1)`,
+    sql: `ROUND(COUNT_IF(CERTIFICATE_STATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1)`,
     format: 'percent',
     description: 'Percentage of assets certified',
   },
@@ -213,7 +215,7 @@ export const PIVOT_MEASURES = {
     id: 'termCoverage',
     label: '% with Terms',
     icon: '📘',
-    sql: `ROUND(COUNT_IF(ARRAY_SIZE(TERMGUIDS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1)`,
+    sql: `ROUND(COUNT_IF(ARRAY_SIZE(TERM_GUIDS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1)`,
     format: 'percent',
     description: 'Percentage of assets linked to glossary terms',
   },
@@ -221,7 +223,7 @@ export const PIVOT_MEASURES = {
     id: 'tagCoverage',
     label: '% Tagged',
     icon: '🏷️',
-    sql: `ROUND(COUNT_IF(ARRAY_SIZE(CLASSIFICATIONNAMES) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1)`,
+    sql: `ROUND(COUNT_IF(ARRAY_SIZE(TAGS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1)`,
     format: 'percent',
     description: 'Percentage of assets with classification tags',
   },
@@ -231,7 +233,7 @@ export const PIVOT_MEASURES = {
     id: 'lineageCoverage',
     label: 'Lineage Coverage',
     icon: '🔗',
-    sql: `ROUND(COUNT_IF(HASLINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1)`,
+    sql: `ROUND(COUNT_IF(HAS_LINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1)`,
     format: 'percent',
     description: 'Percentage of assets with lineage',
   },
@@ -239,7 +241,7 @@ export const PIVOT_MEASURES = {
     id: 'hasUpstream',
     label: 'Has Upstream',
     icon: '⬆️',
-    sql: `ROUND(COUNT_IF(HASLINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1)`, // Simplified - needs lineage table join
+    sql: `ROUND(COUNT_IF(HAS_LINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1)`, // Simplified - needs lineage table join
     format: 'percent',
     description: 'Percentage with upstream lineage',
   },
@@ -247,7 +249,7 @@ export const PIVOT_MEASURES = {
     id: 'hasDownstream',
     label: 'Has Downstream',
     icon: '⬇️',
-    sql: `ROUND(COUNT_IF(HASLINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1)`, // Simplified - needs lineage table join
+    sql: `ROUND(COUNT_IF(HAS_LINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1)`, // Simplified - needs lineage table join
     format: 'percent',
     description: 'Percentage with downstream lineage',
   },
@@ -255,7 +257,7 @@ export const PIVOT_MEASURES = {
     id: 'fullLineage',
     label: 'Full Lineage',
     icon: '↕️',
-    sql: `ROUND(COUNT_IF(HASLINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1)`, // Simplified
+    sql: `ROUND(COUNT_IF(HAS_LINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1)`, // Simplified
     format: 'percent',
     description: 'Percentage with both upstream and downstream',
   },
@@ -263,7 +265,7 @@ export const PIVOT_MEASURES = {
     id: 'orphaned',
     label: 'Orphaned',
     icon: '⚠️',
-    sql: `COUNT_IF(HASLINEAGE = FALSE OR HASLINEAGE IS NULL)`,
+    sql: `COUNT_IF(HAS_LINEAGE = FALSE OR HAS_LINEAGE IS NULL)`,
     format: 'number',
     description: 'Number of assets without lineage',
   },
@@ -273,7 +275,7 @@ export const PIVOT_MEASURES = {
     id: 'certifiedCount',
     label: '✓ Certified',
     icon: '✓',
-    sql: `COUNT_IF(CERTIFICATESTATUS = 'VERIFIED')`,
+    sql: `COUNT_IF(CERTIFICATE_STATUS = 'VERIFIED')`,
     format: 'number',
     description: 'Number of certified assets',
   },
@@ -281,7 +283,7 @@ export const PIVOT_MEASURES = {
     id: 'draftCount',
     label: '◐ Draft',
     icon: '◐',
-    sql: `COUNT_IF(CERTIFICATESTATUS = 'DRAFT')`,
+    sql: `COUNT_IF(CERTIFICATE_STATUS = 'DRAFT')`,
     format: 'number',
     description: 'Number of draft assets',
   },
@@ -289,7 +291,7 @@ export const PIVOT_MEASURES = {
     id: 'deprecatedCount',
     label: '✗ Deprecated',
     icon: '✗',
-    sql: `COUNT_IF(CERTIFICATESTATUS = 'DEPRECATED')`,
+    sql: `COUNT_IF(CERTIFICATE_STATUS = 'DEPRECATED')`,
     format: 'number',
     description: 'Number of deprecated assets',
   },
@@ -297,7 +299,7 @@ export const PIVOT_MEASURES = {
     id: 'noCertCount',
     label: '○ None',
     icon: '○',
-    sql: `COUNT_IF(CERTIFICATESTATUS IS NULL OR CERTIFICATESTATUS NOT IN ('VERIFIED', 'DRAFT', 'DEPRECATED'))`,
+    sql: `COUNT_IF(CERTIFICATE_STATUS IS NULL OR CERTIFICATE_STATUS NOT IN ('VERIFIED', 'DRAFT', 'DEPRECATED'))`,
     format: 'number',
     description: 'Number of uncertified assets',
   },
@@ -309,9 +311,9 @@ export const PIVOT_MEASURES = {
     icon: '📊',
     sql: `ROUND((
       COALESCE(COUNT_IF(DESCRIPTION IS NOT NULL AND DESCRIPTION <> ''), 0) * 25.0 +
-      COALESCE(COUNT_IF(ARRAY_SIZE(OWNERUSERS) > 0 OR ARRAY_SIZE(OWNERGROUPS) > 0), 0) * 25.0 +
-      COALESCE(COUNT_IF(CERTIFICATESTATUS IS NOT NULL), 0) * 25.0 +
-      COALESCE(COUNT_IF(ARRAY_SIZE(TERMGUIDS) > 0), 0) * 25.0
+      COALESCE(COUNT_IF(ARRAY_SIZE(OWNER_USERS) > 0), 0) * 25.0 +
+      COALESCE(COUNT_IF(CERTIFICATE_STATUS IS NOT NULL), 0) * 25.0 +
+      COALESCE(COUNT_IF(ARRAY_SIZE(TERM_GUIDS) > 0), 0) * 25.0
     ) / NULLIF(COUNT(*), 0), 1)`,
     format: 'percent',
     description: 'Average completeness score based on key fields',
@@ -319,20 +321,24 @@ export const PIVOT_MEASURES = {
 };
 
 const PIVOT_COLUMN_ALIASES = {
-  CONNECTORNAME: ['CONNECTOR_NAME', 'CONNECTIONNAME', 'CONNECTION_NAME'],
-  DATABASEQUALIFIEDNAME: ['DATABASE_NAME', 'DATABASENAME', 'ASSET_QUALIFIED_NAME'],
-  SCHEMAQUALIFIEDNAME: ['SCHEMA_NAME', 'SCHEMANAME', 'ASSET_QUALIFIED_NAME'],
+  CONNECTOR_NAME: ['CONNECTORNAME', 'CONNECTIONNAME', 'CONNECTION_NAME'],
+  ASSET_QUALIFIED_NAME: [
+    'DATABASE_NAME',
+    'DATABASENAME',
+    'SCHEMA_NAME',
+    'SCHEMANAME',
+    'DATABASEQUALIFIEDNAME',
+    'SCHEMAQUALIFIEDNAME',
+  ],
   ASSET_TYPE: ['TYPENAME', 'TYPE_NAME'],
-  OWNERUSERS: ['OWNER_USERS'],
-  OWNERGROUPS: ['OWNER_GROUPS', 'OWNER_USERS'],
-  DOMAINGUIDS: ['DOMAIN_GUIDS', '__DOMAINGUIDS', 'TAGS'],
-  CERTIFICATESTATUS: ['CERTIFICATE_STATUS'],
-  TERMGUIDS: ['TERM_GUIDS', 'MEANINGS'],
-  CLASSIFICATIONNAMES: ['CLASSIFICATION_NAMES', 'TAGS'],
+  OWNER_USERS: ['OWNERUSERS', 'OWNER_GROUPS', 'OWNERGROUPS'],
+  TAGS: ['DOMAIN_GUIDS', '__DOMAINGUIDS', 'CLASSIFICATION_NAMES', 'CLASSIFICATIONNAMES'],
+  CERTIFICATE_STATUS: ['CERTIFICATESTATUS'],
+  TERM_GUIDS: ['TERMGUIDS', 'MEANINGS'],
   README_GUID: ['READMEGUID', 'README'],
-  POPULARITYSCORE: ['POPULARITY_SCORE'],
+  POPULARITY_SCORE: ['POPULARITY_SCORE', 'POPULARITYSCORE'],
   UPDATED_AT: ['UPDATETIME', 'UPDATE_TIME'],
-  HASLINEAGE: ['HAS_LINEAGE', '__HASLINEAGE'],
+  HAS_LINEAGE: ['HAS_LINEAGE', '__HASLINEAGE', 'HASLINEAGE'],
   DESCRIPTION: ['USER_DESCRIPTION', 'USERDESCRIPTION'],
   STATUS: ['ASSET_STATUS', 'STATE'],
 };
@@ -512,16 +518,16 @@ export const PREBUILT_PIVOTS = [
     
     sqlTemplate: `
       SELECT
-        COALESCE(CONNECTORNAME, 'Unknown') AS connection,
+        COALESCE(CONNECTOR_NAME, 'Unknown') AS connection,
         COALESCE(ASSET_TYPE, 'Unknown') AS asset_type,
         COUNT(*) AS asset_count,
         ROUND(COUNT_IF(DESCRIPTION IS NOT NULL AND DESCRIPTION <> '') * 100.0 / NULLIF(COUNT(*), 0), 1) AS description_coverage,
-        ROUND(COUNT_IF(ARRAY_SIZE(OWNERUSERS) > 0 OR ARRAY_SIZE(OWNERGROUPS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS owner_coverage,
+        ROUND(COUNT_IF(ARRAY_SIZE(OWNER_USERS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS owner_coverage,
         ROUND((
           COALESCE(COUNT_IF(DESCRIPTION IS NOT NULL), 0) * 25.0 +
-          COALESCE(COUNT_IF(ARRAY_SIZE(OWNERUSERS) > 0 OR ARRAY_SIZE(OWNERGROUPS) > 0), 0) * 25.0 +
-          COALESCE(COUNT_IF(CERTIFICATESTATUS IS NOT NULL), 0) * 25.0 +
-          COALESCE(COUNT_IF(ARRAY_SIZE(TERMGUIDS) > 0), 0) * 25.0
+          COALESCE(COUNT_IF(ARRAY_SIZE(OWNER_USERS) > 0), 0) * 25.0 +
+          COALESCE(COUNT_IF(CERTIFICATE_STATUS IS NOT NULL), 0) * 25.0 +
+          COALESCE(COUNT_IF(ARRAY_SIZE(TERM_GUIDS) > 0), 0) * 25.0
         ) / NULLIF(COUNT(*), 0), 1) AS avg_completeness
       FROM {{TABLE}}
       WHERE STATUS = 'ACTIVE'
@@ -552,13 +558,13 @@ export const PREBUILT_PIVOTS = [
     
     sqlTemplate: `
       SELECT
-        COALESCE(DOMAINGUIDS[0]::STRING, 'No Domain') AS domain,
+        COALESCE(TAGS[0]::STRING, 'No Tag') AS domain,
         COUNT(*) AS asset_count,
         ROUND(COUNT_IF(DESCRIPTION IS NOT NULL AND DESCRIPTION <> '') * 100.0 / NULLIF(COUNT(*), 0), 1) AS description_coverage,
-        ROUND(COUNT_IF(ARRAY_SIZE(OWNERUSERS) > 0 OR ARRAY_SIZE(OWNERGROUPS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS owner_coverage,
-        ROUND(COUNT_IF(CERTIFICATESTATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1) AS certification_coverage,
-        ROUND(COUNT_IF(ARRAY_SIZE(TERMGUIDS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS term_coverage,
-        ROUND(COUNT_IF(ARRAY_SIZE(CLASSIFICATIONNAMES) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS tag_coverage
+        ROUND(COUNT_IF(ARRAY_SIZE(OWNER_USERS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS owner_coverage,
+        ROUND(COUNT_IF(CERTIFICATE_STATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1) AS certification_coverage,
+        ROUND(COUNT_IF(ARRAY_SIZE(TERM_GUIDS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS term_coverage,
+        ROUND(COUNT_IF(ARRAY_SIZE(TAGS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS tag_coverage
       FROM {{TABLE}}
       WHERE STATUS = 'ACTIVE'
       GROUP BY 1
@@ -588,13 +594,13 @@ export const PREBUILT_PIVOTS = [
     
     sqlTemplate: `
       SELECT
-        COALESCE(OWNERGROUPS[0]::STRING, OWNERUSERS[0]::STRING, 'Unowned') AS owner_group,
-        COUNT_IF(CERTIFICATESTATUS = 'VERIFIED') AS certified_count,
-        COUNT_IF(CERTIFICATESTATUS = 'DRAFT') AS draft_count,
-        COUNT_IF(CERTIFICATESTATUS = 'DEPRECATED') AS deprecated_count,
-        COUNT_IF(CERTIFICATESTATUS IS NULL OR CERTIFICATESTATUS NOT IN ('VERIFIED', 'DRAFT', 'DEPRECATED')) AS no_cert_count,
+        COALESCE(OWNER_USERS[0]::STRING, 'Unowned') AS owner_group,
+        COUNT_IF(CERTIFICATE_STATUS = 'VERIFIED') AS certified_count,
+        COUNT_IF(CERTIFICATE_STATUS = 'DRAFT') AS draft_count,
+        COUNT_IF(CERTIFICATE_STATUS = 'DEPRECATED') AS deprecated_count,
+        COUNT_IF(CERTIFICATE_STATUS IS NULL OR CERTIFICATE_STATUS NOT IN ('VERIFIED', 'DRAFT', 'DEPRECATED')) AS no_cert_count,
         COUNT(*) AS total_assets,
-        ROUND(COUNT_IF(CERTIFICATESTATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1) AS cert_rate
+        ROUND(COUNT_IF(CERTIFICATE_STATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1) AS cert_rate
       FROM {{TABLE}}
       WHERE STATUS = 'ACTIVE'
       GROUP BY 1
@@ -623,12 +629,12 @@ export const PREBUILT_PIVOTS = [
     
     sqlTemplate: `
       SELECT
-        COALESCE(CONNECTORNAME, 'Unknown') AS connection,
-        SPLIT_PART(DATABASEQUALIFIEDNAME, '/', -1) AS database_name,
-        SPLIT_PART(SCHEMAQUALIFIEDNAME, '/', -1) AS schema_name,
+        COALESCE(CONNECTOR_NAME, 'Unknown') AS connection,
+        SPLIT_PART(ASSET_QUALIFIED_NAME, '.', 1) AS database_name,
+        SPLIT_PART(ASSET_QUALIFIED_NAME, '.', 2) AS schema_name,
         COUNT(*) AS asset_count,
-        ROUND(COUNT_IF(HASLINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1) AS lineage_coverage,
-        COUNT_IF(HASLINEAGE = FALSE OR HASLINEAGE IS NULL) AS orphaned
+        ROUND(COUNT_IF(HAS_LINEAGE = TRUE) * 100.0 / NULLIF(COUNT(*), 0), 1) AS lineage_coverage,
+        COUNT_IF(HAS_LINEAGE = FALSE OR HAS_LINEAGE IS NULL) AS orphaned
       FROM {{TABLE}}
       WHERE STATUS = 'ACTIVE'
         AND ASSET_TYPE IN ('Table', 'View', 'SnowflakeTable', 'SnowflakeView')
@@ -659,11 +665,11 @@ export const PREBUILT_PIVOTS = [
     sqlTemplate: `
       SELECT
         COALESCE(ASSET_TYPE, 'Unknown') AS asset_type,
-        COALESCE(CERTIFICATESTATUS, 'None') AS certification_status,
+        COALESCE(CERTIFICATE_STATUS, 'None') AS certification_status,
         COUNT(*) AS asset_count,
         ROUND(COUNT_IF(DESCRIPTION IS NOT NULL AND DESCRIPTION <> '') * 100.0 / NULLIF(COUNT(*), 0), 1) AS description_coverage,
-        ROUND(COUNT_IF(ARRAY_SIZE(TERMGUIDS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS term_coverage,
-        ROUND(COUNT_IF(ARRAY_SIZE(CLASSIFICATIONNAMES) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS tag_coverage
+        ROUND(COUNT_IF(ARRAY_SIZE(TERM_GUIDS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS term_coverage,
+        ROUND(COUNT_IF(ARRAY_SIZE(TAGS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS tag_coverage
       FROM {{TABLE}}
       WHERE STATUS = 'ACTIVE'
       GROUP BY 1, 2
@@ -693,16 +699,16 @@ export const PREBUILT_PIVOTS = [
     sqlTemplate: `
       SELECT
         CASE 
-          WHEN POPULARITYSCORE >= 0.8 THEN 'Hot'
-          WHEN POPULARITYSCORE >= 0.5 THEN 'Warm'
-          WHEN POPULARITYSCORE > 0 THEN 'Normal'
+          WHEN POPULARITY_SCORE >= 0.8 THEN 'Hot'
+          WHEN POPULARITY_SCORE >= 0.5 THEN 'Warm'
+          WHEN POPULARITY_SCORE > 0 THEN 'Normal'
           ELSE 'No Data'
         END AS popularity_bucket,
         COALESCE(ASSET_TYPE, 'Unknown') AS asset_type,
         COUNT(*) AS asset_count,
         ROUND(COUNT_IF(DESCRIPTION IS NOT NULL AND DESCRIPTION <> '') * 100.0 / NULLIF(COUNT(*), 0), 1) AS description_coverage,
-        ROUND(COUNT_IF(ARRAY_SIZE(OWNERUSERS) > 0 OR ARRAY_SIZE(OWNERGROUPS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS owner_coverage,
-        ROUND(COUNT_IF(CERTIFICATESTATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1) AS certification_coverage
+        ROUND(COUNT_IF(ARRAY_SIZE(OWNER_USERS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS owner_coverage,
+        ROUND(COUNT_IF(CERTIFICATE_STATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1) AS certification_coverage
       FROM {{TABLE}}
       WHERE STATUS = 'ACTIVE'
       GROUP BY 1, 2
@@ -737,10 +743,10 @@ export const PREBUILT_PIVOTS = [
           WHEN DATEDIFF(DAY, TO_TIMESTAMP(UPDATED_AT / 1000), CURRENT_TIMESTAMP()) <= 180 THEN '91-180d'
           ELSE '180d+'
         END AS update_age_bucket,
-        COALESCE(CONNECTORNAME, 'Unknown') AS connection,
+        COALESCE(CONNECTOR_NAME, 'Unknown') AS connection,
         COUNT(*) AS asset_count,
-        ROUND(COUNT_IF(ARRAY_SIZE(OWNERUSERS) > 0 OR ARRAY_SIZE(OWNERGROUPS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS owner_coverage,
-        ROUND(COUNT_IF(CERTIFICATESTATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1) AS certification_coverage
+        ROUND(COUNT_IF(ARRAY_SIZE(OWNER_USERS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS owner_coverage,
+        ROUND(COUNT_IF(CERTIFICATE_STATUS = 'VERIFIED') * 100.0 / NULLIF(COUNT(*), 0), 1) AS certification_coverage
       FROM {{TABLE}}
       WHERE STATUS = 'ACTIVE'
       GROUP BY 1, 2
@@ -769,10 +775,10 @@ export const PREBUILT_PIVOTS = [
     
     sqlTemplate: `
       SELECT
-        COALESCE(CONNECTORNAME, 'Unknown') AS connection,
+        COALESCE(CONNECTOR_NAME, 'Unknown') AS connection,
         COALESCE(ASSET_TYPE, 'Unknown') AS asset_type,
         COUNT(*) AS asset_count,
-        ROUND(COUNT_IF(ARRAY_SIZE(CLASSIFICATIONNAMES) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS tag_coverage
+        ROUND(COUNT_IF(ARRAY_SIZE(TAGS) > 0) * 100.0 / NULLIF(COUNT(*), 0), 1) AS tag_coverage
       FROM {{TABLE}}
       WHERE STATUS = 'ACTIVE'
       GROUP BY 1, 2
@@ -810,7 +816,13 @@ export function getPivotCategories() {
 /**
  * Generate SQL for a pivot with a specific table FQN
  */
-function resolveTableRef(tableFqn, context = {}) {
+function resolveTableRef(tableFqn, context = {}, capabilities = null) {
+  if (!tableFqn && capabilities) {
+    const preferred = resolveTableFqn(capabilities, context, 'ASSETS');
+    if (preferred) {
+      return preferred;
+    }
+  }
   let resolved = tableFqn || '{{DATABASE}}.{{SCHEMA}}.ASSETS';
   if (context.database) {
     resolved = resolved.replace(/\{\{DATABASE\}\}/g, context.database);
@@ -827,11 +839,16 @@ export function generatePivotSQL(pivotId, tableFqn, context = {}, options = {}) 
     return { sql: null, missingColumns: ['pivot_not_found'], alternates: [] };
   }
 
-  const tableRef = resolveTableRef(tableFqn, context);
+  const tableRef = resolveTableRef(tableFqn, context, options.capabilities);
   const rawSql = pivot.sqlTemplate.replace(/\{\{TABLE\}\}/g, tableRef);
+  const availableColumns = resolveAvailableColumns(
+    options.capabilities,
+    tableRef,
+    options.availableColumns || []
+  );
   const { sql, missingColumns, alternates } = resolveSqlTemplate(
     rawSql,
-    options.availableColumns || []
+    availableColumns
   );
   return { sql, missingColumns, alternates };
 }
@@ -866,13 +883,18 @@ export function buildCustomPivotSQL(
   const missingColumns = [];
   const alternates = [];
   const aliasMap = mergeColumnAliases();
+  const availableColumns = resolveAvailableColumns(
+    options.capabilities,
+    tableFqn,
+    options.availableColumns || []
+  );
   
   // Add dimension columns
   rowDimensions.forEach((dimId, idx) => {
     const dim = PIVOT_DIMENSIONS[dimId];
     if (dim) {
       const baseExpr = dim.extractFn || `COALESCE(${dim.mdlhColumn}, 'Unknown')`;
-      const resolvedExpr = resolveSqlTemplate(baseExpr, options.availableColumns || [], aliasMap);
+      const resolvedExpr = resolveSqlTemplate(baseExpr, availableColumns, aliasMap);
       missingColumns.push(...resolvedExpr.missingColumns);
       alternates.push(...resolvedExpr.alternates);
       selectParts.push(`${resolvedExpr.sql} AS ${dim.id}`);
@@ -884,7 +906,7 @@ export function buildCustomPivotSQL(
   measures.forEach(measureId => {
     const measure = PIVOT_MEASURES[measureId];
     if (measure) {
-      const resolvedMeasure = resolveSqlTemplate(measure.sql, options.availableColumns || [], aliasMap);
+      const resolvedMeasure = resolveSqlTemplate(measure.sql, availableColumns, aliasMap);
       missingColumns.push(...resolvedMeasure.missingColumns);
       alternates.push(...resolvedMeasure.alternates);
       selectParts.push(`${resolvedMeasure.sql} AS ${measure.id}`);

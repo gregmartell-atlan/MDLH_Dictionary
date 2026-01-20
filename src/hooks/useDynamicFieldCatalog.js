@@ -16,7 +16,10 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useQuery } from './useSnowflake';
 import { UNIFIED_FIELD_CATALOG, getFieldById, getFieldsByCategory } from '../evaluation/catalog/unifiedFields';
 import { escapeIdentifier, escapeStringValue, buildSafeFQN } from '../utils/queryHelpers';
+import { normalizeQueryRows } from '../utils/queryResults';
 import { createLogger } from '../utils/logger';
+import { useMdlhContext } from '../context/MdlhContext';
+import { getCapabilitiesTableColumns } from '../utils/capabilityHelpers';
 
 const log = createLogger('useDynamicFieldCatalog');
 
@@ -49,6 +52,9 @@ function getColumnVariations(fieldId, mdlhColumn, sourceAttributes) {
   // Add source attribute variations
   if (sourceAttributes) {
     for (const attr of sourceAttributes) {
+      if (!attr) {
+        continue;
+      }
       variations.add(attr.toUpperCase());
       variations.add(attr.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase());
     }
@@ -73,7 +79,7 @@ const TIMESTAMP_COLUMN_PATTERNS = [
 ];
 
 function detectColumnType(columnName, dataType) {
-  const upper = columnName.toUpperCase();
+  const upper = (columnName || '').toUpperCase();
   
   if (ARRAY_COLUMN_PATTERNS.some(p => upper.includes(p))) {
     return 'array';
@@ -112,6 +118,7 @@ function detectColumnType(columnName, dataType) {
  */
 export function useDynamicFieldCatalog(database, schema, table = 'ASSETS') {
   const { executeQuery, loading: queryLoading } = useQuery();
+  const { capabilities } = useMdlhContext();
   
   const [discoveredColumns, setDiscoveredColumns] = useState([]);
   const [columnSet, setColumnSet] = useState(new Set());
@@ -151,23 +158,11 @@ export function useDynamicFieldCatalog(database, schema, table = 'ASSETS') {
       
       const result = await executeQuery(query, { database, schema });
       
-      // Normalize rows
-      const normalizeRows = (rawResult) => {
-        const columns = rawResult?.columns || [];
-        const rows = rawResult?.rows || [];
-        if (!Array.isArray(rows)) return [];
-        return rows.map((row) => {
-          if (Array.isArray(row)) {
-            return columns.reduce((acc, col, idx) => {
-              acc[col] = row[idx];
-              return acc;
-            }, {});
-          }
-          return row || {};
-        });
-      };
-      
-      const normalizedRows = normalizeRows(result);
+      const normalizedRows = normalizeQueryRows(result, {
+        fallbackByLength: {
+          4: ['COLUMN_NAME', 'DATA_TYPE', 'IS_NULLABLE', 'ORDINAL_POSITION'],
+        },
+      });
       
       const columns = normalizedRows.map(row => ({
         name: row.COLUMN_NAME ?? row.column_name,
@@ -175,7 +170,7 @@ export function useDynamicFieldCatalog(database, schema, table = 'ASSETS') {
         isNullable: (row.IS_NULLABLE ?? row.is_nullable) === 'YES',
         position: row.ORDINAL_POSITION ?? row.ordinal_position ?? 0,
         columnType: detectColumnType(row.COLUMN_NAME ?? row.column_name, row.DATA_TYPE ?? row.data_type),
-      })).filter(c => c.name);
+      })).filter(c => typeof c.name === 'string' && c.name.trim().length > 0);
       
       setDiscoveredColumns(columns);
       setColumnSet(new Set(columns.map(c => c.name.toUpperCase())));
@@ -191,6 +186,24 @@ export function useDynamicFieldCatalog(database, schema, table = 'ASSETS') {
       setLoading(false);
     }
   }, [database, schema, table, executeQuery]);
+
+  useEffect(() => {
+    if (!capabilities?.columns || !database || !schema || !table) return;
+    if (capabilities.database && capabilities.database !== database) return;
+    if (capabilities.schema && capabilities.schema !== schema) return;
+    const capColumns = getCapabilitiesTableColumns(capabilities, table);
+    if (!capColumns.length) return;
+    const columns = capColumns.map((name, idx) => ({
+      name,
+      dataType: null,
+      isNullable: true,
+      position: idx + 1,
+      columnType: detectColumnType(name, null),
+    }));
+    setDiscoveredColumns(columns);
+    setColumnSet(new Set(columns.map((c) => c.name.toUpperCase())));
+    setLastDiscovered(new Date());
+  }, [capabilities, database, schema, table]);
   
   // Auto-discover on mount/change
   useEffect(() => {
@@ -322,9 +335,10 @@ export function useDynamicFieldCatalog(database, schema, table = 'ASSETS') {
       `;
       
       const result = await executeQuery(query, { database, schema });
+      const normalizedRows = normalizeQueryRows(result);
       
-      if (result?.rows?.[0]) {
-        const row = result.rows[0];
+      if (normalizedRows[0]) {
+        const row = normalizedRows[0];
         const total = row.TOTAL_COUNT ?? row.total_count ?? 0;
         
         const coverage = {};

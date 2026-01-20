@@ -8,6 +8,7 @@
  */
 
 import { buildSafeFQN } from './queryHelpers';
+import { mapSqlForCapabilities } from './contextSqlMapper.js';
 
 // =============================================================================
 // TABLE NAME MAPPINGS
@@ -371,13 +372,23 @@ export function getSuggestedAlternatives(missingTable, discoveredTables) {
  * @param {Set<string>|string[]} discoveredTables - Tables from schema scan
  * @returns {{ sql: string, valid: boolean, missingTables: string[] }}
  */
-export function transformQueryToDiscoveredTables(sql, database, schema, discoveredTables) {
+export function transformQueryToDiscoveredTables(sql, database, schema, discoveredTables, capabilities = null) {
   if (!sql) return { sql: '', valid: false, missingTables: [] };
   
   const mapping = buildTableMapping(discoveredTables);
-  const missingTables = [];
+  const missingTables = new Set();
   let transformed = sql;
   let valid = true;
+
+  if (capabilities) {
+    transformed = mapSqlForCapabilities(transformed, capabilities);
+  }
+
+  const { valid: initialValid, missingTables: initialMissing } = validateQueryTables(transformed, discoveredTables);
+  if (!initialValid) {
+    initialMissing.forEach((table) => missingTables.add(table));
+    valid = false;
+  }
   
   // Find all table references in the SQL
   // Match patterns like: FROM TABLE_ENTITY, JOIN PROCESS_ENTITY, etc.
@@ -390,7 +401,7 @@ export function transformQueryToDiscoveredTables(sql, database, schema, discover
   const tableRefs = new Set();
   let match;
   
-  while ((match = tableRefPattern.exec(sql)) !== null) {
+  while ((match = tableRefPattern.exec(transformed)) !== null) {
     tableRefs.add(match[2].toUpperCase());
   }
   
@@ -413,7 +424,7 @@ export function transformQueryToDiscoveredTables(sql, database, schema, discover
       );
       transformed = transformed.replace(replacePattern, `$1 ${fqn}`);
     } else {
-      missingTables.push(tableRef);
+      missingTables.add(tableRef);
       valid = false;
     }
   }
@@ -432,18 +443,19 @@ export function transformQueryToDiscoveredTables(sql, database, schema, discover
     }
   );
   
-  return { sql: transformed, valid, missingTables };
+  return { sql: transformed, valid, missingTables: [...missingTables] };
 }
 
 /**
  * Transform an entire query object (with title, description, query)
  */
-export function transformQueryObject(queryObj, database, schema, discoveredTables) {
+export function transformQueryObject(queryObj, database, schema, discoveredTables, capabilities = null) {
   const { sql, valid, missingTables } = transformQueryToDiscoveredTables(
     queryObj.query,
     database,
     schema,
-    discoveredTables
+    discoveredTables,
+    capabilities
   );
   
   return {
@@ -463,7 +475,7 @@ export function transformQueryObject(queryObj, database, schema, discoveredTable
  * @param {Set<string>|string[]} discoveredTables - Tables from schema scan
  * @returns {Object} Transformed queries with actual table names and FQNs
  */
-export function transformExampleQueries(exampleQueries, database, schema, discoveredTables) {
+export function transformExampleQueries(exampleQueries, database, schema, discoveredTables, capabilities = null) {
   if (!exampleQueries) return {};
   
   const transformed = {};
@@ -471,9 +483,9 @@ export function transformExampleQueries(exampleQueries, database, schema, discov
   for (const [category, queries] of Object.entries(exampleQueries)) {
     if (!Array.isArray(queries)) continue;
     
-    transformed[category] = queries.map(q => 
-      transformQueryObject(q, database, schema, discoveredTables)
-    ).filter(q => q._valid); // Only include valid queries
+    transformed[category] = queries
+      .map((q) => transformQueryObject(q, database, schema, discoveredTables, capabilities))
+      .filter((q) => q._valid); // Only include valid queries
   }
   
   return transformed;
@@ -482,7 +494,7 @@ export function transformExampleQueries(exampleQueries, database, schema, discov
 /**
  * Get statistics about which queries are valid for the discovered schema
  */
-export function getQueryValidityStats(exampleQueries, database, schema, discoveredTables) {
+export function getQueryValidityStats(exampleQueries, database, schema, discoveredTables, capabilities = null) {
   const stats = {
     total: 0,
     valid: 0,
@@ -497,7 +509,7 @@ export function getQueryValidityStats(exampleQueries, database, schema, discover
     
     for (const q of queries) {
       stats.total++;
-      const { valid } = transformQueryToDiscoveredTables(q.query, database, schema, discoveredTables);
+      const { valid } = transformQueryToDiscoveredTables(q.query, database, schema, discoveredTables, capabilities);
       
       if (valid) {
         stats.valid++;
@@ -524,4 +536,3 @@ export default {
   transformExampleQueries,
   getQueryValidityStats
 };
-

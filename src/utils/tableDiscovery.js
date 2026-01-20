@@ -5,13 +5,14 @@
  * finding alternative table names, and fixing queries to use available tables.
  */
 
-import { LRUCache } from './LRUCache';
-import { createLogger } from './logger';
+import { LRUCache } from './LRUCache.js';
+import { createLogger } from './logger.js';
 
 const log = createLogger('tableDiscovery');
 
 // API base URL for fetching metadata
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const metaEnv = typeof import.meta !== 'undefined' ? import.meta.env : undefined;
+const API_BASE_URL = metaEnv?.VITE_API_URL || process.env.VITE_API_URL || 'http://localhost:8000';
 
 // Cache for discovered tables (LRU with 5-minute TTL)
 const tableCache = new LRUCache(10, 5 * 60 * 1000);
@@ -237,6 +238,10 @@ export async function validateQuery(sql, database, schema) {
     const sessionId = getSessionId();
     
     if (!sessionId) return { valid: false, error: 'Not connected' };
+
+    if (/(\{\{[^}]+\}\}|<DATABASE>|<SCHEMA>|<TABLE>|<COLUMN>|<GUID>)/i.test(sql)) {
+      return { valid: false, error: 'Query contains unresolved placeholders.' };
+    }
     
     // Modify query to add LIMIT 0 for fast validation (no data transfer)
     let testSql = sql.trim();
@@ -258,13 +263,24 @@ export async function validateQuery(sql, database, schema) {
       }),
     });
     
-    const result = await response.json();
+    const submitData = await response.json();
     
-    if (result.status === 'COMPLETED' || result.status === 'completed') {
-      return { valid: true, columns: result.columns };
-    } else {
-      return { valid: false, error: result.error_message || result.error || 'Query failed' };
+    if (!response.ok || submitData.status !== 'SUCCESS') {
+      return { valid: false, error: submitData.message || submitData.detail || 'Query failed' };
     }
+
+    const resultsRes = await fetch(
+      `${API_BASE_URL}/api/query/${submitData.query_id}/results`,
+      { headers: { 'X-Session-ID': sessionId } }
+    );
+
+    if (!resultsRes.ok) {
+      const errorText = await resultsRes.text().catch(() => '');
+      return { valid: false, error: errorText || `Results fetch failed (${resultsRes.status})` };
+    }
+
+    const resultsData = await resultsRes.json();
+    return { valid: true, columns: resultsData.columns || [] };
   } catch (err) {
     return { valid: false, error: err.message };
   }
@@ -330,4 +346,3 @@ export default {
   fetchTableColumns,
   clearDiscoveryCache,
 };
-

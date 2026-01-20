@@ -115,6 +115,7 @@ class MetadataCache:
         self._schemas = TTLCache(maxsize=1000, ttl=settings.cache_ttl_schemas)
         self._tables = TTLCache(maxsize=5000, ttl=settings.cache_ttl_tables)
         self._columns = TTLCache(maxsize=10000, ttl=settings.cache_ttl_columns)
+        self._capabilities = TTLCache(maxsize=1000, ttl=settings.cache_ttl_tables)
     
     def _make_key(self, *args) -> str:
         """Create a cache key from arguments."""
@@ -204,6 +205,26 @@ class MetadataCache:
             self._schemas.clear()
             self._tables.clear()
             self._columns.clear()
+            self._capabilities.clear()
+
+    # Capabilities cache
+    def get_capabilities(self, database: str, schema: str, scope: Optional[str] = None) -> Optional[Any]:
+        key = self._scoped_key(scope, database, schema)
+        with self._lock:
+            return self._capabilities.get(key)
+
+    def set_capabilities(self, database: str, schema: str, data: Any, scope: Optional[str] = None):
+        key = self._scoped_key(scope, database, schema)
+        with self._lock:
+            self._capabilities[key] = data
+
+    def clear_capabilities(self, database: Optional[str] = None, schema: Optional[str] = None, scope: Optional[str] = None):
+        with self._lock:
+            if database and schema:
+                key = self._scoped_key(scope, database, schema)
+                self._capabilities.pop(key, None)
+            else:
+                self._capabilities.clear()
 
 
 # Global cache instance

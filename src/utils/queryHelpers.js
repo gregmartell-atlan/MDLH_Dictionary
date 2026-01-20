@@ -5,7 +5,7 @@
  * and SQL injection protection.
  */
 
-import { extractTableFromQuery, fixQueryForAvailableTables } from './tableDiscovery';
+import { extractTableFromQuery, fixQueryForAvailableTables } from './tableDiscovery.js';
 
 // =============================================================================
 // SQL Injection Protection
@@ -392,4 +392,3 @@ export default {
   sanitizeIdentifier,
   validateEntityIdentifiers,
 };
-

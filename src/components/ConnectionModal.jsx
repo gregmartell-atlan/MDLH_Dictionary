@@ -11,6 +11,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Database, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Info, Key } from 'lucide-react';
 import { createLogger } from '../utils/logger';
 import { getPythonApiUrl } from '../config/api';
+import { DEFAULT_DATABASE, DEFAULT_SCHEMA } from '../data/constants';
 
 const log = createLogger('ConnectionModal');
 
@@ -24,8 +25,8 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
     user: '',
     token: '',
     warehouse: 'COMPUTE_WH',
-    database: 'ATLAN_MDLH',
-    schema: 'PUBLIC',
+    database: DEFAULT_DATABASE,
+    schema: DEFAULT_SCHEMA,
     role: ''
   });
   const [showSecret, setShowSecret] = useState(false);
@@ -405,7 +406,7 @@ export default function ConnectionModal({ isOpen, onClose, onConnect, currentSes
                 type="text"
                 value={formData.database}
                 onChange={(e) => handleChange('database', e.target.value)}
-                placeholder="ATLAN_MDLH"
+                placeholder={DEFAULT_DATABASE}
                 data-testid="connection-database"
                 className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#3366FF] focus:border-transparent outline-none"
               />

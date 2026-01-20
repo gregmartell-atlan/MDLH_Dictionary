@@ -13,9 +13,12 @@
  *   2025-12-05T18:30:00.123Z [MDLH][useConnection] testConnection() called { sessionId: '...' }
  */
 
+const metaEnv = typeof import.meta !== 'undefined' ? import.meta.env : undefined;
 const DEBUG_ENABLED =
-  import.meta.env.MODE === 'development' ||
-  import.meta.env.VITE_DEBUG_LOGS === 'true';
+  metaEnv?.MODE === 'development' ||
+  metaEnv?.VITE_DEBUG_LOGS === 'true' ||
+  process.env.VITE_DEBUG_LOGS === 'true' ||
+  process.env.DEBUG_LOGS === 'true';
 
 /**
  * Create a scoped logger instance
@@ -111,4 +114,3 @@ export function isDebugEnabled() {
 }
 
 export default createLogger;
-

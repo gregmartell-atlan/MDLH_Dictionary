@@ -14,9 +14,12 @@ import {
   WORKSTREAM_DEFINITIONS,
 } from '../../../evaluation';
 import { useConnection, useQuery } from '../../../hooks/useSnowflake';
+import { useMdlhContext } from '../../../context/MdlhContext';
+import { DEFAULT_DATABASE, DEFAULT_SCHEMA } from '../../../data/constants';
 import { MetadataAssistantWizard } from '../assistant/MetadataAssistantWizard';
 import { ModelBuilder } from '../modelBuilder/ModelBuilder';
 import { Sparkles, X, LayoutGrid, Target } from 'lucide-react';
+import { createLogger } from '../../../utils/logger';
 
 // =============================================================================
 // QUADRANT COLORS
@@ -172,15 +175,17 @@ function GapList({ gaps, onGapClick }) {
 // =============================================================================
 
 export function EvaluationDashboard({ database, schema, discoveredTables = [] }) {
+  const log = createLogger('EvaluationDashboard');
   // Use the MDLH Explorer's existing connection hooks
   const { status: connectionStatus, loading: connectionLoading } = useConnection();
+  const { context: mdlhContext, capabilities } = useMdlhContext();
   const { executeQuery: rawExecuteQuery } = useQuery(connectionStatus);
   
   // Derive connection state from status
   const isConnected = connectionStatus?.connected === true;
   const connection = {
-    database: connectionStatus?.database || 'FIELD_METADATA',
-    schema: connectionStatus?.schema || 'PUBLIC',
+    database: mdlhContext?.database || connectionStatus?.database || DEFAULT_DATABASE,
+    schema: mdlhContext?.schema || connectionStatus?.schema || DEFAULT_SCHEMA,
   };
   
   // Wrapper to match expected interface
@@ -218,9 +223,15 @@ export function EvaluationDashboard({ database, schema, discoveredTables = [] })
     setError(null);
     
     try {
+      log.info('Assessment run started', {
+        database: connection.database,
+        schema: connection.schema,
+        scope,
+        profile: capabilities?.profile,
+      });
       // Create fetcher and engines
       const fetcher = createMDLHAssetFetcher(
-        { database: connection.database, schema: 'PUBLIC' },
+        { database: connection.database, schema: 'PUBLIC', capabilities },
         executeQuery
       );
       const scoreEngine = createScoreEngine();
@@ -228,6 +239,7 @@ export function EvaluationDashboard({ database, schema, discoveredTables = [] })
       
       // Fetch assets
       const assets = await fetcher.fetchAssets(scope);
+      log.info('Assessment assets fetched', { count: assets.length });
       
       if (assets.length === 0) {
         setError('No assets found matching the scope. Check your connection and try again.');
@@ -239,9 +251,19 @@ export function EvaluationDashboard({ database, schema, discoveredTables = [] })
       const scores = scoreEngine.computeScores(assets);
       const quadrantDistribution = scoreEngine.getQuadrantDistribution(scores);
       const highPriorityAssets = scoreEngine.getHighPriorityAssets(scores);
+      log.info('Assessment scoring complete', {
+        scoreCount: scores.length,
+        quadrantDistribution,
+        highPriorityCount: highPriorityAssets.length,
+      });
       
       // Analyze gaps
       const { assetGaps, aggregatedGaps, summary } = gapEngine.analyzeGaps(assets);
+      log.info('Assessment gaps computed', {
+        gapCount: aggregatedGaps.length,
+        affectedAssets: assetGaps.length,
+        summary,
+      });
       
       // Compute signal coverage
       const signalCoverage = {};
@@ -271,7 +293,7 @@ export function EvaluationDashboard({ database, schema, discoveredTables = [] })
         timestamp: new Date(),
       });
     } catch (err) {
-      console.error('Assessment failed:', err);
+      log.error('Assessment failed', { error: err.message });
       setError(err.message || 'Assessment failed');
     } finally {
       setLoading(false);
