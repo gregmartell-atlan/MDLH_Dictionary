@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command, Terminal, Play } from 'lucide-react';
-import QueryEditor from './components/QueryEditor';
+import { Download, Table, Database, BookOpen, Boxes, FolderTree, BarChart3, GitBranch, Cloud, Workflow, Shield, Bot, Copy, Check, Code2, X, Search, Command, Play, Layers } from 'lucide-react';
 
 const tabs = [
+  { id: 'gold', label: 'Gold Layer', icon: Layers },
   { id: 'core', label: 'Core', icon: Table },
   { id: 'glossary', label: 'Glossary', icon: BookOpen },
   { id: 'datamesh', label: 'Data Mesh', icon: Boxes },
@@ -14,10 +14,21 @@ const tabs = [
   { id: 'orchestration', label: 'Orchestration', icon: Workflow },
   { id: 'governance', label: 'Governance', icon: Shield },
   { id: 'ai', label: 'AI/ML', icon: Bot },
-  { id: 'editor', label: 'Query Editor', icon: Terminal, isEditor: true },
 ];
 
 const data = {
+  gold: [
+    { entity: 'ASSETS', view: 'ASSETS', description: 'Core lookup table for all assets - the central hub of the Gold Layer. Start all queries here.', joinKey: 'GUID (primary)', cardinality: 'Hub', keyColumns: 'GUID, ASSET_TYPE, ASSET_NAME, STATUS, CONNECTOR_NAME, POPULARITY_SCORE, HAS_LINEAGE', notes: '25 columns', exampleQuery: "SELECT GUID, ASSET_NAME, ASSET_TYPE, CONNECTOR_NAME FROM ASSETS WHERE STATUS = 'ACTIVE'" },
+    { entity: 'RELATIONAL_ASSET_DETAILS', view: 'RELATIONAL_ASSET_DETAILS', description: 'Extended attributes for SQL assets (databases, schemas, tables, views, columns)', joinKey: 'GUID', cardinality: '1:1', keyColumns: 'GUID, TABLE_ROW_COUNT, TABLE_SIZE_BYTES, COLUMN_DATATYPE, VIEW_DEFINITION', notes: '18 columns', exampleQuery: "SELECT a.ASSET_NAME, r.TABLE_ROW_COUNT, r.TABLE_SIZE_BYTES FROM ASSETS a JOIN RELATIONAL_ASSET_DETAILS r ON a.GUID = r.GUID" },
+    { entity: 'GLOSSARY_DETAILS', view: 'GLOSSARY_DETAILS', description: 'Business glossary terms, categories, and their assignments to assets', joinKey: 'GUID, TERM_GUIDS', cardinality: '1:M', keyColumns: 'GUID, ASSET_NAME, TERMS, CATEGORIES, ASSIGNED_ASSETS', notes: '8 columns', exampleQuery: "SELECT ASSET_NAME, TERMS, ASSIGNED_ASSETS FROM GLOSSARY_DETAILS WHERE ASSET_TYPE = 'AtlasGlossaryTerm'" },
+    { entity: 'DATA_QUALITY_DETAILS', view: 'DATA_QUALITY_DETAILS', description: 'Data quality checks and scores from Anomalo, Soda, Monte Carlo, and Atlan-native', joinKey: 'GUID', cardinality: '1:1', keyColumns: 'GUID, ANOMALO_CHECK_STATUS, SODA_CHECK_EVALUATION_STATUS, MC_MONITOR_STATUS', notes: '26 columns', exampleQuery: "SELECT a.ASSET_NAME, dq.ANOMALO_CHECK_STATUS, dq.SODA_CHECK_EVALUATION_STATUS FROM ASSETS a JOIN DATA_QUALITY_DETAILS dq ON a.GUID = dq.GUID" },
+    { entity: 'PIPELINE_DETAILS', view: 'PIPELINE_DETAILS', description: 'Data pipeline and orchestration asset details (Airflow, dbt, Matillion)', joinKey: 'GUID', cardinality: '1:1', keyColumns: 'GUID, INPUT_GUIDS_TO_PROCESSES, OUTPUT_GUIDS_TO_PROCESSES', notes: '3 columns', exampleQuery: "SELECT a.ASSET_NAME, p.INPUT_GUIDS_TO_PROCESSES, p.OUTPUT_GUIDS_TO_PROCESSES FROM ASSETS a JOIN PIPELINE_DETAILS p ON a.GUID = p.GUID" },
+    { entity: 'DATA_MESH_DETAILS', view: 'DATA_MESH_DETAILS', description: 'Data domain and data product associations with hierarchy support', joinKey: 'GUID', cardinality: '1:1', keyColumns: 'GUID, DATA_DOMAIN, DATA_PRODUCTS, DATA_PRODUCT_STATUS, CRITICALITY', notes: '14 columns', exampleQuery: "SELECT a.ASSET_NAME, dm.DATA_DOMAIN, dm.DATA_PRODUCT_STATUS FROM ASSETS a JOIN DATA_MESH_DETAILS dm ON a.GUID = dm.GUID" },
+    { entity: 'LINEAGE', view: 'LINEAGE', description: 'Pre-computed upstream and downstream lineage paths - no recursive CTEs needed', joinKey: 'START_GUID, RELATED_GUID', cardinality: '1:M', keyColumns: 'DIRECTION, START_GUID, START_NAME, RELATED_GUID, RELATED_NAME, LEVEL', notes: '9 columns', exampleQuery: "SELECT START_NAME, RELATED_NAME, DIRECTION, LEVEL FROM LINEAGE WHERE DIRECTION = 'DOWNSTREAM' ORDER BY LEVEL" },
+    { entity: 'TAGS', view: 'TAGS', description: 'Classification tags assigned to assets with propagation settings', joinKey: 'ASSET_GUID', cardinality: '1:M', keyColumns: 'ASSET_GUID, ASSET_NAME, TAG_NAME, TAG_VALUE, PROPAGATES', notes: '8 columns', exampleQuery: "SELECT ASSET_NAME, TAG_NAME, TAG_VALUE, PROPAGATES FROM TAGS ORDER BY TAG_NAME" },
+    { entity: 'CUSTOM_METADATA', view: 'CUSTOM_METADATA', description: 'Custom metadata attribute-value pairs at row-level granularity', joinKey: 'ASSET_GUID', cardinality: '1:M', keyColumns: 'ASSET_GUID, CUSTOM_METADATA_NAME, ATTRIBUTE_NAME, ATTRIBUTE_VALUE', notes: '7 columns', exampleQuery: "SELECT ASSET_NAME, CUSTOM_METADATA_NAME, ATTRIBUTE_NAME, ATTRIBUTE_VALUE FROM CUSTOM_METADATA" },
+    { entity: 'README', view: 'README', description: 'README documentation content attached to assets', joinKey: 'GUID (README_GUID)', cardinality: '1:1', keyColumns: 'ASSET_GUID, ASSET_NAME, DESCRIPTION, UPDATED_AT', notes: '8 columns', exampleQuery: "SELECT a.ASSET_NAME, r.DESCRIPTION FROM ASSETS a JOIN README r ON a.README_GUID = r.ASSET_GUID" },
+  ],
   core: [
     { entity: 'Referenceable', table: '(abstract)', description: 'Root of all entity types', keyAttributes: 'guid, qualifiedName', relationships: 'Base for all', notes: 'Not directly queryable' },
     { entity: 'Asset', table: '(abstract)', description: 'Base class for all assets', keyAttributes: 'name, description, ownerUsers, ownerGroups, certificateStatus, announcementType, createTime, updateTime, createdBy, updatedBy', relationships: 'Extends Referenceable', notes: 'Not directly queryable' },
@@ -129,6 +140,678 @@ const data = {
 
 // Example queries organized by category
 const exampleQueries = {
+  gold: [
+    // === Asset Inventory & Discovery ===
+    {
+      title: 'Gold Layer Overview',
+      description: 'Count of assets by type across the Gold Layer',
+      query: `SELECT
+  ASSET_TYPE,
+  COUNT(*) as asset_count,
+  COUNT(DISTINCT CONNECTOR_NAME) as connectors
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+GROUP BY ASSET_TYPE
+ORDER BY asset_count DESC;`
+    },
+    {
+      title: 'Find Assets by Connector',
+      description: 'Query assets filtered by connector type',
+      query: `SELECT
+  ASSET_NAME,
+  ASSET_TYPE,
+  CONNECTOR_NAME,
+  POPULARITY_SCORE
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+  AND CONNECTOR_NAME = 'snowflake'
+ORDER BY POPULARITY_SCORE DESC
+LIMIT 100;`
+    },
+    {
+      title: 'Certified Assets with Owners',
+      description: 'Find verified assets that have assigned owners',
+      query: `SELECT
+  ASSET_NAME,
+  ASSET_TYPE,
+  CONNECTOR_NAME,
+  CERTIFICATE_STATUS,
+  OWNER_USERS
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+  AND CERTIFICATE_STATUS = 'VERIFIED'
+  AND OWNER_USERS IS NOT NULL
+ORDER BY ASSET_NAME;`
+    },
+    {
+      title: 'Table Details with Usage Stats',
+      description: 'Tables with row counts, size, and query activity',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.CONNECTOR_NAME,
+  r.TABLE_ROW_COUNT,
+  r.TABLE_SIZE_BYTES,
+  r.TABLE_TOTAL_READ_COUNT,
+  a.POPULARITY_SCORE
+FROM ASSETS a
+JOIN RELATIONAL_ASSET_DETAILS r ON a.GUID = r.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND a.ASSET_TYPE = 'Table'
+ORDER BY r.TABLE_TOTAL_READ_COUNT DESC NULLS LAST
+LIMIT 50;`
+    },
+    {
+      title: 'Glossary Terms with Assignments',
+      description: 'Business terms and the assets they are assigned to',
+      query: `SELECT
+  g.ASSET_NAME as term_name,
+  g.CATEGORIES,
+  g.ASSIGNED_ASSETS,
+  g.ANCHOR as glossary
+FROM GLOSSARY_DETAILS g
+WHERE g.ASSET_TYPE = 'AtlasGlossaryTerm'
+ORDER BY g.ASSET_NAME;`
+    },
+    {
+      title: 'Lineage Traversal (Simplified)',
+      description: 'Find upstream and downstream assets using pre-computed lineage',
+      query: `-- Downstream from a specific asset
+SELECT
+  START_NAME as source_asset,
+  RELATED_NAME as downstream_asset,
+  RELATED_TYPE,
+  LEVEL as hops
+FROM LINEAGE
+WHERE DIRECTION = 'DOWNSTREAM'
+  AND START_NAME = 'your_table_name'
+ORDER BY LEVEL;
+
+-- Upstream to find data sources
+SELECT
+  START_NAME as target_asset,
+  RELATED_NAME as upstream_asset,
+  RELATED_TYPE,
+  LEVEL as hops
+FROM LINEAGE
+WHERE DIRECTION = 'UPSTREAM'
+  AND START_NAME = 'your_table_name'
+ORDER BY LEVEL;`
+    },
+    {
+      title: 'Tag Coverage Analysis',
+      description: 'Analyze which assets have classification tags',
+      query: `SELECT
+  a.ASSET_TYPE,
+  a.CONNECTOR_NAME,
+  COUNT(*) as total_assets,
+  COUNT(t.TAG_NAME) as tagged_assets,
+  ROUND(100.0 * COUNT(t.TAG_NAME) / COUNT(*), 2) as pct_tagged
+FROM ASSETS a
+LEFT JOIN TAGS t ON a.GUID = t.ASSET_GUID
+WHERE a.STATUS = 'ACTIVE'
+GROUP BY a.ASSET_TYPE, a.CONNECTOR_NAME
+ORDER BY total_assets DESC;`
+    },
+    {
+      title: 'Custom Metadata Query',
+      description: 'Find assets with specific custom metadata values',
+      query: `SELECT
+  cm.ASSET_NAME,
+  cm.ASSET_TYPE,
+  cm.CUSTOM_METADATA_NAME,
+  cm.ATTRIBUTE_NAME,
+  cm.ATTRIBUTE_VALUE
+FROM CUSTOM_METADATA cm
+WHERE cm.CUSTOM_METADATA_NAME = 'Your CM Set Name'
+ORDER BY cm.ASSET_NAME;`
+    },
+    {
+      title: 'Data Quality Status',
+      description: 'Assets with DQ check results from various tools',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  dq.ANOMALO_CHECK_STATUS,
+  dq.SODA_CHECK_EVALUATION_STATUS,
+  dq.MC_MONITOR_STATUS
+FROM ASSETS a
+JOIN DATA_QUALITY_DETAILS dq ON a.GUID = dq.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND (dq.ANOMALO_CHECK_STATUS IS NOT NULL
+       OR dq.SODA_CHECK_EVALUATION_STATUS IS NOT NULL
+       OR dq.MC_MONITOR_STATUS IS NOT NULL)
+ORDER BY a.ASSET_NAME;`
+    },
+    {
+      title: 'Data Mesh Inventory',
+      description: 'Assets by data domain and product',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  dm.DATA_DOMAIN,
+  dm.DATA_PRODUCTS,
+  dm.DATA_PRODUCT_STATUS,
+  dm.CRITICALITY
+FROM ASSETS a
+JOIN DATA_MESH_DETAILS dm ON a.GUID = dm.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND dm.DATA_DOMAIN IS NOT NULL
+ORDER BY dm.DATA_DOMAIN, a.ASSET_NAME;`
+    },
+    {
+      title: 'Pipeline Assets',
+      description: 'Orchestration assets with their input/output relationships',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  a.CONNECTOR_NAME,
+  p.INPUT_GUIDS_TO_PROCESSES,
+  p.OUTPUT_GUIDS_TO_PROCESSES
+FROM ASSETS a
+JOIN PIPELINE_DETAILS p ON a.GUID = p.GUID
+WHERE a.STATUS = 'ACTIVE'
+ORDER BY a.CONNECTOR_NAME, a.ASSET_NAME;`
+    },
+    {
+      title: 'Documentation Coverage',
+      description: 'Assets with README documentation',
+      query: `SELECT
+  a.ASSET_TYPE,
+  a.CONNECTOR_NAME,
+  COUNT(*) as total_assets,
+  SUM(CASE WHEN a.README_GUID IS NOT NULL THEN 1 ELSE 0 END) as with_readme,
+  ROUND(100.0 * SUM(CASE WHEN a.README_GUID IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 2) as pct_documented
+FROM ASSETS a
+WHERE a.STATUS = 'ACTIVE'
+GROUP BY a.ASSET_TYPE, a.CONNECTOR_NAME
+ORDER BY total_assets DESC;`
+    },
+    // === Asset Governance & Adoption ===
+    {
+      title: 'Active Assets by Type and Connector',
+      description: 'Inventory of active assets grouped by type',
+      query: `SELECT
+  CONNECTOR_NAME,
+  ASSET_TYPE,
+  COUNT(*) as asset_count
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+GROUP BY CONNECTOR_NAME, ASSET_TYPE
+ORDER BY asset_count DESC;`
+    },
+    {
+      title: 'Top Popular Tables by Connector',
+      description: 'Most accessed tables ranked by popularity',
+      query: `SELECT
+  ASSET_NAME,
+  CONNECTOR_NAME,
+  POPULARITY_SCORE,
+  HAS_LINEAGE
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+  AND ASSET_TYPE = 'Table'
+  AND POPULARITY_SCORE > 0
+ORDER BY POPULARITY_SCORE DESC
+LIMIT 50;`
+    },
+    {
+      title: 'Owner Coverage by Asset Type',
+      description: 'Percentage of assets with assigned owners',
+      query: `SELECT
+  ASSET_TYPE,
+  COUNT(*) as total,
+  SUM(CASE WHEN OWNER_USERS IS NOT NULL AND ARRAY_SIZE(OWNER_USERS) > 0 THEN 1 ELSE 0 END) as with_owners,
+  ROUND(100.0 * SUM(CASE WHEN OWNER_USERS IS NOT NULL AND ARRAY_SIZE(OWNER_USERS) > 0 THEN 1 ELSE 0 END) / COUNT(*), 2) as pct_owned
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+GROUP BY ASSET_TYPE
+ORDER BY total DESC;`
+    },
+    {
+      title: 'Assets Missing Owners or Tags',
+      description: 'Find ungoverned assets needing attention',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  a.CONNECTOR_NAME,
+  CASE WHEN a.OWNER_USERS IS NULL OR ARRAY_SIZE(a.OWNER_USERS) = 0 THEN 'Missing' ELSE 'Has Owner' END as owner_status,
+  CASE WHEN t.TAG_NAME IS NULL THEN 'Missing' ELSE 'Has Tags' END as tag_status
+FROM ASSETS a
+LEFT JOIN TAGS t ON a.GUID = t.ASSET_GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND (a.OWNER_USERS IS NULL OR ARRAY_SIZE(a.OWNER_USERS) = 0 OR t.TAG_NAME IS NULL)
+ORDER BY a.ASSET_TYPE, a.ASSET_NAME;`
+    },
+    {
+      title: 'Asset Metadata Completeness Summary',
+      description: 'Score assets by governance metadata coverage',
+      query: `SELECT
+  ASSET_TYPE,
+  COUNT(*) as total,
+  SUM(CASE WHEN OWNER_USERS IS NOT NULL AND ARRAY_SIZE(OWNER_USERS) > 0 THEN 1 ELSE 0 END) as has_owner,
+  SUM(CASE WHEN README_GUID IS NOT NULL THEN 1 ELSE 0 END) as has_readme,
+  SUM(CASE WHEN TERM_GUIDS IS NOT NULL AND ARRAY_SIZE(TERM_GUIDS) > 0 THEN 1 ELSE 0 END) as has_terms,
+  SUM(CASE WHEN CERTIFICATE_STATUS IS NOT NULL THEN 1 ELSE 0 END) as is_certified
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+GROUP BY ASSET_TYPE
+ORDER BY total DESC;`
+    },
+    {
+      title: 'Metadata Completeness by Domain',
+      description: 'Governance coverage within each data domain',
+      query: `SELECT
+  dm.DATA_DOMAIN,
+  COUNT(*) as total_assets,
+  SUM(CASE WHEN a.OWNER_USERS IS NOT NULL THEN 1 ELSE 0 END) as with_owners,
+  SUM(CASE WHEN a.README_GUID IS NOT NULL THEN 1 ELSE 0 END) as with_readme,
+  ROUND(100.0 * SUM(CASE WHEN a.CERTIFICATE_STATUS = 'VERIFIED' THEN 1 ELSE 0 END) / COUNT(*), 2) as pct_certified
+FROM ASSETS a
+JOIN DATA_MESH_DETAILS dm ON a.GUID = dm.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND dm.DATA_DOMAIN IS NOT NULL
+GROUP BY dm.DATA_DOMAIN
+ORDER BY total_assets DESC;`
+    },
+    {
+      title: 'Glossary Metadata Completeness',
+      description: 'Terms with descriptions and assigned assets',
+      query: `SELECT
+  g.ASSET_NAME as term_name,
+  CASE WHEN g.ASSIGNED_ASSETS IS NOT NULL THEN 'Yes' ELSE 'No' END as has_assignments,
+  g.ANCHOR as glossary
+FROM GLOSSARY_DETAILS g
+WHERE g.ASSET_TYPE = 'AtlasGlossaryTerm'
+ORDER BY g.ASSET_NAME;`
+    },
+    {
+      title: 'Terms Without Assigned Assets',
+      description: 'Find unused glossary terms',
+      query: `SELECT
+  g.ASSET_NAME as term_name,
+  g.ANCHOR as glossary,
+  g.CATEGORIES
+FROM GLOSSARY_DETAILS g
+WHERE g.ASSET_TYPE = 'AtlasGlossaryTerm'
+  AND (g.ASSIGNED_ASSETS IS NULL OR g.ASSIGNED_ASSETS = '[]')
+ORDER BY g.ASSET_NAME;`
+    },
+    // === Glossary & Documentation ===
+    {
+      title: 'Term Adoption Summary',
+      description: 'Most commonly used business terms',
+      query: `SELECT
+  g.ASSET_NAME as term_name,
+  g.ANCHOR as glossary,
+  ARRAY_SIZE(PARSE_JSON(g.ASSIGNED_ASSETS)) as assignment_count
+FROM GLOSSARY_DETAILS g
+WHERE g.ASSET_TYPE = 'AtlasGlossaryTerm'
+  AND g.ASSIGNED_ASSETS IS NOT NULL
+ORDER BY assignment_count DESC
+LIMIT 50;`
+    },
+    {
+      title: 'Glossary Terms by Glossary',
+      description: 'Count terms in each glossary',
+      query: `SELECT
+  g.ANCHOR as glossary,
+  COUNT(*) as term_count
+FROM GLOSSARY_DETAILS g
+WHERE g.ASSET_TYPE = 'AtlasGlossaryTerm'
+GROUP BY g.ANCHOR
+ORDER BY term_count DESC;`
+    },
+    {
+      title: 'Assets Without READMEs',
+      description: 'Important assets lacking documentation',
+      query: `SELECT
+  ASSET_NAME,
+  ASSET_TYPE,
+  CONNECTOR_NAME,
+  POPULARITY_SCORE
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+  AND README_GUID IS NULL
+  AND POPULARITY_SCORE > 0.5
+ORDER BY POPULARITY_SCORE DESC
+LIMIT 100;`
+    },
+    {
+      title: 'Assets with README Text',
+      description: 'View README content for documented assets',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  r.DESCRIPTION as readme_content,
+  r.UPDATED_AT
+FROM ASSETS a
+JOIN README r ON a.README_GUID = r.ASSET_GUID
+WHERE a.STATUS = 'ACTIVE'
+ORDER BY r.UPDATED_AT DESC
+LIMIT 50;`
+    },
+    // === Metadata & Export ===
+    {
+      title: 'Export Assets with Tags and Custom Metadata',
+      description: 'Full export for governance reporting',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  a.CONNECTOR_NAME,
+  a.OWNER_USERS,
+  a.CERTIFICATE_STATUS,
+  t.TAG_NAME,
+  cm.CUSTOM_METADATA_NAME,
+  cm.ATTRIBUTE_NAME,
+  cm.ATTRIBUTE_VALUE
+FROM ASSETS a
+LEFT JOIN TAGS t ON a.GUID = t.ASSET_GUID
+LEFT JOIN CUSTOM_METADATA cm ON a.GUID = cm.ASSET_GUID
+WHERE a.STATUS = 'ACTIVE'
+ORDER BY a.ASSET_NAME, t.TAG_NAME, cm.ATTRIBUTE_NAME;`
+    },
+    // === Data Mesh & Products ===
+    {
+      title: 'Active Data Products by Status',
+      description: 'Data products with their status and criticality',
+      query: `SELECT
+  a.ASSET_NAME,
+  dm.DATA_DOMAIN,
+  dm.DATA_PRODUCT_STATUS,
+  dm.CRITICALITY,
+  dm.STAKEHOLDERS
+FROM ASSETS a
+JOIN DATA_MESH_DETAILS dm ON a.GUID = dm.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND a.ASSET_TYPE = 'DataProduct'
+ORDER BY dm.CRITICALITY DESC NULLS LAST, a.ASSET_NAME;`
+    },
+    {
+      title: 'Data Domains Without Stakeholders',
+      description: 'Domains that need ownership assignment',
+      query: `SELECT
+  a.ASSET_NAME as domain_name,
+  dm.PARENT_DOMAIN,
+  dm.SUBDOMAINS
+FROM ASSETS a
+JOIN DATA_MESH_DETAILS dm ON a.GUID = dm.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND a.ASSET_TYPE = 'DataDomain'
+  AND (dm.STAKEHOLDERS IS NULL OR dm.STAKEHOLDERS = '[]')
+ORDER BY a.ASSET_NAME;`
+    },
+    // === Lineage & Impact Analysis ===
+    {
+      title: 'Lineage Coverage by Connector',
+      description: 'Which connectors have lineage enabled',
+      query: `SELECT
+  CONNECTOR_NAME,
+  COUNT(*) as total_assets,
+  SUM(CASE WHEN HAS_LINEAGE = TRUE THEN 1 ELSE 0 END) as with_lineage,
+  ROUND(100.0 * SUM(CASE WHEN HAS_LINEAGE = TRUE THEN 1 ELSE 0 END) / COUNT(*), 2) as pct_lineage
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+GROUP BY CONNECTOR_NAME
+ORDER BY total_assets DESC;`
+    },
+    {
+      title: 'Assets Without Lineage',
+      description: 'Tables and views missing lineage information',
+      query: `SELECT
+  ASSET_NAME,
+  ASSET_TYPE,
+  CONNECTOR_NAME,
+  CREATED_AT
+FROM ASSETS
+WHERE STATUS = 'ACTIVE'
+  AND ASSET_TYPE IN ('Table', 'View')
+  AND HAS_LINEAGE = FALSE
+ORDER BY ASSET_NAME
+LIMIT 200;`
+    },
+    {
+      title: 'Downstream Impact Analysis',
+      description: 'Find all assets impacted by a source change',
+      query: `SELECT
+  RELATED_NAME as impacted_asset,
+  RELATED_TYPE as asset_type,
+  LEVEL as hops_away,
+  CONNECTING_GUID as via_process
+FROM LINEAGE
+WHERE DIRECTION = 'DOWNSTREAM'
+  AND START_NAME = 'your_source_table'
+ORDER BY LEVEL, RELATED_NAME;`
+    },
+    {
+      title: 'Upstream Root-Cause Analysis',
+      description: 'Trace data sources for an asset',
+      query: `SELECT
+  RELATED_NAME as source_asset,
+  RELATED_TYPE as asset_type,
+  LEVEL as hops_back,
+  CONNECTING_GUID as via_process
+FROM LINEAGE
+WHERE DIRECTION = 'UPSTREAM'
+  AND START_NAME = 'your_target_table'
+ORDER BY LEVEL, RELATED_NAME;`
+    },
+    {
+      title: 'Full Lineage Export',
+      description: 'Export complete lineage graph',
+      query: `SELECT
+  DIRECTION,
+  START_GUID,
+  START_NAME,
+  START_TYPE,
+  RELATED_GUID,
+  RELATED_NAME,
+  RELATED_TYPE,
+  LEVEL
+FROM LINEAGE
+ORDER BY START_NAME, DIRECTION, LEVEL;`
+    },
+    {
+      title: 'Downstream Impacted BI Dashboards',
+      description: 'Find BI assets affected by table changes',
+      query: `SELECT
+  l.START_NAME as source_table,
+  l.RELATED_NAME as bi_asset,
+  l.RELATED_TYPE,
+  l.LEVEL as hops
+FROM LINEAGE l
+WHERE l.DIRECTION = 'DOWNSTREAM'
+  AND l.RELATED_TYPE IN ('TableauDashboard', 'PowerBIReport', 'LookerDashboard')
+ORDER BY l.START_NAME, l.LEVEL;`
+    },
+    // === Quality & Performance ===
+    {
+      title: 'Tag Coverage by Connector',
+      description: 'Classification tag usage across connectors',
+      query: `SELECT
+  a.CONNECTOR_NAME,
+  t.TAG_NAME,
+  COUNT(*) as tagged_assets
+FROM ASSETS a
+JOIN TAGS t ON a.GUID = t.ASSET_GUID
+WHERE a.STATUS = 'ACTIVE'
+GROUP BY a.CONNECTOR_NAME, t.TAG_NAME
+ORDER BY tagged_assets DESC;`
+    },
+    {
+      title: 'DQ Checks by Status and Tool',
+      description: 'Data quality check results by platform',
+      query: `SELECT
+  'Anomalo' as tool,
+  dq.ANOMALO_CHECK_STATUS as status,
+  COUNT(*) as check_count
+FROM DATA_QUALITY_DETAILS dq
+WHERE dq.ANOMALO_CHECK_STATUS IS NOT NULL
+GROUP BY dq.ANOMALO_CHECK_STATUS
+
+UNION ALL
+
+SELECT
+  'Soda' as tool,
+  dq.SODA_CHECK_EVALUATION_STATUS as status,
+  COUNT(*) as check_count
+FROM DATA_QUALITY_DETAILS dq
+WHERE dq.SODA_CHECK_EVALUATION_STATUS IS NOT NULL
+GROUP BY dq.SODA_CHECK_EVALUATION_STATUS
+
+UNION ALL
+
+SELECT
+  'Monte Carlo' as tool,
+  dq.MC_MONITOR_STATUS as status,
+  COUNT(*) as check_count
+FROM DATA_QUALITY_DETAILS dq
+WHERE dq.MC_MONITOR_STATUS IS NOT NULL
+GROUP BY dq.MC_MONITOR_STATUS;`
+    },
+    {
+      title: 'Stale DQ Checks by Last Run',
+      description: 'Find DQ checks that have not run recently',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  dq.ANOMALO_CHECK_LAST_RUN_COMPLETED_AT,
+  dq.SODA_CHECK_LAST_SCAN_AT,
+  dq.MC_MONITOR_RULE_LAST_EXECUTION_TIME
+FROM ASSETS a
+JOIN DATA_QUALITY_DETAILS dq ON a.GUID = dq.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND (dq.ANOMALO_CHECK_LAST_RUN_COMPLETED_AT < DATEADD(day, -7, CURRENT_TIMESTAMP())
+       OR dq.SODA_CHECK_LAST_SCAN_AT < DATEADD(day, -7, CURRENT_TIMESTAMP())
+       OR dq.MC_MONITOR_RULE_LAST_EXECUTION_TIME < DATEADD(day, -7, CURRENT_TIMESTAMP()))
+ORDER BY a.ASSET_NAME;`
+    },
+    {
+      title: 'Top Tables by Read Count',
+      description: 'Most queried tables by usage',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.CONNECTOR_NAME,
+  r.TABLE_TOTAL_READ_COUNT,
+  r.TABLE_RECENT_USERS,
+  a.POPULARITY_SCORE
+FROM ASSETS a
+JOIN RELATIONAL_ASSET_DETAILS r ON a.GUID = r.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND a.ASSET_TYPE = 'Table'
+  AND r.TABLE_TOTAL_READ_COUNT > 0
+ORDER BY r.TABLE_TOTAL_READ_COUNT DESC
+LIMIT 50;`
+    },
+    // === Usage & Optimization ===
+    {
+      title: 'Unused Tables (Cleanup Candidates)',
+      description: 'Large tables with no recent query activity',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.CONNECTOR_NAME,
+  r.TABLE_SIZE_BYTES,
+  r.TABLE_ROW_COUNT,
+  r.TABLE_TOTAL_READ_COUNT,
+  a.UPDATED_AT
+FROM ASSETS a
+JOIN RELATIONAL_ASSET_DETAILS r ON a.GUID = r.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND a.ASSET_TYPE = 'Table'
+  AND (r.TABLE_TOTAL_READ_COUNT IS NULL OR r.TABLE_TOTAL_READ_COUNT = 0)
+  AND r.TABLE_SIZE_BYTES > 1000000000
+ORDER BY r.TABLE_SIZE_BYTES DESC;`
+    },
+    {
+      title: 'Recent Users by Table',
+      description: 'Who has queried each table',
+      query: `SELECT
+  a.ASSET_NAME,
+  r.TABLE_RECENT_USERS,
+  r.TABLE_TOTAL_READ_COUNT
+FROM ASSETS a
+JOIN RELATIONAL_ASSET_DETAILS r ON a.GUID = r.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND r.TABLE_RECENT_USERS IS NOT NULL
+ORDER BY r.TABLE_TOTAL_READ_COUNT DESC
+LIMIT 100;`
+    },
+    {
+      title: 'Pipeline Inputs and Outputs',
+      description: 'Data flow through orchestration assets',
+      query: `SELECT
+  a.ASSET_NAME as pipeline_asset,
+  a.ASSET_TYPE,
+  a.CONNECTOR_NAME,
+  p.INPUT_GUIDS_TO_PROCESSES,
+  p.OUTPUT_GUIDS_TO_PROCESSES
+FROM ASSETS a
+JOIN PIPELINE_DETAILS p ON a.GUID = p.GUID
+WHERE a.STATUS = 'ACTIVE'
+ORDER BY a.CONNECTOR_NAME, a.ASSET_NAME;`
+    },
+    // === Advanced Analysis ===
+    {
+      title: 'Pipelines Producing a Given Asset',
+      description: 'Find which pipelines create a specific output',
+      query: `SELECT
+  a.ASSET_NAME as pipeline_name,
+  a.CONNECTOR_NAME,
+  p.INPUT_GUIDS_TO_PROCESSES as inputs
+FROM ASSETS a
+JOIN PIPELINE_DETAILS p ON a.GUID = p.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND ARRAY_CONTAINS('your-output-asset-guid'::VARIANT, p.OUTPUT_GUIDS_TO_PROCESSES)
+ORDER BY a.ASSET_NAME;`
+    },
+    {
+      title: 'Domain-wise Asset Inventory',
+      description: 'Complete inventory by data domain',
+      query: `SELECT
+  dm.DATA_DOMAIN,
+  a.ASSET_TYPE,
+  COUNT(*) as asset_count,
+  SUM(CASE WHEN a.CERTIFICATE_STATUS = 'VERIFIED' THEN 1 ELSE 0 END) as certified,
+  SUM(CASE WHEN a.HAS_LINEAGE = TRUE THEN 1 ELSE 0 END) as with_lineage
+FROM ASSETS a
+JOIN DATA_MESH_DETAILS dm ON a.GUID = dm.GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND dm.DATA_DOMAIN IS NOT NULL
+GROUP BY dm.DATA_DOMAIN, a.ASSET_TYPE
+ORDER BY dm.DATA_DOMAIN, asset_count DESC;`
+    },
+    {
+      title: 'Search Assets with README and Tags',
+      description: 'Find well-governed assets by name pattern',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  a.CONNECTOR_NAME,
+  t.TAG_NAME,
+  r.DESCRIPTION as readme_preview
+FROM ASSETS a
+LEFT JOIN TAGS t ON a.GUID = t.ASSET_GUID
+LEFT JOIN README r ON a.README_GUID = r.ASSET_GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND a.ASSET_NAME ILIKE '%customer%'
+ORDER BY a.ASSET_NAME;`
+    },
+    {
+      title: 'Assets with a Specific Tag',
+      description: 'Find all assets classified with a particular tag',
+      query: `SELECT
+  a.ASSET_NAME,
+  a.ASSET_TYPE,
+  a.CONNECTOR_NAME,
+  t.TAG_NAME,
+  t.TAG_VALUE,
+  t.PROPAGATES
+FROM ASSETS a
+JOIN TAGS t ON a.GUID = t.ASSET_GUID
+WHERE a.STATUS = 'ACTIVE'
+  AND t.TAG_NAME ILIKE '%PII%'
+ORDER BY a.ASSET_NAME;`
+    },
+  ],
   core: [
     {
       title: 'List All MDLH Tables',
@@ -860,6 +1543,7 @@ ORDER BY AIMODELVERSION DESC;`
 };
 
 const columns = {
+  gold: ['entity', 'view', 'description', 'joinKey', 'cardinality', 'keyColumns', 'exampleQuery'],
   core: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'notes'],
   glossary: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'qualifiedNamePattern', 'exampleQuery'],
   datamesh: ['entity', 'table', 'description', 'keyAttributes', 'relationships', 'qualifiedNamePattern', 'exampleQuery'],
@@ -876,6 +1560,10 @@ const columns = {
 const colHeaders = {
   entity: 'Entity Type',
   table: 'MDLH Table',
+  view: 'Gold View',
+  joinKey: 'Join Key',
+  cardinality: 'Cardinality',
+  keyColumns: 'Key Columns',
   description: 'Description',
   keyAttributes: 'Key Attributes',
   relationships: 'Relationships',
@@ -948,7 +1636,7 @@ function CellCopyButton({ text }) {
 }
 
 // Slide-out Query Panel
-function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery, onRunInEditor }) {
+function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery }) {
   const panelRef = useRef(null);
   const highlightedRef = useRef(null);
 
@@ -1026,12 +1714,11 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
             <div ref={highlightedRef}>
               <div className="mb-4 pb-4 border-b border-gray-200">
                 <p className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">Entity Example Query</p>
-                <QueryCard 
-                  title="Entity Query" 
-                  description="Example query for this entity type" 
-                  query={highlightedQuery} 
+                <QueryCard
+                  title="Entity Query"
+                  description="Example query for this entity type"
+                  query={highlightedQuery}
                   defaultExpanded={true}
-                  onRunInEditor={onRunInEditor}
                 />
               </div>
             </div>
@@ -1046,12 +1733,11 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
                 const isHighlighted = highlightedQuery && q.query === highlightedQuery;
                 return (
                   <div key={i} ref={isHighlighted ? highlightedRef : null}>
-                    <QueryCard 
-                      title={q.title} 
-                      description={q.description} 
-                      query={q.query} 
+                    <QueryCard
+                      title={q.title}
+                      description={q.description}
+                      query={q.query}
                       defaultExpanded={isHighlighted}
-                      onRunInEditor={onRunInEditor}
                     />
                   </div>
                 );
@@ -1070,14 +1756,14 @@ function QueryPanel({ isOpen, onClose, queries, categoryLabel, highlightedQuery,
   );
 }
 
-function QueryCard({ title, description, query, defaultExpanded = false, onRunInEditor }) {
+function QueryCard({ title, description, query, defaultExpanded = false }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  
+
   return (
     <div className={`bg-white rounded-xl border overflow-hidden transition-all duration-200 ${
       expanded ? 'border-[#3366FF] shadow-lg' : 'border-gray-200 shadow-sm hover:shadow-md hover:border-gray-300'
     }`}>
-      <div 
+      <div
         className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
@@ -1092,19 +1778,6 @@ function QueryCard({ title, description, query, defaultExpanded = false, onRunIn
         </div>
         <div className="flex items-center gap-3">
           <CopyButton text={query} />
-          {onRunInEditor && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onRunInEditor(query);
-              }}
-              className="flex items-center gap-1 px-2 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded text-xs font-medium"
-              title="Open in Query Editor"
-            >
-              <Play size={10} />
-              Run
-            </button>
-          )}
           <div className={`w-6 h-6 flex items-center justify-center rounded-full bg-gray-100 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}>
             <span className="text-gray-500 text-xs">▶</span>
           </div>
@@ -1138,11 +1811,10 @@ function PlayQueryButton({ onClick, hasQuery }) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('core');
+  const [activeTab, setActiveTab] = useState('gold');
   const [search, setSearch] = useState('');
   const [showQueries, setShowQueries] = useState(false);
   const [highlightedQuery, setHighlightedQuery] = useState(null);
-  const [editorQuery, setEditorQuery] = useState('');
   const searchRef = useRef(null);
 
   // Keyboard shortcut: Cmd/Ctrl + K to focus search
@@ -1157,15 +1829,12 @@ export default function App() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Function to open Query Editor with a specific query
-  const openInEditor = (query) => {
-    setEditorQuery(query);
-    setActiveTab('editor');
-    setShowQueries(false);
+  // Copy query to clipboard
+  const copyToClipboard = (query) => {
+    navigator.clipboard.writeText(query);
   };
 
-  // Skip filtering for editor tab
-  const filteredData = activeTab === 'editor' ? [] : (data[activeTab] || []).filter(row =>
+  const filteredData = (data[activeTab] || []).filter(row =>
     Object.values(row).some(val => 
       val?.toString().toLowerCase().includes(search.toLowerCase())
     )
@@ -1358,12 +2027,8 @@ export default function App() {
           })}
         </div>
 
-        {/* Conditional Content: Query Editor or Data Table */}
-        {activeTab === 'editor' ? (
-          <QueryEditor initialQuery={editorQuery} />
-        ) : (
-          <>
-            <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
+        {/* Data Table */}
+        <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50">
@@ -1432,21 +2097,18 @@ export default function App() {
                 Press <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600 font-mono text-xs">⌘K</kbd> to search • Click <span className="text-[#3366FF]">Query</span> buttons for SQL examples
               </p>
             </div>
-          </>
-        )}
       </div>
 
       {/* Query Side Panel */}
-      <QueryPanel 
-        isOpen={showQueries} 
+      <QueryPanel
+        isOpen={showQueries}
         onClose={() => {
           setShowQueries(false);
           setHighlightedQuery(null);
-        }} 
+        }}
         queries={filteredQueries}
         categoryLabel={tabs.find(t => t.id === activeTab)?.label}
         highlightedQuery={highlightedQuery}
-        onRunInEditor={openInEditor}
       />
     </div>
   );
