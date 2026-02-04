@@ -15,99 +15,157 @@ def generate_gold_layer_erd():
     """Generate Gold Layer ERD using Graphviz DOT notation."""
     return """
     digraph GoldLayerERD {
-        rankdir=TB;
+        rankdir=LR;
         splines=ortho;
-        nodesep=0.6;
-        ranksep=1.0;
+        nodesep=0.4;
+        ranksep=1.5;
         bgcolor="transparent";
-        node [shape=none, fontname="Helvetica", fontsize=9];
-        edge [fontname="Helvetica", fontsize=8, color="#666666"];
+        node [shape=none, fontname="Helvetica", fontsize=8];
+        edge [fontname="Helvetica", fontsize=7, color="#666666"];
 
         ASSETS [label=<
-            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" BGCOLOR="#3366ff">
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#3366ff">
                 <TR><TD COLSPAN="2" BGCOLOR="#3366ff"><FONT COLOR="white"><B>ASSETS</B></FONT></TD></TR>
                 <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">PK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">Type</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_NAME</TD><TD BGCOLOR="white">Name</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">STATUS</TD><TD BGCOLOR="white">ACTIVE</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">CONNECTOR_NAME</TD><TD BGCOLOR="white">Source</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">README_GUID</TD><TD BGCOLOR="white">FK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">TERM_GUIDS</TD><TD BGCOLOR="white">FK[]</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">Table, Column, Dashboard</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_NAME</TD><TD BGCOLOR="white">Display name</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">QUALIFIED_NAME</TD><TD BGCOLOR="white">Unique path</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">DESCRIPTION</TD><TD BGCOLOR="white">Description</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">STATUS</TD><TD BGCOLOR="white">active/archived</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">CONNECTOR_NAME</TD><TD BGCOLOR="white">Snowflake, etc.</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">README_GUID</TD><TD BGCOLOR="white">FK → README</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">TERM_GUIDS</TD><TD BGCOLOR="white">FK[] → GLOSSARY</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">POPULARITY_SCORE</TD><TD BGCOLOR="white">Usage score</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">HAS_LINEAGE</TD><TD BGCOLOR="white">Boolean</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">CERTIFICATE_STATUS</TD><TD BGCOLOR="white">Verified</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">CREATED_AT/BY</TD><TD BGCOLOR="white">Audit</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">UPDATED_AT/BY</TD><TD BGCOLOR="white">Audit</TD></TR>
             </TABLE>
         >];
 
         RELATIONAL [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#4CAF50">
-                <TR><TD BGCOLOR="#4CAF50"><FONT COLOR="white"><B>RELATIONAL_ASSET_DETAILS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), TABLE_ROW_COUNT, COLUMN_DATATYPE</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#4CAF50"><FONT COLOR="white"><B>RELATIONAL_ASSET_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">DB/Table/Column</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">DATABASE_SCHEMAS</TD><TD BGCOLOR="white">Schema GUIDs</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">SCHEMA_TABLES</TD><TD BGCOLOR="white">Table GUIDs</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">TABLE_COLUMN_COUNT</TD><TD BGCOLOR="white"># columns</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">TABLE_SIZE_BYTES</TD><TD BGCOLOR="white">Size</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">TABLE_ROW_COUNT</TD><TD BGCOLOR="white">Rows</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">COLUMN_DATATYPE</TD><TD BGCOLOR="white">Data type</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">VIEW_DEFINITION</TD><TD BGCOLOR="white">DDL</TD></TR>
             </TABLE>
         >];
 
         GLOSSARY [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#9C27B0">
-                <TR><TD BGCOLOR="#9C27B0"><FONT COLOR="white"><B>GLOSSARY_DETAILS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), ANCHOR_GUID, ASSIGNED_ENTITIES</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#9C27B0"><FONT COLOR="white"><B>GLOSSARY_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">Glossary/Term/Cat</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ANCHOR_GUID</TD><TD BGCOLOR="white">Parent glossary</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">PARENT_GUID</TD><TD BGCOLOR="white">Parent category</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSIGNED_ENTITIES</TD><TD BGCOLOR="white">Linked assets</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">POPULARITY_SCORE</TD><TD BGCOLOR="white">Score</TD></TR>
             </TABLE>
         >];
 
         LINEAGE [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#FF9800">
-                <TR><TD BGCOLOR="#FF9800"><FONT COLOR="white"><B>LINEAGE</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">START_GUID, RELATED_GUID, DIRECTION, LEVEL</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#FF9800"><FONT COLOR="white"><B>LINEAGE</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID</TD><TD BGCOLOR="white">Process PK</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>START_GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>END_GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">RELATED_GUID</TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">DIRECTION</TD><TD BGCOLOR="white">UP/DOWNSTREAM</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">LEVEL</TD><TD BGCOLOR="white">Hops</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">SQL_CODE</TD><TD BGCOLOR="white">SQL</TD></TR>
             </TABLE>
         >];
 
         TAGS [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#F44336">
-                <TR><TD BGCOLOR="#F44336"><FONT COLOR="white"><B>TAGS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_GUID (FK), TAG_NAME, TAG_VALUE</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#F44336"><FONT COLOR="white"><B>TAGS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>ASSET_GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">Asset type</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">TAG_GUID</TD><TD BGCOLOR="white">Tag GUID</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">TAG_NAME</TD><TD BGCOLOR="white">PII, etc.</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">TAG_VALUE</TD><TD BGCOLOR="white">Enum value</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">PROPAGATE</TD><TD BGCOLOR="white">Boolean</TD></TR>
             </TABLE>
         >];
 
         CUSTOM_METADATA [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#E91E63">
-                <TR><TD BGCOLOR="#E91E63"><FONT COLOR="white"><B>CUSTOM_METADATA</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_GUID (FK), ATTRIBUTE_NAME, ATTRIBUTE_VALUE</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#E91E63"><FONT COLOR="white"><B>CUSTOM_METADATA</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>ASSET_GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">Asset type</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">CM_SET_NAME</TD><TD BGCOLOR="white">Set name</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ATTRIBUTE_NAME</TD><TD BGCOLOR="white">Key</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ATTRIBUTE_VALUE</TD><TD BGCOLOR="white">Value</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">STATUS</TD><TD BGCOLOR="white">active</TD></TR>
             </TABLE>
         >];
 
         README [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#607D8B">
-                <TR><TD BGCOLOR="#607D8B"><FONT COLOR="white"><B>README</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (PK), ASSET_GUID, DESCRIPTION</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#607D8B"><FONT COLOR="white"><B>README</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">PK</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">Readme</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_NAME</TD><TD BGCOLOR="white">Name</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">DESCRIPTION</TD><TD BGCOLOR="white">Content</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">STATUS</TD><TD BGCOLOR="white">Status</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">CREATED_AT/BY</TD><TD BGCOLOR="white">Audit</TD></TR>
             </TABLE>
         >];
 
         PIPELINE [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#00BCD4">
-                <TR><TD BGCOLOR="#00BCD4"><FONT COLOR="white"><B>PIPELINE_DETAILS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), INPUT_GUIDS, OUTPUT_GUIDS</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#00BCD4"><FONT COLOR="white"><B>PIPELINE_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">sql/fivetran</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ORCHESTRATION_TOOL</TD><TD BGCOLOR="white">Airflow</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">OUTPUT_FROM_PROCESS</TD><TD BGCOLOR="white">Outputs</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">VIEW_DEFINITION</TD><TD BGCOLOR="white">DDL</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">FUNCTION_LANGUAGE</TD><TD BGCOLOR="white">Language</TD></TR>
             </TABLE>
         >];
 
         DATA_QUALITY [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#795548">
-                <TR><TD BGCOLOR="#795548"><FONT COLOR="white"><B>DATA_QUALITY_DETAILS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), ANOMALO_STATUS, SODA_STATUS, MC_STATUS</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#795548"><FONT COLOR="white"><B>DATA_QUALITY_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">SOURCE_URL</TD><TD BGCOLOR="white">DQ tool URL</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ANOMALO_CHECK_*</TD><TD BGCOLOR="white">Anomalo</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">SODA_CHECK_*</TD><TD BGCOLOR="white">Soda</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">MC_MONITOR_*</TD><TD BGCOLOR="white">Monte Carlo</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">DATA_PRODUCTS</TD><TD BGCOLOR="white">Products</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">STAKEHOLDERS</TD><TD BGCOLOR="white">Owners</TD></TR>
             </TABLE>
         >];
 
         DATA_MESH [label=<
             <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#FFC107">
-                <TR><TD BGCOLOR="#FFC107"><FONT COLOR="black"><B>DATA_MESH_DETAILS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), DATA_DOMAIN, DATA_PRODUCTS, STAKEHOLDERS</TD></TR>
+                <TR><TD COLSPAN="2" BGCOLOR="#FFC107"><FONT COLOR="black"><B>DATA_MESH_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">FK → ASSETS</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">DATA_DOMAIN</TD><TD BGCOLOR="white">Domain GUID</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">DATA_PRODUCTS</TD><TD BGCOLOR="white">Products</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">VISIBILITY</TD><TD BGCOLOR="white">Visibility</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">CRITICALITY</TD><TD BGCOLOR="white">Priority</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">OUTPUT_PORT_GUIDS</TD><TD BGCOLOR="white">Ports</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">POLICIES</TD><TD BGCOLOR="white">Policies</TD></TR>
             </TABLE>
         >];
 
-        ASSETS -> RELATIONAL [label="1:1"];
-        ASSETS -> PIPELINE [label="1:1"];
-        ASSETS -> DATA_QUALITY [label="1:1"];
-        ASSETS -> DATA_MESH [label="1:1"];
-        ASSETS -> README [label="1:1"];
-        ASSETS -> GLOSSARY [label="1:M"];
-        ASSETS -> LINEAGE [label="1:M"];
-        ASSETS -> TAGS [label="1:M"];
-        ASSETS -> CUSTOM_METADATA [label="1:M"];
+        ASSETS -> RELATIONAL [label="1:1\\nGUID=GUID"];
+        ASSETS -> PIPELINE [label="1:1\\nGUID=GUID"];
+        ASSETS -> DATA_QUALITY [label="1:1\\nGUID=GUID"];
+        ASSETS -> DATA_MESH [label="1:1\\nGUID=GUID"];
+        ASSETS -> README [label="1:1\\nREADME_GUID=GUID"];
+        ASSETS -> GLOSSARY [label="1:M\\nTERM_GUIDS"];
+        ASSETS -> LINEAGE [label="1:M\\nSTART/END_GUID"];
+        ASSETS -> TAGS [label="1:M\\nGUID=ASSET_GUID"];
+        ASSETS -> CUSTOM_METADATA [label="1:M\\nGUID=ASSET_GUID"];
     }
     """
 
@@ -121,13 +179,28 @@ def get_erd_schema_details():
             "join_key": "GUID (Primary Key)",
             "cardinality": "Central hub",
             "columns": [
-                ("GUID", "VARCHAR", "Primary key - globally unique identifier"),
-                ("ASSET_TYPE", "VARCHAR", "Type: Table, Column, Dashboard, etc."),
-                ("ASSET_NAME", "VARCHAR", "Human-readable asset name"),
-                ("STATUS", "VARCHAR", "ACTIVE, archived, deleted"),
-                ("CONNECTOR_NAME", "VARCHAR", "Snowflake, Redshift, Tableau, etc."),
-                ("README_GUID", "VARCHAR", "FK → README.GUID"),
+                ("GUID", "VARCHAR", "PK - Primary Key"),
+                ("ASSET_TYPE", "VARCHAR", "Type: Table, Column, Dashboard"),
+                ("ASSET_NAME", "VARCHAR", "Asset display name"),
+                ("QUALIFIED_NAME", "VARCHAR", "URL, unique path"),
+                ("DESCRIPTION", "VARCHAR", "Description"),
+                ("README_GUID", "VARCHAR", "FK → README"),
+                ("STATUS", "VARCHAR", "active, archived, deleted"),
+                ("CREATED_AT", "NUMBER", "Created time (epoch ms)"),
+                ("CREATED_BY", "VARCHAR", "Creator"),
+                ("UPDATED_AT", "NUMBER", "Update time (epoch ms)"),
+                ("UPDATED_BY", "VARCHAR", "Updater"),
+                ("CERTIFICATE_STATUS", "VARCHAR", "Verified"),
+                ("CERTIFICATE_UPDATED_BY", "VARCHAR", "Cert updater"),
+                ("CERTIFICATE_UPDATED_AT", "NUMBER", "Cert time"),
+                ("CONNECTOR_NAME", "VARCHAR", "Snowflake, Redshift"),
+                ("CONNECTION_SOURCE_NAME", "VARCHAR", "Connection path"),
+                ("TENANT_CODE", "VARCHAR", "Tenant ID"),
+                ("CHANGE_TYPE", "VARCHAR", "Insert/Update"),
                 ("TERM_GUIDS", "ARRAY", "FK → GLOSSARY_DETAILS"),
+                ("POPULARITY_SCORE", "FLOAT", "Usage score"),
+                ("TAGS", "ARRAY", "Tag labels"),
+                ("HAS_LINEAGE", "BOOLEAN", "Has lineage?"),
             ]
         },
         "RELATIONAL_ASSET_DETAILS": {
@@ -137,107 +210,170 @@ def get_erd_schema_details():
             "cardinality": "1:1 with ASSETS",
             "columns": [
                 ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
-                ("TABLE_ROW_COUNT", "NUMBER", "Row count for tables"),
-                ("TABLE_SIZE_BYTES", "NUMBER", "Storage size"),
-                ("COLUMN_DATATYPE", "VARCHAR", "Column data type"),
-                ("VIEW_DEFINITION", "VARCHAR", "SQL DDL for views"),
+                ("ASSET_TYPE", "VARCHAR", "Database, Table, Column"),
+                ("DATABASE_SCHEMAS", "ARRAY", "Schema GUIDs"),
+                ("SCHEMA_DATABASE_NAME", "VARCHAR", "Parent database"),
+                ("SCHEMA_TABLES", "ARRAY", "Table GUIDs"),
+                ("SCHEMA_MATERIALIZED_VIEWS", "ARRAY", "MV GUIDs"),
+                ("SCHEMA_PROCEDURES", "ARRAY", "Proc GUIDs"),
+                ("TABLE_COLUMN_COUNT", "NUMBER", "# columns"),
+                ("TABLE_SIZE_BYTES", "NUMBER", "Size"),
+                ("TABLE_ROW_COUNT", "NUMBER", "Row count"),
+                ("TABLE_INDEX_COUNT", "NUMBER", "Indexes"),
+                ("TABLE_PARTITION_STRATEGY", "VARCHAR", "Strategy"),
+                ("COLUMN_PARENT_TABLE", "VARCHAR", "Parent table"),
+                ("COLUMN_DATATYPE", "VARCHAR", "Data type"),
+                ("VIEW_DEFINITION", "VARCHAR", "DDL"),
             ]
         },
         "GLOSSARY_DETAILS": {
             "color": "#9C27B0",
             "description": "Glossaries, categories, and business terms",
-            "join_key": "GUID → ASSETS.GUID",
+            "join_key": "GUID → ASSETS.GUID, TERM_GUIDS contains GUID",
             "cardinality": "1:M with ASSETS",
             "columns": [
                 ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
-                ("ANCHOR_GUID", "VARCHAR", "Parent glossary GUID"),
-                ("ASSIGNED_ENTITIES", "ARRAY", "Assets linked to this term"),
-                ("CATEGORIES", "ARRAY", "Category assignments"),
+                ("ASSET_TYPE", "VARCHAR", "Glossary, Term, Category"),
+                ("QUALIFIED_NAME", "VARCHAR", "Qual name"),
+                ("STATUS", "VARCHAR", "Status"),
+                ("UPDATED_TIME", "NUMBER", "Updated"),
+                ("UPDATED_BY", "VARCHAR", "Updater"),
+                ("OWNER_BY", "VARCHAR", "Owner"),
+                ("CREATED_TIME", "NUMBER", "Created"),
+                ("CONNECTION_SOURCE_NAME", "VARCHAR", "Source"),
+                ("POPULARITY_SCORE", "FLOAT", "Score"),
+                ("PARENT_GUID", "ARRAY", "Parent"),
+                ("README_GUID", "VARCHAR", "FK → README"),
+                ("ANCHOR_GUID", "VARCHAR", "FK → Parent GUID"),
+                ("ASSIGNED_ENTITIES", "ARRAY", "Linked assets"),
             ]
         },
         "LINEAGE": {
             "color": "#FF9800",
             "description": "Pre-computed lineage paths (upstream and downstream)",
-            "join_key": "START_GUID, RELATED_GUID → ASSETS.GUID",
+            "join_key": "GUID = START_GUID or RELATED_GUID",
             "cardinality": "M:M",
             "columns": [
-                ("DIRECTION", "VARCHAR", "UPSTREAM or DOWNSTREAM"),
-                ("START_GUID", "VARCHAR", "Starting asset GUID"),
-                ("RELATED_GUID", "VARCHAR", "Connected asset GUID"),
-                ("LEVEL", "NUMBER", "Hop count / distance"),
-                ("CONNECTING_GUID", "VARCHAR", "Process linking the assets"),
+                ("GUID", "VARCHAR", "LINEAGEPROCESS PK"),
+                ("START_GUID", "VARCHAR", "FK → ASSETS (source)"),
+                ("END_GUID", "VARCHAR", "FK → ASSETS (target)"),
+                ("ASSET_TYPE", "VARCHAR", "Type"),
+                ("RELATED_GUID", "VARCHAR", "FK → ASSETS.Report"),
+                ("SQL_CODE", "VARCHAR", "SQL"),
+                ("CONNECTING_SQL", "VARCHAR", "Connecting SQL"),
+                ("LEVEL", "NUMBER", "Hops/Levels"),
+                ("DIRECTION", "VARCHAR", "UPSTREAM/DOWNSTREAM"),
             ]
         },
         "TAGS": {
             "color": "#F44336",
             "description": "Classification tags assigned to assets",
-            "join_key": "ASSET_GUID → ASSETS.GUID",
+            "join_key": "GUID = ASSET_GUID",
             "cardinality": "1:M",
             "columns": [
                 ("ASSET_GUID", "VARCHAR", "FK → ASSETS.GUID"),
-                ("TAG_NAME", "VARCHAR", "Classification name (e.g., PII)"),
-                ("TAG_VALUE", "VARCHAR", "Tag value"),
-                ("PROPAGATES", "BOOLEAN", "Whether tag propagates"),
+                ("ASSET_TYPE", "VARCHAR", "Asset type"),
+                ("TAG_GUID", "VARCHAR", "Tag GUID"),
+                ("TAG_NAME", "VARCHAR", "PII, Confidential"),
+                ("TAG_VALUE", "VARCHAR", "Enum value"),
+                ("PROPAGATE", "BOOLEAN", "Propagated?"),
             ]
         },
         "CUSTOM_METADATA": {
             "color": "#E91E63",
             "description": "Custom metadata attribute-value pairs",
-            "join_key": "ASSET_GUID → ASSETS.GUID",
+            "join_key": "GUID = ASSET_GUID",
             "cardinality": "1:M",
             "columns": [
                 ("ASSET_GUID", "VARCHAR", "FK → ASSETS.GUID"),
-                ("CUSTOM_METADATA_NAME", "VARCHAR", "CM set name"),
-                ("ATTRIBUTE_NAME", "VARCHAR", "Attribute key"),
-                ("ATTRIBUTE_VALUE", "VARCHAR", "Attribute value"),
+                ("ASSET_TYPE", "VARCHAR", "Asset type"),
+                ("CUSTOM_METADATA_SET", "VARCHAR", "CM set name"),
+                ("CUSTOM_METADATA_NAME", "VARCHAR", "CM attribute name"),
+                ("ATTRIBUTE_VALUE", "VARCHAR", "Field value"),
+                ("STATUS", "VARCHAR", "active/inactive"),
             ]
         },
         "README": {
             "color": "#607D8B",
             "description": "README documentation for assets",
-            "join_key": "GUID ← ASSETS.README_GUID",
+            "join_key": "README_GUID = GUID",
             "cardinality": "1:1 with ASSETS",
             "columns": [
-                ("GUID", "VARCHAR", "Primary key"),
-                ("ASSET_GUID", "VARCHAR", "Linked asset GUID"),
-                ("DESCRIPTION", "VARCHAR", "README content"),
-                ("CREATED_BY", "VARCHAR", "Author"),
+                ("GUID", "VARCHAR", "PK"),
+                ("ASSET_TYPE", "VARCHAR", "Readme"),
+                ("ASSET_NAME", "VARCHAR", "Name"),
+                ("DESCRIPTION", "VARCHAR", "Description"),
+                ("STATUS", "VARCHAR", "Status"),
+                ("CREATED_AT", "NUMBER", "Created"),
+                ("UPDATED_AT", "NUMBER", "Updated"),
+                ("UPDATED_BY", "VARCHAR", "Updater"),
+                ("CREATED_BY", "VARCHAR", "Creator"),
             ]
         },
         "PIPELINE_DETAILS": {
             "color": "#00BCD4",
-            "description": "Orchestration and pipeline assets (Airflow, dbt, Matillion)",
-            "join_key": "GUID → ASSETS.GUID",
+            "description": "Orchestration and pipeline assets (Airflow, dbt, Matillion, Fivetran)",
+            "join_key": "GUID = GUID",
             "cardinality": "1:1 with ASSETS",
             "columns": [
                 ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
-                ("INPUT_GUIDS_TO_PROCESSES", "ARRAY", "Upstream input assets"),
-                ("OUTPUT_GUIDS_TO_PROCESSES", "ARRAY", "Downstream output assets"),
+                ("ASSET_TYPE", "VARCHAR", "sql, storage, fivetran"),
+                ("ORCHESTRATION_TOOL", "VARCHAR", "Airflow"),
+                ("OUTPUT_FROM_PROCESS", "ARRAY", "Downstream outputs"),
+                ("COLUMNS_TO_PULL", "ARRAY", "Pull columns"),
+                ("COLUMNS_NULL_ALLOWED", "BOOLEAN", "Nulls allowed"),
+                ("COLUMN_VIEW_NAME", "VARCHAR", "Parent view"),
+                ("VIEW_COLUMNS", "VARCHAR", "Column Entity"),
+                ("VIEW_DEFINITION", "VARCHAR", "DDL"),
+                ("QUERY_BASE_QUERY_TEXT", "VARCHAR", "SQL text"),
+                ("QUERY_GUID", "VARCHAR", "Query link"),
+                ("FUNCTION_LANGUAGE", "VARCHAR", "Language"),
+                ("FUNCTION_RETURN_TYPE", "VARCHAR", "Return type"),
+                ("PROCEDURE_DEFINITION", "VARCHAR", "Info"),
             ]
         },
         "DATA_QUALITY_DETAILS": {
             "color": "#795548",
             "description": "Data quality checks (Anomalo, Soda, Monte Carlo)",
-            "join_key": "GUID → ASSETS.GUID",
+            "join_key": "ANCHOR_GUID = GUID",
             "cardinality": "1:1 with ASSETS",
             "columns": [
                 ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
-                ("ANOMALO_CHECK_STATUS", "VARCHAR", "Anomalo status"),
-                ("SODA_CHECK_EVALUATION_STATUS", "VARCHAR", "Soda status"),
-                ("MC_MONITOR_STATUS", "VARCHAR", "Monte Carlo status"),
+                ("SOURCE_URL", "VARCHAR", "Source URL"),
+                ("ANOMALY_CHECK_CATEGORY_TYPE", "VARCHAR", "Category"),
+                ("DATA_PRODUCTS", "ARRAY", "Product Details"),
+                ("STAKEHOLDERS", "ARRAY", "Stakeholder GUID"),
+                ("ANOMALY_CHECK_PRIORITY_LEVEL", "VARCHAR", "Priority"),
+                ("ANOMALY_CHECK_LAST_RUN_AT", "NUMBER", "Last run"),
+                ("ANOMALY_CHECK_INCIDENT_COUNT", "NUMBER", "Incident count"),
+                ("SODA_CHECK_ID", "VARCHAR", "Suite ID"),
+                ("SODA_CHECK_EVALUATION_STATUS", "VARCHAR", "Status"),
+                ("SODA_CHECK_LAST_SYNC_AT", "NUMBER", "Last sync"),
+                ("MC_MONITOR_ID", "VARCHAR", "Monitor ID"),
+                ("MC_MONITOR_SCHEDULE_TYPE", "VARCHAR", "Schedule"),
+                ("MC_MONITOR_STATUS", "VARCHAR", "Status"),
+                ("MC_MONITOR_TYPE", "VARCHAR", "Type"),
+                ("MC_MONITOR_LAST_RUN_AT", "NUMBER", "Last run"),
+                ("MC_MONITOR_RULE_CUSTOM_SQL", "VARCHAR", "Custom SQL"),
+                ("MC_MONITOR_ASSETS", "ARRAY", "Assets"),
             ]
         },
         "DATA_MESH_DETAILS": {
             "color": "#FFC107",
             "description": "Data mesh: domains, products, stakeholders",
-            "join_key": "GUID → ASSETS.GUID",
+            "join_key": "GUID = GUID",
             "cardinality": "1:1 with ASSETS",
             "columns": [
                 ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
-                ("DATA_DOMAIN", "VARCHAR", "Domain GUID"),
-                ("DATA_PRODUCTS", "ARRAY", "Product GUIDs"),
-                ("STAKEHOLDERS", "ARRAY", "Stakeholder user GUIDs"),
-                ("CRITICALITY", "VARCHAR", "Criticality level"),
+                ("DATA_PRODUCTS", "ARRAY", "Product Details"),
+                ("VISIBILITY", "VARCHAR", "Visibility"),
+                ("CRITICALITY", "VARCHAR", "Criticality"),
+                ("OUTPUT_PORT_GUIDS", "ARRAY", "Output ports"),
+                ("DATA_SCHEMA", "VARCHAR", "Domain GUID"),
+                ("DATA_DOMAIN", "VARCHAR", "Data Domain"),
+                ("PERSONA_TYPE", "VARCHAR", "Role"),
+                ("POLICIES", "ARRAY", "Policies"),
+                ("GIT_PLATFORM_URL", "VARCHAR", "URL"),
             ]
         },
     }
