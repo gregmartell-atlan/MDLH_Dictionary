@@ -1,0 +1,1457 @@
+{
+  "data": {
+    "core": [
+      {
+        "entity": "Referenceable",
+        "table": "(abstract)",
+        "description": "Root of all entity types",
+        "keyAttributes": "guid, qualifiedName",
+        "relationships": "Base for all",
+        "notes": "Not directly queryable"
+      },
+      {
+        "entity": "Asset",
+        "table": "(abstract)",
+        "description": "Base class for all assets",
+        "keyAttributes": "name, description, ownerUsers, ownerGroups, certificateStatus, announcementType, createTime, updateTime, createdBy, updatedBy",
+        "relationships": "Extends Referenceable",
+        "notes": "Not directly queryable"
+      },
+      {
+        "entity": "Catalog",
+        "table": "(abstract)",
+        "description": "Base for technical/data assets",
+        "keyAttributes": "connectionQualifiedName, connectorType",
+        "relationships": "Extends Asset",
+        "notes": "Parent for SQL, BI, dbt, etc."
+      },
+      {
+        "entity": "Connection",
+        "table": "CONNECTION_ENTITY",
+        "description": "Configured connection to data source",
+        "keyAttributes": "connectorName, category, host, port, adminRoles, adminGroups, adminUsers",
+        "relationships": "Contains databases, schemas",
+        "notes": "Root of connector hierarchy"
+      },
+      {
+        "entity": "Process",
+        "table": "PROCESS_ENTITY",
+        "description": "Transformation/lineage process",
+        "keyAttributes": "inputs, outputs, sql, code, columnProcesses",
+        "relationships": "Links assets in lineage",
+        "notes": "Table-level lineage"
+      },
+      {
+        "entity": "ColumnProcess",
+        "table": "COLUMNPROCESS_ENTITY",
+        "description": "Column-level lineage process",
+        "keyAttributes": "inputs, outputs",
+        "relationships": "Links columns in lineage",
+        "notes": "Column-level lineage"
+      },
+      {
+        "entity": "BIProcess",
+        "table": "BIPROCESS_ENTITY",
+        "description": "BI-specific transformation",
+        "keyAttributes": "inputs, outputs",
+        "relationships": "BI tool lineage",
+        "notes": "Extends Process"
+      },
+      {
+        "entity": "SparkJob",
+        "table": "SPARKJOB_ENTITY",
+        "description": "Apache Spark job",
+        "keyAttributes": "sparkRunVersion, sparkRunOpenLineageState",
+        "relationships": "Spark lineage",
+        "notes": "OpenLineage integration"
+      }
+    ],
+    "glossary": [
+      {
+        "entity": "AtlasGlossary",
+        "table": "ATLASGLOSSARY_ENTITY",
+        "description": "Business glossary container",
+        "keyAttributes": "name, shortDescription, longDescription, language, usage",
+        "relationships": "Contains terms & categories",
+        "qualifiedNamePattern": "Generated hash",
+        "exampleQuery": "SELECT GUID, NAME FROM ATLASGLOSSARY_ENTITY"
+      },
+      {
+        "entity": "AtlasGlossaryTerm",
+        "table": "ATLASGLOSSARYTERM_ENTITY",
+        "description": "Business term with definition",
+        "keyAttributes": "name, shortDescription, longDescription, examples, usage, abbreviation, anchor",
+        "relationships": "anchor (glossary), categories, assignedEntities, seeAlso, synonyms, antonyms",
+        "qualifiedNamePattern": "Generated hash",
+        "exampleQuery": "SELECT NAME, USERDESCRIPTION FROM ATLASGLOSSARYTERM_ENTITY WHERE CERTIFICATESTATUS='VERIFIED'"
+      },
+      {
+        "entity": "AtlasGlossaryCategory",
+        "table": "ATLASGLOSSARYCATEGORY_ENTITY",
+        "description": "Hierarchical grouping of terms",
+        "keyAttributes": "name, shortDescription, longDescription, anchor",
+        "relationships": "anchor (glossary), parentCategory, childrenCategories, terms",
+        "qualifiedNamePattern": "Generated hash",
+        "exampleQuery": "SELECT NAME, PARENTCATEGORY FROM ATLASGLOSSARYCATEGORY_ENTITY"
+      }
+    ],
+    "datamesh": [
+      {
+        "entity": "DataDomain",
+        "table": "DATADOMAIN_ENTITY",
+        "description": "Business domain grouping",
+        "keyAttributes": "name, description, parentDomainQualifiedName, superDomainQualifiedName",
+        "relationships": "dataProducts, parentDomain, subDomains",
+        "qualifiedNamePattern": "default/domain/<lowerCamelCaseName>",
+        "exampleQuery": "SELECT NAME, USERDESCRIPTION FROM DATADOMAIN_ENTITY"
+      },
+      {
+        "entity": "DataProduct",
+        "table": "DATAPRODUCT_ENTITY",
+        "description": "Self-contained data product",
+        "keyAttributes": "name, description, dataProductStatus, dataProductCriticality, dataProductSensitivity, dataProductVisibility, dataProductAssetsDSL, dataProductScore",
+        "relationships": "dataDomain, inputPorts, outputPorts, dataContractLatest",
+        "qualifiedNamePattern": "<parentDomainQN>/product/<name>",
+        "exampleQuery": "SELECT NAME, DATAPRODUCTSTATUS FROM DATAPRODUCT_ENTITY WHERE DATAPRODUCTSTATUS='Active'"
+      },
+      {
+        "entity": "DataContract",
+        "table": "DATACONTRACT_ENTITY",
+        "description": "Formal data specification",
+        "keyAttributes": "dataContractSpec, dataContractVersion, certificateStatus, dataContractAssetGuid",
+        "relationships": "dataContractAsset, dataContractNextVersion",
+        "qualifiedNamePattern": "Generated",
+        "exampleQuery": "SELECT DATACONTRACTVERSION, CERTIFICATESTATUS FROM DATACONTRACT_ENTITY"
+      }
+    ],
+    "relational": [
+      {
+        "entity": "Database",
+        "table": "DATABASE_ENTITY",
+        "description": "Database container",
+        "keyAttributes": "name, schemaCount, connectionQualifiedName",
+        "relationships": "schemas, connection",
+        "qualifiedNamePattern": "default/<connector>/<epoch>/<db_name>",
+        "hierarchy": "Connection → Database"
+      },
+      {
+        "entity": "Schema",
+        "table": "SCHEMA_ENTITY",
+        "description": "Namespace within database",
+        "keyAttributes": "name, tableCount, viewCount, databaseQualifiedName",
+        "relationships": "tables, views, database",
+        "qualifiedNamePattern": ".../<db_name>/<schema_name>",
+        "hierarchy": "Database → Schema"
+      },
+      {
+        "entity": "Table",
+        "table": "TABLE_ENTITY",
+        "description": "Database table",
+        "keyAttributes": "name, rowCount, columnCount, sizeBytes, partitionStrategy, schemaQualifiedName",
+        "relationships": "columns, partitions, queries, schema",
+        "qualifiedNamePattern": ".../<schema>/<table_name>",
+        "hierarchy": "Schema → Table"
+      },
+      {
+        "entity": "View",
+        "table": "VIEW_ENTITY",
+        "description": "Database view",
+        "keyAttributes": "name, columnCount, definition, schemaQualifiedName",
+        "relationships": "columns, queries, schema",
+        "qualifiedNamePattern": ".../<schema>/<view_name>",
+        "hierarchy": "Schema → View"
+      },
+      {
+        "entity": "MaterialisedView",
+        "table": "MATERIALISEDVIEW_ENTITY",
+        "description": "Materialized/cached view",
+        "keyAttributes": "name, definition, refreshMode, staleness",
+        "relationships": "columns, schema",
+        "qualifiedNamePattern": ".../<schema>/<mv_name>",
+        "hierarchy": "Schema → MaterialisedView"
+      },
+      {
+        "entity": "Column",
+        "table": "COLUMN_ENTITY",
+        "description": "Table/view column",
+        "keyAttributes": "name, dataType, maxLength, precision, scale, isPrimaryKey, isForeignKey, isNullable, isPartition, order",
+        "relationships": "table/view, foreignKeyTo",
+        "qualifiedNamePattern": ".../<table>/<column_name>",
+        "hierarchy": "Table/View → Column"
+      },
+      {
+        "entity": "TablePartition",
+        "table": "TABLEPARTITION_ENTITY",
+        "description": "Partition of partitioned table",
+        "keyAttributes": "name, partitionList, partitionStrategy",
+        "relationships": "columns, parentTable",
+        "qualifiedNamePattern": ".../<table>/<partition>",
+        "hierarchy": "Table → Partition"
+      },
+      {
+        "entity": "Procedure",
+        "table": "PROCEDURE_ENTITY",
+        "description": "Stored procedure",
+        "keyAttributes": "name, definition, schemaQualifiedName",
+        "relationships": "schema",
+        "qualifiedNamePattern": ".../<schema>/<proc_name>",
+        "hierarchy": "Schema → Procedure"
+      },
+      {
+        "entity": "Function",
+        "table": "FUNCTION_ENTITY",
+        "description": "User-defined function",
+        "keyAttributes": "name, definition, schemaQualifiedName",
+        "relationships": "schema",
+        "qualifiedNamePattern": ".../<schema>/<func_name>",
+        "hierarchy": "Schema → Function"
+      },
+      {
+        "entity": "SnowflakeDynamicTable",
+        "table": "SNOWFLAKEDYNAMICTABLE_ENTITY",
+        "description": "Snowflake dynamic table",
+        "keyAttributes": "name, definition, refreshMode",
+        "relationships": "columns, schema",
+        "qualifiedNamePattern": "Snowflake-specific",
+        "hierarchy": "Schema → DynamicTable"
+      },
+      {
+        "entity": "SnowflakePipe",
+        "table": "SNOWFLAKEPIPE_ENTITY",
+        "description": "Snowpipe ingestion",
+        "keyAttributes": "name, definition, snowflakePipeNotificationChannelName",
+        "relationships": "schema",
+        "qualifiedNamePattern": "Snowflake-specific",
+        "hierarchy": "Schema → Pipe"
+      },
+      {
+        "entity": "SnowflakeStream",
+        "table": "SNOWFLAKESTREAM_ENTITY",
+        "description": "CDC stream",
+        "keyAttributes": "name, snowflakeStreamType, snowflakeStreamSourceType",
+        "relationships": "schema",
+        "qualifiedNamePattern": "Snowflake-specific",
+        "hierarchy": "Schema → Stream"
+      },
+      {
+        "entity": "SnowflakeTag",
+        "table": "SNOWFLAKETAG_ENTITY",
+        "description": "Native Snowflake tag",
+        "keyAttributes": "name, tagAllowedValues",
+        "relationships": "schema, taggedAssets",
+        "qualifiedNamePattern": "Snowflake-specific",
+        "hierarchy": "Schema → Tag"
+      }
+    ],
+    "queries": [
+      {
+        "entity": "Namespace",
+        "table": "(abstract)",
+        "description": "Base for organizational containers",
+        "keyAttributes": "name, childrenQueries, childrenFolders",
+        "relationships": "Base for Collection/Folder",
+        "hierarchy": "Abstract parent",
+        "notes": "Not directly queryable"
+      },
+      {
+        "entity": "Collection",
+        "table": "COLLECTION_ENTITY",
+        "description": "Top-level query collection",
+        "keyAttributes": "name, description, icon, iconType, adminUsers, adminGroups, viewerUsers, viewerGroups",
+        "relationships": "childrenFolders, childrenQueries",
+        "hierarchy": "Root container",
+        "notes": "Atlan Insights collections"
+      },
+      {
+        "entity": "Folder",
+        "table": "FOLDER_ENTITY",
+        "description": "Query folder within collection",
+        "keyAttributes": "name, parentQualifiedName, collectionQualifiedName",
+        "relationships": "parentFolder, childrenFolders, childrenQueries",
+        "hierarchy": "Collection → Folder",
+        "notes": "Can nest folders"
+      },
+      {
+        "entity": "Query",
+        "table": "QUERY_ENTITY",
+        "description": "Saved SQL query",
+        "keyAttributes": "name, rawQuery, defaultSchemaQualifiedName, defaultDatabaseQualifiedName, variablesSchemaBase64, isVisualQuery",
+        "relationships": "parentFolder/collection, visualBuilderSchemaBase64",
+        "hierarchy": "Folder/Collection → Query",
+        "notes": "Saved queries in Insights"
+      }
+    ],
+    "bi": [
+      {
+        "entity": "TableauSite",
+        "table": "TABLEAUSITE_ENTITY",
+        "description": "Tableau site",
+        "keyAttributes": "name, siteQualifiedName",
+        "relationships": "projects",
+        "connector": "Tableau",
+        "hierarchy": "Root"
+      },
+      {
+        "entity": "TableauProject",
+        "table": "TABLEAUPROJECT_ENTITY",
+        "description": "Tableau project",
+        "keyAttributes": "name, isTopLevelProject",
+        "relationships": "site, workbooks, datasources",
+        "connector": "Tableau",
+        "hierarchy": "Site → Project"
+      },
+      {
+        "entity": "TableauWorkbook",
+        "table": "TABLEAUWORKBOOK_ENTITY",
+        "description": "Tableau workbook",
+        "keyAttributes": "name, projectQualifiedName",
+        "relationships": "project, dashboards, worksheets",
+        "connector": "Tableau",
+        "hierarchy": "Project → Workbook"
+      },
+      {
+        "entity": "TableauDashboard",
+        "table": "TABLEAUDASHBOARD_ENTITY",
+        "description": "Tableau dashboard",
+        "keyAttributes": "name, workbookQualifiedName",
+        "relationships": "workbook, worksheets",
+        "connector": "Tableau",
+        "hierarchy": "Workbook → Dashboard"
+      },
+      {
+        "entity": "TableauDatasource",
+        "table": "TABLEAUDATASOURCE_ENTITY",
+        "description": "Tableau data source",
+        "keyAttributes": "name, hasExtracts",
+        "relationships": "project, fields, upstreamTables",
+        "connector": "Tableau",
+        "hierarchy": "Project → Datasource"
+      },
+      {
+        "entity": "TableauCalculatedField",
+        "table": "TABLEAUCALCULATEDFIELD_ENTITY",
+        "description": "Tableau calculated field",
+        "keyAttributes": "name, formula, workbookQualifiedName",
+        "relationships": "workbook, datasource",
+        "connector": "Tableau",
+        "hierarchy": "Workbook → CalculatedField"
+      },
+      {
+        "entity": "PowerBIWorkspace",
+        "table": "POWERBIWORKSPACE_ENTITY",
+        "description": "Power BI workspace",
+        "keyAttributes": "name, webUrl",
+        "relationships": "reports, dashboards, datasets",
+        "connector": "Power BI",
+        "hierarchy": "Root"
+      },
+      {
+        "entity": "PowerBIReport",
+        "table": "POWERBIREPORT_ENTITY",
+        "description": "Power BI report",
+        "keyAttributes": "name, webUrl, workspaceQualifiedName",
+        "relationships": "workspace, pages, dataset",
+        "connector": "Power BI",
+        "hierarchy": "Workspace → Report"
+      },
+      {
+        "entity": "PowerBIDataset",
+        "table": "POWERBIDATASET_ENTITY",
+        "description": "Power BI dataset",
+        "keyAttributes": "name, workspaceQualifiedName",
+        "relationships": "workspace, tables, measures",
+        "connector": "Power BI",
+        "hierarchy": "Workspace → Dataset"
+      },
+      {
+        "entity": "PowerBIMeasure",
+        "table": "POWERBIMEASURE_ENTITY",
+        "description": "Power BI measure",
+        "keyAttributes": "name, powerBIMeasureExpression, table",
+        "relationships": "dataset, table",
+        "connector": "Power BI",
+        "hierarchy": "Dataset → Measure"
+      },
+      {
+        "entity": "LookerProject",
+        "table": "LOOKERPROJECT_ENTITY",
+        "description": "Looker project",
+        "keyAttributes": "name",
+        "relationships": "models, explores",
+        "connector": "Looker",
+        "hierarchy": "Root"
+      },
+      {
+        "entity": "LookerModel",
+        "table": "LOOKERMODEL_ENTITY",
+        "description": "Looker model",
+        "keyAttributes": "name, projectName",
+        "relationships": "project, explores, views",
+        "connector": "Looker",
+        "hierarchy": "Project → Model"
+      },
+      {
+        "entity": "LookerExplore",
+        "table": "LOOKEREXPLORE_ENTITY",
+        "description": "Looker explore",
+        "keyAttributes": "name, modelName, connectionName",
+        "relationships": "model, fields",
+        "connector": "Looker",
+        "hierarchy": "Model → Explore"
+      },
+      {
+        "entity": "LookerDashboard",
+        "table": "LOOKERDASHBOARD_ENTITY",
+        "description": "Looker dashboard",
+        "keyAttributes": "name, folderName",
+        "relationships": "folder, tiles",
+        "connector": "Looker",
+        "hierarchy": "Folder → Dashboard"
+      },
+      {
+        "entity": "MetabaseDashboard",
+        "table": "METABASEDASHBOARD_ENTITY",
+        "description": "Metabase dashboard",
+        "keyAttributes": "name, collectionQualifiedName",
+        "relationships": "collection, questions",
+        "connector": "Metabase",
+        "hierarchy": "Collection → Dashboard"
+      },
+      {
+        "entity": "MetabaseQuestion",
+        "table": "METABASEQUESTION_ENTITY",
+        "description": "Metabase question/chart",
+        "keyAttributes": "name, queryType",
+        "relationships": "collection, dashboards",
+        "connector": "Metabase",
+        "hierarchy": "Collection → Question"
+      },
+      {
+        "entity": "SigmaDataElement",
+        "table": "SIGMADATAELEMENT_ENTITY",
+        "description": "Sigma data element",
+        "keyAttributes": "name, guid",
+        "relationships": "workbook, dataset",
+        "connector": "Sigma",
+        "hierarchy": "Workbook → DataElement"
+      }
+    ],
+    "dbt": [
+      {
+        "entity": "DbtModel",
+        "table": "DBTMODEL_ENTITY",
+        "description": "dbt model (transformation)",
+        "keyAttributes": "name, dbtAlias, dbtMaterialization, dbtModelSqlAssets, dbtCompiledSQL, dbtRawSQL",
+        "relationships": "columns, sources, tests, metrics",
+        "qualifiedNamePattern": "dbt-specific",
+        "notes": "Links to SQL table/view"
+      },
+      {
+        "entity": "DbtModelColumn",
+        "table": "DBTMODELCOLUMN_ENTITY",
+        "description": "Column in dbt model",
+        "keyAttributes": "name, dbtModelQualifiedName, dataType",
+        "relationships": "dbtModel, sqlColumn",
+        "qualifiedNamePattern": "dbt-specific",
+        "notes": "Links to SQL column"
+      },
+      {
+        "entity": "DbtSource",
+        "table": "DBTSOURCE_ENTITY",
+        "description": "dbt source definition",
+        "keyAttributes": "name, dbtSourceFreshnessCriteria",
+        "relationships": "sqlAsset, dbtTests",
+        "qualifiedNamePattern": "dbt-specific",
+        "notes": "References source table"
+      },
+      {
+        "entity": "DbtTest",
+        "table": "DBTTEST_ENTITY",
+        "description": "dbt test (schema/data)",
+        "keyAttributes": "name, dbtTestState, dbtTestStatus, dbtTestCompiledSQL",
+        "relationships": "dbtModel, dbtSource",
+        "qualifiedNamePattern": "dbt-specific",
+        "notes": "Test results"
+      },
+      {
+        "entity": "DbtMetric",
+        "table": "DBTMETRIC_ENTITY",
+        "description": "dbt metric (semantic layer)",
+        "keyAttributes": "name, dbtMetricType, dbtMetricFilters",
+        "relationships": "dbtModel, columns",
+        "qualifiedNamePattern": "dbt-specific",
+        "notes": "Semantic layer metric"
+      },
+      {
+        "entity": "DbtTag",
+        "table": "DBTTAG_ENTITY",
+        "description": "dbt meta tag",
+        "keyAttributes": "name, dbtTagValue",
+        "relationships": "taggedAssets",
+        "qualifiedNamePattern": "dbt-specific",
+        "notes": "Tags from dbt meta"
+      },
+      {
+        "entity": "DbtProcess",
+        "table": "DBTPROCESS_ENTITY",
+        "description": "dbt lineage process",
+        "keyAttributes": "inputs, outputs, dbtProcessJobStatus",
+        "relationships": "dbtModel inputs/outputs",
+        "qualifiedNamePattern": "dbt-specific",
+        "notes": "Model-level lineage"
+      },
+      {
+        "entity": "DbtColumnProcess",
+        "table": "DBTCOLUMNPROCESS_ENTITY",
+        "description": "dbt column lineage",
+        "keyAttributes": "inputs, outputs",
+        "relationships": "column inputs/outputs",
+        "qualifiedNamePattern": "dbt-specific",
+        "notes": "Column-level lineage"
+      }
+    ],
+    "storage": [
+      {
+        "entity": "S3Bucket",
+        "table": "S3BUCKET_ENTITY",
+        "description": "AWS S3 bucket",
+        "keyAttributes": "name, s3BucketArn, awsRegion, s3ObjectCount",
+        "relationships": "s3Objects, connection",
+        "connector": "AWS S3",
+        "hierarchy": "Connection → Bucket"
+      },
+      {
+        "entity": "S3Object",
+        "table": "S3OBJECT_ENTITY",
+        "description": "AWS S3 object",
+        "keyAttributes": "name, s3ObjectKey, s3ObjectSize, s3ObjectContentType, s3ObjectLastModifiedTime",
+        "relationships": "s3Bucket",
+        "connector": "AWS S3",
+        "hierarchy": "Bucket → Object"
+      },
+      {
+        "entity": "ADLSAccount",
+        "table": "ADLSACCOUNT_ENTITY",
+        "description": "Azure ADLS account",
+        "keyAttributes": "name, adlsAccountQualifiedName",
+        "relationships": "adlsContainers, connection",
+        "connector": "Azure ADLS",
+        "hierarchy": "Connection → Account"
+      },
+      {
+        "entity": "ADLSContainer",
+        "table": "ADLSCONTAINER_ENTITY",
+        "description": "Azure ADLS container",
+        "keyAttributes": "name, adlsContainerUrl",
+        "relationships": "adlsAccount, adlsObjects",
+        "connector": "Azure ADLS",
+        "hierarchy": "Account → Container"
+      },
+      {
+        "entity": "ADLSObject",
+        "table": "ADLSOBJECT_ENTITY",
+        "description": "Azure ADLS object",
+        "keyAttributes": "name, adlsObjectUrl, adlsObjectSize, adlsObjectContentType",
+        "relationships": "adlsContainer",
+        "connector": "Azure ADLS",
+        "hierarchy": "Container → Object"
+      },
+      {
+        "entity": "GCSBucket",
+        "table": "GCSBUCKET_ENTITY",
+        "description": "Google Cloud Storage bucket",
+        "keyAttributes": "name, gcsBucketName, gcsObjectCount",
+        "relationships": "gcsObjects, connection",
+        "connector": "GCS",
+        "hierarchy": "Connection → Bucket"
+      },
+      {
+        "entity": "GCSObject",
+        "table": "GCSOBJECT_ENTITY",
+        "description": "Google Cloud Storage object",
+        "keyAttributes": "name, gcsObjectKey, gcsObjectSize, gcsObjectContentType",
+        "relationships": "gcsBucket",
+        "connector": "GCS",
+        "hierarchy": "Bucket → Object"
+      }
+    ],
+    "orchestration": [
+      {
+        "entity": "AirflowDag",
+        "table": "AIRFLOWDAG_ENTITY",
+        "description": "Airflow DAG",
+        "keyAttributes": "name, airflowDagSchedule, airflowDagScheduleInterval",
+        "relationships": "airflowTasks, connection",
+        "connector": "Airflow",
+        "hierarchy": "Connection → DAG"
+      },
+      {
+        "entity": "AirflowTask",
+        "table": "AIRFLOWTASK_ENTITY",
+        "description": "Airflow task within DAG",
+        "keyAttributes": "name, airflowTaskOperatorClass, airflowTaskSql",
+        "relationships": "airflowDag, inputAssets, outputAssets",
+        "connector": "Airflow",
+        "hierarchy": "DAG → Task"
+      },
+      {
+        "entity": "AdfPipeline",
+        "table": "ADFPIPELINE_ENTITY",
+        "description": "Azure Data Factory pipeline",
+        "keyAttributes": "name, adfPipelineAnnotations",
+        "relationships": "adfActivities, adfDatasets",
+        "connector": "ADF",
+        "hierarchy": "Connection → Pipeline"
+      },
+      {
+        "entity": "AdfActivity",
+        "table": "ADFACTIVITY_ENTITY",
+        "description": "ADF pipeline activity",
+        "keyAttributes": "name, adfActivityType",
+        "relationships": "adfPipeline",
+        "connector": "ADF",
+        "hierarchy": "Pipeline → Activity"
+      },
+      {
+        "entity": "AdfDataflow",
+        "table": "ADFDATAFLOW_ENTITY",
+        "description": "ADF data flow",
+        "keyAttributes": "name",
+        "relationships": "adfPipeline, adfDatasets",
+        "connector": "ADF",
+        "hierarchy": "Pipeline → Dataflow"
+      },
+      {
+        "entity": "AdfDataset",
+        "table": "ADFDATASET_ENTITY",
+        "description": "ADF dataset",
+        "keyAttributes": "name, adfDatasetAnnotations",
+        "relationships": "adfLinkedService, adfActivities",
+        "connector": "ADF",
+        "hierarchy": "Connection → Dataset"
+      },
+      {
+        "entity": "AdfLinkedservice",
+        "table": "ADFLINKEDSERVICE_ENTITY",
+        "description": "ADF linked service",
+        "keyAttributes": "name, adfLinkedserviceAnnotations",
+        "relationships": "adfDatasets",
+        "connector": "ADF",
+        "hierarchy": "Connection → LinkedService"
+      },
+      {
+        "entity": "MatillionGroup",
+        "table": "MATILLIONGROUP_ENTITY",
+        "description": "Matillion group",
+        "keyAttributes": "name",
+        "relationships": "matillionProjects",
+        "connector": "Matillion",
+        "hierarchy": "Connection → Group"
+      },
+      {
+        "entity": "MatillionProject",
+        "table": "MATILLIONPROJECT_ENTITY",
+        "description": "Matillion project",
+        "keyAttributes": "name",
+        "relationships": "matillionGroup, matillionJobs",
+        "connector": "Matillion",
+        "hierarchy": "Group → Project"
+      },
+      {
+        "entity": "MatillionJob",
+        "table": "MATILLIONJOB_ENTITY",
+        "description": "Matillion job",
+        "keyAttributes": "name, matillionJobType",
+        "relationships": "matillionProject, matillionComponents",
+        "connector": "Matillion",
+        "hierarchy": "Project → Job"
+      },
+      {
+        "entity": "FivetranConnector",
+        "table": "FIVETRANCONNECTOR_ENTITY",
+        "description": "Fivetran connector",
+        "keyAttributes": "name, fivetranConnectorSyncFrequency, fivetranConnectorSyncPaused",
+        "relationships": "connection",
+        "connector": "Fivetran",
+        "hierarchy": "Connection → Connector"
+      }
+    ],
+    "governance": [
+      {
+        "entity": "Tag (Classification)",
+        "table": "TAG_RELATIONSHIP",
+        "description": "Classification tag for assets",
+        "keyAttributes": "tagName, propagate, restrictPropagationThroughLineage",
+        "relationships": "entityGuid (linked asset)",
+        "notes": "Use TAG_RELATIONSHIP to find tagged assets"
+      },
+      {
+        "entity": "CustomMetadata",
+        "table": "CUSTOMMETADATA_RELATIONSHIP",
+        "description": "Custom metadata attributes",
+        "keyAttributes": "entityGuid, attributeDisplayName, attributeValue",
+        "relationships": "entityGuid (linked asset)",
+        "notes": "Join with entity tables on guid"
+      },
+      {
+        "entity": "SnowflakeTag",
+        "table": "SNOWFLAKETAG_ENTITY",
+        "description": "Native Snowflake tag",
+        "keyAttributes": "name, tagAllowedValues",
+        "relationships": "taggedAssets",
+        "notes": "Synced from Snowflake"
+      },
+      {
+        "entity": "DatabricksUnityCatalogTag",
+        "table": "DATABRICKSUNITYCATALOGTAG_ENTITY",
+        "description": "Databricks Unity Catalog tag",
+        "keyAttributes": "name",
+        "relationships": "taggedAssets",
+        "notes": "Synced from Databricks"
+      },
+      {
+        "entity": "BigqueryTag",
+        "table": "BIGQUERYTAG_ENTITY",
+        "description": "BigQuery policy tag",
+        "keyAttributes": "name",
+        "relationships": "taggedAssets",
+        "notes": "Synced from BigQuery"
+      },
+      {
+        "entity": "Persona",
+        "table": "PERSONA_ENTITY",
+        "description": "Access control persona",
+        "keyAttributes": "name, personaGroups, personaUsers",
+        "relationships": "policies",
+        "notes": "Defines what users can see/do"
+      },
+      {
+        "entity": "Purpose",
+        "table": "PURPOSE_ENTITY",
+        "description": "Data access purpose",
+        "keyAttributes": "name, purposeTags",
+        "relationships": "policies",
+        "notes": "Purpose-based access control"
+      },
+      {
+        "entity": "BusinessPolicy",
+        "table": "BUSINESSPOLICY_ENTITY",
+        "description": "Data governance policy",
+        "keyAttributes": "name, businessPolicyType, businessPolicyValiditySchedule",
+        "relationships": "governedAssets, businessPolicyLogs",
+        "notes": "Policy definitions"
+      },
+      {
+        "entity": "BusinessPolicyLog",
+        "table": "BUSINESSPOLICYLOG_ENTITY",
+        "description": "Policy execution log",
+        "keyAttributes": "businessPolicyLogMessage, businessPolicyLogTimestamp",
+        "relationships": "businessPolicy",
+        "notes": "Audit trail"
+      }
+    ],
+    "ai": [
+      {
+        "entity": "AIModel",
+        "table": "AIMODEL_ENTITY",
+        "description": "AI/ML model",
+        "keyAttributes": "name, aiModelStatus, aiModelVersion, aiModelType",
+        "relationships": "aiApplications, datasets (via Process)",
+        "notes": "Model governance"
+      },
+      {
+        "entity": "AIApplication",
+        "table": "AIAPPLICATION_ENTITY",
+        "description": "Application using AI models",
+        "keyAttributes": "name, aiApplicationVersion, aiApplicationDevelopmentStage",
+        "relationships": "aiModels",
+        "notes": "App-level AI governance"
+      }
+    ],
+    "goldLayer": [
+      {
+        "view": "ASSETS",
+        "description": "Core lookup table for all assets - primary entry point for Gold layer queries",
+        "keyColumns": "GUID, ASSET_TYPE, ASSET_NAME, ASSET_QUALIFIED_NAME, STATUS, CONNECTOR_NAME",
+        "allColumns": "GUID, ASSET_TYPE, ASSET_NAME, ASSET_QUALIFIED_NAME, DESCRIPTION, README_GUID, STATUS, CREATED_AT, CREATED_BY, UPDATED_AT, UPDATED_BY, CERTIFICATE_STATUS, CERTIFICATE_UPDATED_BY, CERTIFICATE_UPDATED_AT, CONNECTOR_NAME, CONNECTOR_QUALIFIED_NAME, SOURCE_CREATED_AT, SOURCE_CREATED_BY, SOURCE_UPDATED_AT, SOURCE_UPDATED_BY, OWNER_USERS, POPULARITY_SCORE, TAGS, CUSTOM_METADATA, HAS_LINEAGE",
+        "purpose": "Starting point to filter assets before joining to detail views",
+        "notes": "Timestamps in epoch milliseconds"
+      },
+      {
+        "view": "RELATIONAL_ASSET_DETAILS",
+        "description": "Details for relational assets: databases, schemas, tables, views, columns, functions, procedures",
+        "keyColumns": "GUID, DATABASE_SCHEMAS, SCHEMA_TABLES, TABLE_ROW_COUNT, COLUMN_DATATYPE",
+        "allColumns": "GUID, DATABASE_SCHEMAS, SCHEMA_DATABASE_NAME, SCHEMA_TABLES, SCHEMA_VIEWS, TABLE_COLUMN_COUNT, TABLE_ROW_COUNT, TABLE_SIZE_BYTES, TABLE_TOTAL_READ_COUNT, TABLE_RECENT_USERS, VIEW_DEFINITION, COLUMN_DATATYPE, COLUMN_IS_NULLABLE, FUNCTION_LANGUAGE, FUNCTION_RETURN_TYPE, QUERY_RAW_QUERY_TEXT, MATERIALISED_VIEW_DEFINITION, PROCEDURE_DEFINITION",
+        "purpose": "Comprehensive SQL asset metadata including usage stats",
+        "notes": "Join with ASSETS on GUID for base attributes"
+      },
+      {
+        "view": "GLOSSARY_DETAILS",
+        "description": "Information about glossaries, categories, and terms",
+        "keyColumns": "GUID, ASSET_TYPE, ASSET_NAME, TERMS, CATEGORIES, ASSIGNED_ASSETS",
+        "allColumns": "GUID, ASSET_TYPE, ASSET_NAME, TERMS, CATEGORIES, ASSIGNED_ASSETS, README, ANCHOR",
+        "purpose": "Governance workflows for term definitions and assignments",
+        "notes": "ANCHOR links terms/categories to parent glossary"
+      },
+      {
+        "view": "DATA_QUALITY_DETAILS",
+        "description": "Data quality checks from Atlan-native and third-party tools (Anomalo, Soda, Monte Carlo)",
+        "keyColumns": "GUID, SOURCE_URL, ANOMALO_CHECK_STATUS, SODA_CHECK_EVALUATION_STATUS, MC_MONITOR_STATUS",
+        "allColumns": "GUID, SOURCE_URL, ANOMALO_CHECK_TYPE, ANOMALO_CHECK_CATEGORY_TYPE, ANOMALO_CHECK_PRIORITY_LEVEL, ANOMALO_CHECK_STATUS, ANOMALO_CHECK_LAST_RUN_COMPLETED_AT, ANOMALO_CHECK_LINKED_ASSET_QUALIFIED_NAME, SODA_CHECK_ID, SODA_CHECK_DEFINITION, SODA_CHECK_EVALUATION_STATUS, SODA_CHECK_LAST_SCAN_AT, SODA_CHECK_COLUMNS, SODA_CHECK_ASSETS, MC_MONITOR_ID, MC_MONITOR_TYPE, MC_MONITOR_RULE_TYPE, MC_MONITOR_PRIORITY, MC_MONITOR_STATUS, MC_MONITOR_RULE_LAST_EXECUTION_TIME, MC_MONITOR_ASSETS",
+        "purpose": "Unified view of data quality monitoring across platforms",
+        "notes": "26 columns total; platform-specific prefixes"
+      },
+      {
+        "view": "PIPELINE_DETAILS",
+        "description": "Data pipelines and orchestration: Airflow DAGs, dbt models, Matillion jobs",
+        "keyColumns": "GUID, INPUT_GUIDS_TO_PROCESSES, OUTPUT_GUIDS_TO_PROCESSES",
+        "allColumns": "GUID, INPUT_GUIDS_TO_PROCESSES, OUTPUT_GUIDS_TO_PROCESSES",
+        "purpose": "Track data flow dependencies for lineage visualization",
+        "notes": "Covers Orchestration-class entities in metamodel"
+      },
+      {
+        "view": "DATA_MESH_DETAILS",
+        "description": "Data mesh assets: domains, sub-domains, and data products",
+        "keyColumns": "GUID, DATA_PRODUCTS, DATA_DOMAIN, DATA_PRODUCT_STATUS, CRITICALITY",
+        "allColumns": "GUID, DATA_PRODUCTS, PARENT_DOMAIN, STAKEHOLDERS, SUBDOMAINS, DATA_PRODUCT_STATUS, CRITICALITY, SENSITIVITY, VISIBILITY, INPUT_PORT_GUIDS, OUTPUT_PORT_GUIDS, DATA_DOMAIN, ASSETS_DSL, ASSETS_PLAYBOOK_FILTER",
+        "purpose": "Navigate domain hierarchies and data product metadata",
+        "notes": "Supports parent-child domain relationships"
+      },
+      {
+        "view": "LINEAGE",
+        "description": "Simplified lineage view for asset and column-level processes",
+        "keyColumns": "DIRECTION, START_GUID, RELATED_GUID, LEVEL",
+        "allColumns": "DIRECTION, START_GUID, START_NAME, START_TYPE, RELATED_GUID, RELATED_NAME, RELATED_TYPE, CONNECTING_GUID, LEVEL",
+        "purpose": "Upstream/downstream lineage traversal without recursive CTEs",
+        "notes": "DIRECTION: UPSTREAM (sources) or DOWNSTREAM (targets); LEVEL = hop count"
+      },
+      {
+        "view": "TAGS",
+        "description": "Tag assignments to assets including propagation settings",
+        "keyColumns": "ASSET_GUID, TAG_NAME, TAG_VALUE, PROPAGATES",
+        "allColumns": "ASSET_GUID, ASSET_NAME, ASSET_TYPE, TAG_GUID, TAG_NAME, TAG_VALUE, TAG_CONNECTOR_NAME, PROPAGATES",
+        "purpose": "Audit tag coverage and governance classifications",
+        "notes": "PROPAGATES indicates hierarchical tag inheritance"
+      },
+      {
+        "view": "CUSTOM_METADATA",
+        "description": "Custom metadata attribute-value pairs for assets",
+        "keyColumns": "ASSET_GUID, CUSTOM_METADATA_NAME, ATTRIBUTE_NAME, ATTRIBUTE_VALUE",
+        "allColumns": "ASSET_GUID, ASSET_NAME, ASSET_TYPE, CUSTOM_METADATA_GUID, CUSTOM_METADATA_NAME, ATTRIBUTE_NAME, ATTRIBUTE_VALUE",
+        "purpose": "Query custom metadata across all assets",
+        "notes": "Row-level granularity per attribute"
+      },
+      {
+        "view": "README",
+        "description": "README documentation attached to assets",
+        "keyColumns": "ASSET_GUID, ASSET_NAME, DESCRIPTION",
+        "allColumns": "ASSET_GUID, ASSET_NAME, ASSET_TYPE, DESCRIPTION, CREATED_AT, CREATED_BY, UPDATED_AT, UPDATED_BY",
+        "purpose": "Track and audit asset documentation",
+        "notes": "Timestamps in epoch milliseconds"
+      }
+    ]
+  },
+  "exampleQueries": {
+    "core": [
+      {
+        "title": "List All MDLH Tables",
+        "description": "Discover available entity tables in the lakehouse",
+        "query": "SHOW TABLES;"
+      },
+      {
+        "title": "Explore Catalog Integrations",
+        "description": "View configured catalog integrations",
+        "query": "SHOW CATALOG INTEGRATIONS;\nDESCRIBE CATALOG INTEGRATION <integration_name>;"
+      },
+      {
+        "title": "Switch MDLH Environment",
+        "description": "Select which MDLH database to query",
+        "query": "-- Choose your MDLH environment\nUSE FIELD_METADATA;      -- For atlan.atlan.com\nUSE MDLH_GOVERNANCE;     -- For demo-governance.atlan.com\nUSE MDLH_ATLAN_HOME;     -- For home tenant"
+      },
+      {
+        "title": "Time Travel Query",
+        "description": "Query historical data using Iceberg time travel",
+        "query": "-- Query data from a specific timestamp\nSELECT *\nFROM ATLASGLOSSARY_ENTITY\nAT(TIMESTAMP => '2025-07-22 12:00:00'::timestamp_tz)\nLIMIT 10;\n\n-- View snapshot history for a table\nSELECT *\nFROM TABLE(INFORMATION_SCHEMA.ICEBERG_TABLE_SNAPSHOT_REFRESH_HISTORY(\n  TABLE_NAME => 'ATLASGLOSSARY_ENTITY'\n));"
+      },
+      {
+        "title": "Downstream Lineage (No Limit)",
+        "description": "Find ALL downstream assets from a source - no recursion limit",
+        "query": "-- GET DOWNSTREAM ASSETS - NO DISTANCE, NO RECURSION LIMIT\n-- Warning: May be slow for assets with extensive lineage\nWITH RECURSIVE lineage_cte (guid) AS (\n    -- Anchor: Start with your source GUID\n    SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid\n\n    UNION ALL\n    \n    -- Recursive: Find all downstream dependencies\n    SELECT outputs_flat.value::VARCHAR\n    FROM lineage_cte AS L\n    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR\n    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat\n)\nSELECT DISTINCT\n    COALESCE(T.name, V.name, SGELEM.name) AS entity_name,\n    L.guid AS entity_guid,\n    CASE\n        WHEN T.name IS NOT NULL THEN 'TABLE'\n        WHEN V.name IS NOT NULL THEN 'VIEW'\n        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'\n        ELSE 'UNKNOWN'\n    END AS entity_type\nFROM lineage_cte AS L\nLEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid\nLEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid\nLEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid\nORDER BY entity_name ASC;"
+      },
+      {
+        "title": "Downstream Lineage (With Limit)",
+        "description": "Find downstream assets with recursion depth limit and distance tracking",
+        "query": "-- GET DOWNSTREAM ASSETS - WITH DISTANCE AND RECURSION LIMIT\nWITH RECURSIVE lineage_cte (guid, level) AS (\n    -- Anchor: Start with your source GUID\n    SELECT '<YOUR_SOURCE_GUID>'::VARCHAR AS guid, 0 AS level\n\n    UNION ALL\n    \n    -- Recursive: Find downstream, increment level each step\n    SELECT outputs_flat.value::VARCHAR, L.level + 1\n    FROM lineage_cte AS L\n    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR\n    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat\n    WHERE L.level < 5  -- Stop at 5 hops\n)\nSELECT DISTINCT\n    COALESCE(T.name, V.name, SF.name, SGELEM.name) AS entity_name,\n    L.guid AS entity_guid,\n    CASE\n        WHEN T.name IS NOT NULL THEN 'TABLE'\n        WHEN V.name IS NOT NULL THEN 'VIEW'\n        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'\n        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'\n        ELSE 'UNKNOWN'\n    END AS entity_type,\n    L.level AS distance\nFROM lineage_cte AS L\nLEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid\nLEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid\nLEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid\nLEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid\nWHERE L.level > 0  -- Exclude the starting asset\nORDER BY distance ASC;"
+      },
+      {
+        "title": "Upstream Lineage (With Distance)",
+        "description": "Find all upstream sources with distance tracking",
+        "query": "-- GET UPSTREAM ASSETS - WITH DISTANCE AND RECURSION LIMIT\nWITH RECURSIVE lineage_cte (guid, level) AS (\n    -- Anchor: Start with your target GUID\n    SELECT '<YOUR_TARGET_GUID>'::VARCHAR AS guid, 0 AS level\n\n    UNION ALL\n    \n    -- Recursive: Find upstream by joining on OUTPUTS\n    SELECT inputs_flat.value::VARCHAR, L.level + 1\n    FROM lineage_cte AS L\n    -- Note: Join on OUTPUTS to go upstream\n    JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR\n    , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat\n    WHERE L.level < 5  -- Stop at 5 hops\n)\nSELECT DISTINCT\n    COALESCE(T.name, V.name, SF.name) AS entity_name,\n    L.guid AS entity_guid,\n    CASE\n        WHEN T.name IS NOT NULL THEN 'TABLE'\n        WHEN V.name IS NOT NULL THEN 'VIEW'\n        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'\n        ELSE 'UNKNOWN'\n    END AS entity_type,\n    L.level AS distance\nFROM lineage_cte AS L\nLEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid\nLEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid\nLEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid\nWHERE L.level > 0  -- Exclude starting asset\nORDER BY distance ASC;"
+      },
+      {
+        "title": "Bidirectional Lineage",
+        "description": "Get both upstream and downstream lineage with positive/negative distance",
+        "query": "-- BIDIRECTIONAL LINEAGE - Both upstream and downstream\n-- Positive distance = downstream, Negative = upstream\nWITH RECURSIVE downstream_cte (guid, level) AS (\n    SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level\n    UNION ALL\n    SELECT outputs_flat.value::VARCHAR, L.level + 1\n    FROM downstream_cte AS L\n    JOIN PROCESS_ENTITY AS P ON L.guid = P.inputs::ARRAY[0]::VARCHAR\n    , LATERAL FLATTEN(INPUT => P.outputs::ARRAY) AS outputs_flat\n    WHERE L.level < 5\n),\nupstream_cte (guid, level) AS (\n    SELECT '<YOUR_GUID>'::VARCHAR AS guid, 0 AS level\n    UNION ALL\n    SELECT inputs_flat.value::VARCHAR, L.level - 1  -- Negative for upstream\n    FROM upstream_cte AS L\n    JOIN PROCESS_ENTITY AS P ON L.guid = P.outputs::ARRAY[0]::VARCHAR\n    , LATERAL FLATTEN(INPUT => P.inputs::ARRAY) AS inputs_flat\n    WHERE L.level > -5\n),\ncombined_lineage AS (\n    SELECT * FROM downstream_cte\n    UNION ALL\n    SELECT * FROM upstream_cte\n)\nSELECT DISTINCT\n    COALESCE(T.name, V.name, SF.name, SGELEM.name) AS entity_name,\n    L.guid AS entity_guid,\n    CASE\n        WHEN T.name IS NOT NULL THEN 'TABLE'\n        WHEN V.name IS NOT NULL THEN 'VIEW'\n        WHEN SF.name IS NOT NULL THEN 'SALESFORCE OBJECT'\n        WHEN SGELEM.name IS NOT NULL THEN 'SIGMA DATA ELEMENT'\n        ELSE 'UNKNOWN'\n    END AS entity_type,\n    L.level AS distance  -- Negative = upstream, Positive = downstream\nFROM combined_lineage AS L\nLEFT JOIN TABLE_ENTITY AS T ON T.guid = L.guid\nLEFT JOIN VIEW_ENTITY AS V ON V.guid = L.guid\nLEFT JOIN SALESFORCEOBJECT_ENTITY AS SF ON SF.guid = L.guid\nLEFT JOIN SIGMADATAELEMENT_ENTITY AS SGELEM ON SGELEM.guid = L.guid\nWHERE L.level != 0  -- Exclude starting asset\nORDER BY distance ASC;"
+      }
+    ],
+    "glossary": [
+      {
+        "title": "List All Glossaries",
+        "description": "View all business glossaries in your tenant with creator info",
+        "query": "-- First, see all Glossaries in your Atlan tenant\nSELECT\n  NAME,\n  GUID,\n  CREATEDBY\nFROM ATLASGLOSSARY_ENTITY;\n\n-- Note the GUID of the glossary you want to explore\n-- You'll use it in subsequent queries with ARRAY_CONTAINS"
+      },
+      {
+        "title": "Terms with Categories (Full Detail)",
+        "description": "List glossary terms with their parent glossaries and categories resolved to names",
+        "query": "-- Comprehensive query to resolve term relationships\nWITH glossary_lookup AS (\n    SELECT GUID AS glossary_guid, NAME AS glossary_name\n    FROM GLOSSARY_ENTITY\n),\ncategory_lookup AS (\n    SELECT GUID AS category_guid, NAME AS category_name\n    FROM GLOSSARYCATEGORY_ENTITY\n),\nterm_anchors AS (\n    SELECT TERM.GUID AS term_guid,\n           anchor_elem.value::STRING AS glossary_guid\n    FROM GLOSSARYTERM_ENTITY TERM,\n         LATERAL FLATTEN(input => TERM.ANCHOR) AS anchor_elem\n),\nterm_categories AS (\n    SELECT TERM.GUID AS term_guid,\n           category_elem.value::STRING AS category_guid\n    FROM GLOSSARYTERM_ENTITY TERM,\n         LATERAL FLATTEN(input => TERM.CATEGORIES) AS category_elem\n),\nterm_glossary_names AS (\n    SELECT TA.term_guid,\n           LISTAGG(GL.glossary_name, ', ') WITHIN GROUP (ORDER BY GL.glossary_name) AS glossaries\n    FROM term_anchors TA\n    LEFT JOIN glossary_lookup GL ON TA.glossary_guid = GL.glossary_guid\n    GROUP BY TA.term_guid\n),\nterm_category_names AS (\n    SELECT TC.term_guid,\n           LISTAGG(CL.category_name, ', ') WITHIN GROUP (ORDER BY CL.category_name) AS categories\n    FROM term_categories TC\n    LEFT JOIN category_lookup CL ON TC.category_guid = CL.category_guid\n    GROUP BY TC.term_guid\n)\nSELECT\n    T.NAME,\n    T.USERDESCRIPTION,\n    TG.glossaries AS GLOSSARIES,\n    TC.categories AS CATEGORIES,\n    T.GUID\nFROM GLOSSARYTERM_ENTITY T\nLEFT JOIN term_glossary_names TG ON T.GUID = TG.term_guid\nLEFT JOIN term_category_names TC ON T.GUID = TC.term_guid\nLIMIT 100;"
+      },
+      {
+        "title": "Terms by Glossary GUID",
+        "description": "Get all terms belonging to a specific glossary",
+        "query": "SELECT GUID, NAME, USERDESCRIPTION\nFROM ATLASGLOSSARYTERM_ENTITY\nWHERE ARRAY_CONTAINS('<GLOSSARY_GUID>', ANCHOR);"
+      },
+      {
+        "title": "Terms by Creator",
+        "description": "Find all terms created by a specific user",
+        "query": "SELECT GUID, NAME\nFROM ATLASGLOSSARYTERM_ENTITY\nWHERE CREATEDBY = '<username>';"
+      },
+      {
+        "title": "Certificate Status Distribution",
+        "description": "Count terms by certification status",
+        "query": "SELECT CERTIFICATESTATUS, COUNT(GUID) as term_count\nFROM ATLASGLOSSARYTERM_ENTITY\nGROUP BY CERTIFICATESTATUS;"
+      },
+      {
+        "title": "Find Duplicate Terms (Jaro-Winkler)",
+        "description": "Identify similar terms across glossaries using fuzzy matching",
+        "query": "WITH core_terms AS (\n  SELECT NAME AS core_name, GUID AS core_guid,\n         USERDESCRIPTION AS core_description\n  FROM ATLASGLOSSARYTERM_ENTITY\n  WHERE ARRAY_CONTAINS('<CORE_GLOSSARY_GUID>', ANCHOR)\n),\nnon_core_terms AS (\n  SELECT NAME AS non_core_name, GUID AS non_core_guid,\n         USERDESCRIPTION AS non_core_description,\n         ANCHOR AS non_core_anchor_guid\n  FROM ATLASGLOSSARYTERM_ENTITY\n  WHERE NOT(ARRAY_CONTAINS('<CORE_GLOSSARY_GUID>', ANCHOR))\n),\nglossary_lookup AS (\n  SELECT GUID AS glossary_guid, NAME AS glossary_name\n  FROM ATLASGLOSSARY_ENTITY\n)\nSELECT DISTINCT\n  T1.core_name AS source_of_truth_name,\n  T2.non_core_name AS potential_duplicate_name,\n  T3.glossary_name AS duplicate_glossary,\n  JAROWINKLER_SIMILARITY(T1.core_name, T2.non_core_name) AS similarity_score\nFROM core_terms T1\nJOIN non_core_terms T2\n  ON JAROWINKLER_SIMILARITY(T1.core_name, T2.non_core_name) >= 95\n  AND T1.core_guid != T2.non_core_guid\nJOIN glossary_lookup T3\n  ON ARRAY_CONTAINS(T3.glossary_guid, T2.non_core_anchor_guid)\nORDER BY similarity_score DESC;"
+      },
+      {
+        "title": "Find Substring Duplicates",
+        "description": "Find terms where one name contains another",
+        "query": "WITH standardized_terms AS (\n  SELECT NAME AS original_term_name, GUID AS term_guid,\n         USERDESCRIPTION AS term_description,\n         LOWER(REGEXP_REPLACE(NAME, '[ _-]', '', 1, 0)) AS standardized_name\n  FROM ATLASGLOSSARYTERM_ENTITY\n)\nSELECT DISTINCT\n  t1.original_term_name AS potential_duplicate_1_name,\n  t2.original_term_name AS potential_duplicate_2_name,\n  t1.term_guid AS potential_duplicate_1_guid,\n  t2.term_guid AS potential_duplicate_2_guid\nFROM standardized_terms t1\nJOIN standardized_terms t2\n  ON t1.standardized_name LIKE '%' || t2.standardized_name || '%'\n  AND LENGTH(t1.standardized_name) > LENGTH(t2.standardized_name)\n  AND t1.term_guid != t2.term_guid\nORDER BY potential_duplicate_1_name;"
+      }
+    ],
+    "datamesh": [
+      {
+        "title": "List Data Domains",
+        "description": "View all data domains and their hierarchy",
+        "query": "SELECT NAME, USERDESCRIPTION, PARENTDOMAINQUALIFIEDNAME\nFROM DATADOMAIN_ENTITY\nORDER BY NAME;"
+      },
+      {
+        "title": "Active Data Products",
+        "description": "Find all active data products with their status",
+        "query": "SELECT NAME, DATAPRODUCTSTATUS, DATAPRODUCTCRITICALITY\nFROM DATAPRODUCT_ENTITY\nWHERE DATAPRODUCTSTATUS = 'Active'\nORDER BY DATAPRODUCTCRITICALITY DESC;"
+      },
+      {
+        "title": "Data Contracts Overview",
+        "description": "View data contract versions and certification status",
+        "query": "SELECT DATACONTRACTVERSION, CERTIFICATESTATUS, DATACONTRACTASSETGUID\nFROM DATACONTRACT_ENTITY\nORDER BY DATACONTRACTVERSION DESC;"
+      }
+    ],
+    "relational": [
+      {
+        "title": "Basic Table Exploration",
+        "description": "View table metadata with row counts and sizes",
+        "query": "SELECT NAME, ROWCOUNT, COLUMNCOUNT, SIZEBYTES, POPULARITYSCORE\nFROM TABLE_ENTITY\nWHERE SIZEBYTES IS NOT NULL\nORDER BY SIZEBYTES DESC\nLIMIT 100;"
+      },
+      {
+        "title": "Full Column Metadata Export",
+        "description": "Comprehensive column-level metadata with tags and custom metadata as JSON arrays",
+        "query": "-- Column-Level Metadata Query with Aggregated Custom Metadata and Tags\nWITH FILTERED_COLUMNS AS (\n    SELECT GUID\n    FROM COLUMN_ENTITY\n    WHERE CONNECTORNAME IN ('glue', 'snowflake')\n),\n-- Aggregate Custom Metadata for each column as JSON\nCM_AGG AS (\n    SELECT\n        CM.ENTITYGUID,\n        ARRAY_AGG(\n            DISTINCT OBJECT_CONSTRUCT(\n                'set_name', SETDISPLAYNAME,\n                'field_name', ATTRIBUTEDISPLAYNAME,\n                'field_value', ATTRIBUTEVALUE\n            )\n        ) AS CUSTOM_METADATA_JSON\n    FROM CUSTOMMETADATA_RELATIONSHIP CM\n    JOIN FILTERED_COLUMNS FC ON CM.ENTITYGUID = FC.GUID\n    GROUP BY CM.ENTITYGUID\n),\n-- Aggregate Tags for each column as JSON\nTR_AGG AS (\n    SELECT\n        TR.ENTITYGUID,\n        '[' || LISTAGG(\n            OBJECT_CONSTRUCT('name', TR.TAGNAME, 'value', TR.TAGVALUE)::STRING, ','\n        ) WITHIN GROUP (ORDER BY TR.TAGNAME) || ']' AS TAG_JSON\n    FROM TAG_RELATIONSHIP TR\n    JOIN FILTERED_COLUMNS FC ON TR.ENTITYGUID = FC.GUID\n    GROUP BY TR.ENTITYGUID\n)\nSELECT\n    -- Asset Identifiers\n    COL.NAME AS COL_NAME,\n    COL.QUALIFIEDNAME AS COL_QUALIFIEDNAME,\n    COL.GUID AS COL_GUID,\n    COL.DESCRIPTION AS COL_DESCRIPTION,\n    COL.USERDESCRIPTION AS COL_USERDESCRIPTION,\n    COL.CONNECTORNAME, COL.CONNECTIONNAME,\n    COL.DATABASENAME, COL.SCHEMANAME, COL.TABLENAME,\n    -- Source Attributes\n    COL.DATATYPE, COL.SUBDATATYPE,\n    COL.\"ORDER\" AS COL_ORDER,\n    COL.ISPARTITION, COL.ISPRIMARY, COL.ISNULLABLE,\n    COL.PRECISION, COL.MAXLENGTH,\n    -- Atlan Metrics\n    COL.STATUS, COL.HASLINEAGE, COL.POPULARITYSCORE,\n    COL.QUERYCOUNT, COL.QUERYUSERCOUNT,\n    -- Tags & Custom Metadata\n    TR_AGG.TAG_JSON AS COL_TAGS,\n    CM_AGG.CUSTOM_METADATA_JSON AS COL_CUSTOM_METADATA,\n    -- Enrichment\n    COL.CERTIFICATESTATUS, COL.MEANINGS,\n    COL.OWNERUSERS, COL.OWNERGROUPS\nFROM COLUMN_ENTITY COL\nLEFT JOIN CM_AGG ON COL.GUID = CM_AGG.ENTITYGUID\nLEFT JOIN TR_AGG ON COL.GUID = TR_AGG.ENTITYGUID\nWHERE COL.CONNECTORNAME IN ('glue', 'snowflake')\nLIMIT 100;"
+      },
+      {
+        "title": "Tables Without Descriptions",
+        "description": "Find tables missing documentation",
+        "query": "SELECT\n  SUM(CASE WHEN DESCRIPTION IS NOT NULL THEN 1 ELSE 0 END) \"WITH DESCRIPTIONS\",\n  SUM(CASE WHEN DESCRIPTION IS NULL THEN 1 ELSE 0 END) \"WITHOUT DESCRIPTIONS\"\nFROM TABLE_ENTITY;"
+      },
+      {
+        "title": "Storage Reclamation Analysis",
+        "description": "Find large tables by size and popularity for storage optimization",
+        "query": "-- STORAGE RECLAMATION ANALYSIS\n-- Show the largest tables and their popularity scores\n-- Use this to identify large, unused tables for cleanup\nSELECT\n  NAME,\n  ROWCOUNT,\n  COLUMNCOUNT,\n  SIZEBYTES,\n  POPULARITYSCORE\nFROM TABLE_ENTITY\nWHERE SIZEBYTES IS NOT NULL\nORDER BY SIZEBYTES DESC;\n\n-- Calculate total storage used by unpopular tables\nSELECT SUM(SIZEBYTES) as bytes_in_unpopular_tables\nFROM TABLE_ENTITY\nWHERE POPULARITYSCORE < 0.05;"
+      },
+      {
+        "title": "Most Popular Tables",
+        "description": "Find tables with highest query counts",
+        "query": "SELECT NAME, QUERYCOUNT, POPULARITYSCORE, COLUMNCOUNT\nFROM TABLE_ENTITY\nORDER BY QUERYCOUNT DESC\nLIMIT 20;"
+      },
+      {
+        "title": "Frequent Column Updaters",
+        "description": "Find users who update columns most frequently - useful for identifying power users",
+        "query": "-- POPULARITY ANALYSIS\n-- Shows users who update Columns most frequently in Atlan\n-- Useful for identifying power users and data stewards\nSELECT\n  UPDATEDBY,\n  TO_TIMESTAMP(MAX(UPDATETIME)/1000) AS LASTUPDATE,\n  COUNT(*) AS UPDATECOUNT\nFROM COLUMN_ENTITY\nGROUP BY UPDATEDBY\nORDER BY UPDATECOUNT DESC;"
+      },
+      {
+        "title": "Table-Column Join",
+        "description": "Get column details with parent table information",
+        "query": "SELECT tbl.name AS table_name,\n       col.name AS column_name,\n       col.datatype,\n       TO_TIMESTAMP(col.updatetime/1000) AS column_updated,\n       tbl.rowcount\nFROM COLUMN_ENTITY col\nJOIN TABLE_ENTITY tbl ON col.\"TABLE\"[0] = tbl.guid\nLIMIT 50;"
+      },
+      {
+        "title": "Find Column by GUID",
+        "description": "Get parent table for a specific column",
+        "query": "SELECT name AS table_name, rowcount\nFROM TABLE_ENTITY\nWHERE ARRAY_CONTAINS('<COLUMN_GUID>', columns);"
+      },
+      {
+        "title": "Untagged Tables",
+        "description": "Find tables without any classification tags",
+        "query": "SELECT GUID, QUALIFIEDNAME, COLUMNCOUNT, ROWCOUNT\nFROM TABLE_ENTITY\nWHERE ASSETTAGS = '[]';"
+      },
+      {
+        "title": "Inactive Tables",
+        "description": "Find tables with inactive status",
+        "query": "SELECT GUID, QUALIFIEDNAME, COLUMNCOUNT, ROWCOUNT, QUERYCOUNT\nFROM TABLE_ENTITY\nWHERE STATUS = 'INACTIVE';\n\n-- Status distribution\nSELECT STATUS, COUNT(*)\nFROM TABLE_ENTITY\nGROUP BY STATUS;"
+      }
+    ],
+    "queries": [
+      {
+        "title": "List Collections",
+        "description": "View all Insights collections",
+        "query": "SELECT * FROM COLLECTION_ENTITY;"
+      },
+      {
+        "title": "Collection Hierarchy",
+        "description": "See folders within collections",
+        "query": "SELECT c.NAME as collection_name, f.NAME as folder_name\nFROM COLLECTION_ENTITY c\nLEFT JOIN FOLDER_ENTITY f ON f.COLLECTIONQUALIFIEDNAME = c.QUALIFIEDNAME;"
+      }
+    ],
+    "bi": [
+      {
+        "title": "Tableau Calculated Field Duplicates",
+        "description": "Find potential duplicate calculated fields by name",
+        "query": "WITH standardized_metrics AS (\n  SELECT NAME AS original_metric_name, GUID AS metric_guid,\n         FORMULA AS original_formula,\n         LOWER(REGEXP_REPLACE(NAME, '[ _-]', '', 1, 0)) AS standardized_name\n  FROM TABLEAUCALCULATEDFIELD_ENTITY\n)\nSELECT DISTINCT\n  t1.original_metric_name AS duplicate_1_name,\n  t1.metric_guid AS duplicate_1_guid,\n  t1.original_formula AS duplicate_1_formula,\n  t2.original_metric_name AS duplicate_2_name,\n  t2.metric_guid AS duplicate_2_guid,\n  t2.original_formula AS duplicate_2_formula\nFROM standardized_metrics t1\nJOIN standardized_metrics t2\n  ON t1.standardized_name LIKE '%' || t2.standardized_name || '%'\n  AND LENGTH(t1.standardized_name) > LENGTH(t2.standardized_name)\n  AND t1.metric_guid != t2.metric_guid\nORDER BY duplicate_1_name;"
+      },
+      {
+        "title": "Tableau Formula Duplicates",
+        "description": "Find calculated fields with identical formulas",
+        "query": "WITH standardized_metrics AS (\n  SELECT NAME AS metric_name, GUID AS metric_guid, FORMULA AS original_formula,\n         LOWER(REGEXP_REPLACE(FORMULA, '[ _\\[\\]]', '', 1, 0)) AS standardized_formula\n  FROM TABLEAUCALCULATEDFIELD_ENTITY\n)\nSELECT standardized_formula,\n       COUNT(*) AS number_of_metrics,\n       LISTAGG(metric_guid, ', ') WITHIN GROUP (ORDER BY metric_guid) AS all_guids,\n       LISTAGG(metric_name, ', ') WITHIN GROUP (ORDER BY metric_name) AS all_names\nFROM standardized_metrics\nGROUP BY standardized_formula\nHAVING COUNT(*) > 1\nORDER BY number_of_metrics DESC;"
+      },
+      {
+        "title": "Power BI Measure Duplicates",
+        "description": "Find measures with same name across tables",
+        "query": "SELECT\n  t1.NAME \"MEASURE 1 NAME\",\n  t1.GUID \"MEASURE 1 GUID\",\n  t1.POWERBIMEASUREEXPRESSION \"MEASURE 1 EXPRESSION\",\n  t2.NAME \"MEASURE 2 NAME\",\n  t2.GUID \"MEASURE 2 GUID\",\n  t2.POWERBIMEASUREEXPRESSION \"MEASURE 2 EXPRESSION\",\n  t1.\"TABLE\" \"COMMON TABLE\"\nFROM POWERBIMEASURE_ENTITY t1\nJOIN POWERBIMEASURE_ENTITY t2\n  ON t1.NAME = t2.NAME\n  AND GET(t1.\"TABLE\", 0) = GET(t2.\"TABLE\", 0)\nWHERE t1.GUID < t2.GUID\nORDER BY \"MEASURE 1 NAME\";"
+      },
+      {
+        "title": "Power BI Measures by Popularity",
+        "description": "Find most popular Power BI measures",
+        "query": "SELECT NAME, POPULARITYSCORE, POWERBIMEASUREEXPRESSION\nFROM POWERBIMEASURE_ENTITY\nORDER BY POPULARITYSCORE DESC\nLIMIT 20;"
+      },
+      {
+        "title": "Tables with Measures",
+        "description": "Find Power BI tables that have measures",
+        "query": "SELECT * FROM POWERBITABLE_ENTITY\nWHERE POWERBITABLEMEASURECOUNT > 0;"
+      }
+    ],
+    "dbt": [
+      {
+        "title": "dbt Job Status Summary",
+        "description": "Count models by job status",
+        "query": "SELECT dbtJobStatus, COUNT(*)\nFROM DBTMODELCOLUMN_ENTITY\nGROUP BY dbtJobStatus;\n\nSELECT assetDbtJobStatus, COUNT(*)\nFROM TABLE_ENTITY\nGROUP BY assetDbtJobStatus;"
+      },
+      {
+        "title": "dbt Models Overview",
+        "description": "View dbt models with materialization type",
+        "query": "SELECT NAME, DBTALIAS, DBTMATERIALIZATION, DBTRAWSQL\nFROM DBTMODEL_ENTITY\nLIMIT 50;"
+      }
+    ],
+    "storage": [
+      {
+        "title": "S3 Bucket Overview",
+        "description": "List S3 buckets with object counts",
+        "query": "SELECT NAME, S3BUCKETARN, AWSREGION, S3OBJECTCOUNT\nFROM S3BUCKET_ENTITY\nORDER BY S3OBJECTCOUNT DESC;"
+      }
+    ],
+    "orchestration": [
+      {
+        "title": "Airflow DAGs",
+        "description": "List all Airflow DAGs with schedules",
+        "query": "SELECT NAME, AIRFLOWDAGSCHEDULE, AIRFLOWDAGSCHEDULEINTERVAL\nFROM AIRFLOWDAG_ENTITY;"
+      },
+      {
+        "title": "Workflow Entities",
+        "description": "View all workflow definitions",
+        "query": "SELECT * FROM WORKFLOW_ENTITY;"
+      }
+    ],
+    "governance": [
+      {
+        "title": "Most Popular Tags",
+        "description": "Find most frequently used classification tags",
+        "query": "SELECT TAGNAME, COUNT(TAGNAME) as usage_count\nFROM TAG_RELATIONSHIP\nGROUP BY TAGNAME\nORDER BY usage_count DESC;"
+      },
+      {
+        "title": "Tagged Tables",
+        "description": "List all tables with their assigned tags",
+        "query": "-- Get all tables that have tags and their tag names\n-- Useful for auditing tag coverage\nSELECT\n  TB.GUID,\n  TB.NAME AS TABLENAME,\n  TG.TAGNAME\nFROM TABLE_ENTITY TB\nJOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID\nWHERE TB.NAME IS NOT NULL;"
+      },
+      {
+        "title": "Untagged Tables (Compliance)",
+        "description": "Find tables without tags for compliance - includes creator and database for notification",
+        "query": "-- TAG COMPLIANCE USE CASE\n-- Some companies require all tables to have a tag\n-- (e.g., specifying data retention period).\n-- Tables without tags may be flagged for deletion.\n\n-- Find all untagged tables with creator info for follow-up:\nSELECT DISTINCT\n  TB.GUID,\n  TB.NAME AS TABLENAME,\n  TB.CREATEDBY,\n  TB.DATABASEQUALIFIEDNAME\nFROM TABLE_ENTITY TB\nLEFT JOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID\nWHERE TG.TAGNAME IS NULL;\n\n-- Use this to notify creators to add required tags"
+      },
+      {
+        "title": "Custom Metadata Query",
+        "description": "Find assets with specific custom metadata values",
+        "query": "SELECT col.guid, col.name AS column_name,\n       cm.attributedisplayname, cm.attributevalue\nFROM COLUMN_ENTITY col\nJOIN CUSTOMMETADATA_RELATIONSHIP cm ON col.guid = cm.entityguid\nWHERE attributedisplayname = 'Cost Center Attribution'\n  AND attributevalue = 'COGS';"
+      },
+      {
+        "title": "Custom Metadata Overview",
+        "description": "Explore all custom metadata attributes",
+        "query": "SELECT DISTINCT attributedisplayname, attributevalue, COUNT(*)\nFROM CUSTOMMETADATA_RELATIONSHIP\nGROUP BY attributedisplayname, attributevalue\nORDER BY COUNT(*) DESC;"
+      },
+      {
+        "title": "Assets with Tags (Join Pattern)",
+        "description": "List assets with their tags using JOIN pattern",
+        "query": "-- Pattern for listing any asset type with tags\nSELECT\n  TB.GUID,\n  TB.NAME AS TABLENAME,\n  TG.TAGNAME\nFROM TABLE_ENTITY TB\nJOIN TAG_RELATIONSHIP TG ON TB.GUID = TG.ENTITYGUID\nWHERE TB.NAME IS NOT NULL;\n\n-- Same pattern works for columns, views, etc.\n-- Just replace TABLE_ENTITY with the entity type you need"
+      }
+    ],
+    "ai": [
+      {
+        "title": "AI Models Overview",
+        "description": "List all AI/ML models with status",
+        "query": "SELECT NAME, AIMODELSTATUS, AIMODELVERSION, AIMODELTYPE\nFROM AIMODEL_ENTITY\nORDER BY AIMODELVERSION DESC;"
+      }
+    ],
+    "goldLayer": [
+      {
+        "title": "Gold Layer Overview",
+        "description": "List all available Gold layer views",
+        "query": "-- Gold layer views provide curated, query-optimized metadata\n-- Start with ASSETS as your primary entry point\nSHOW VIEWS;\n\n-- Key views:\n-- ASSETS - Core lookup (start here)\n-- RELATIONAL_ASSET_DETAILS - SQL assets\n-- GLOSSARY_DETAILS - Terms & categories\n-- LINEAGE - Asset lineage\n-- TAGS - Classifications\n-- CUSTOM_METADATA - Custom attributes"
+      },
+      {
+        "title": "Find Assets by Connector",
+        "description": "Filter assets using the ASSETS view as entry point",
+        "query": "-- ASSETS is the primary entry point for Gold layer queries\n-- Filter here first, then join to detail views\nSELECT\n  GUID,\n  ASSET_TYPE,\n  ASSET_NAME,\n  CONNECTOR_NAME,\n  CERTIFICATE_STATUS,\n  POPULARITY_SCORE\nFROM ASSETS\nWHERE CONNECTOR_NAME = 'snowflake'\n  AND STATUS = 'ACTIVE'\nORDER BY POPULARITY_SCORE DESC\nLIMIT 100;"
+      },
+      {
+        "title": "Certified Assets with Owners",
+        "description": "Find verified assets that have assigned owners",
+        "query": "SELECT\n  ASSET_NAME,\n  ASSET_TYPE,\n  CONNECTOR_NAME,\n  CERTIFICATE_STATUS,\n  OWNER_USERS\nFROM ASSETS\nWHERE CERTIFICATE_STATUS = 'VERIFIED'\n  AND ARRAY_SIZE(OWNER_USERS) > 0\nORDER BY ASSET_NAME;"
+      },
+      {
+        "title": "Table Details with Usage Stats",
+        "description": "Join ASSETS with RELATIONAL_ASSET_DETAILS for table metrics",
+        "query": "-- Join pattern: Filter in ASSETS, get details from specialized views\nSELECT\n  A.ASSET_NAME,\n  A.CONNECTOR_NAME,\n  R.TABLE_ROW_COUNT,\n  R.TABLE_SIZE_BYTES,\n  R.TABLE_TOTAL_READ_COUNT,\n  R.TABLE_RECENT_USERS\nFROM ASSETS A\nJOIN RELATIONAL_ASSET_DETAILS R ON A.GUID = R.GUID\nWHERE A.ASSET_TYPE = 'Table'\n  AND R.TABLE_ROW_COUNT > 0\nORDER BY R.TABLE_SIZE_BYTES DESC\nLIMIT 50;"
+      },
+      {
+        "title": "Glossary Terms with Assignments",
+        "description": "Find terms and their linked assets",
+        "query": "SELECT\n  ASSET_NAME AS term_name,\n  ANCHOR AS glossary_guid,\n  ARRAY_SIZE(ASSIGNED_ASSETS) AS asset_count,\n  ARRAY_SIZE(CATEGORIES) AS category_count\nFROM GLOSSARY_DETAILS\nWHERE ASSET_TYPE = 'AtlasGlossaryTerm'\n  AND ARRAY_SIZE(ASSIGNED_ASSETS) > 0\nORDER BY asset_count DESC;"
+      },
+      {
+        "title": "Lineage Traversal (Simplified)",
+        "description": "Use LINEAGE view instead of recursive CTEs for lineage queries",
+        "query": "-- LINEAGE view provides pre-computed lineage paths\n-- Much simpler than recursive CTEs on PROCESS_ENTITY\n\n-- Downstream assets (what depends on this asset)\nSELECT\n  START_NAME,\n  RELATED_NAME,\n  RELATED_TYPE,\n  LEVEL AS hops_away\nFROM LINEAGE\nWHERE START_GUID = '<YOUR_ASSET_GUID>'\n  AND DIRECTION = 'DOWNSTREAM'\nORDER BY LEVEL ASC;\n\n-- Upstream assets (sources feeding this asset)\nSELECT\n  START_NAME,\n  RELATED_NAME,\n  RELATED_TYPE,\n  LEVEL AS hops_away\nFROM LINEAGE\nWHERE START_GUID = '<YOUR_ASSET_GUID>'\n  AND DIRECTION = 'UPSTREAM'\nORDER BY LEVEL ASC;"
+      },
+      {
+        "title": "Tag Coverage Analysis",
+        "description": "Audit which assets have specific tags",
+        "query": "-- Find all assets with a specific tag\nSELECT\n  ASSET_NAME,\n  ASSET_TYPE,\n  TAG_NAME,\n  TAG_VALUE,\n  PROPAGATES\nFROM TAGS\nWHERE TAG_NAME = 'PII'\nORDER BY ASSET_TYPE, ASSET_NAME;\n\n-- Tag distribution summary\nSELECT\n  TAG_NAME,\n  COUNT(DISTINCT ASSET_GUID) AS asset_count,\n  COUNT(CASE WHEN PROPAGATES THEN 1 END) AS propagated_count\nFROM TAGS\nGROUP BY TAG_NAME\nORDER BY asset_count DESC;"
+      },
+      {
+        "title": "Custom Metadata Query",
+        "description": "Find assets by custom metadata values using Gold layer",
+        "query": "SELECT\n  ASSET_NAME,\n  ASSET_TYPE,\n  CUSTOM_METADATA_NAME,\n  ATTRIBUTE_NAME,\n  ATTRIBUTE_VALUE\nFROM CUSTOM_METADATA\nWHERE CUSTOM_METADATA_NAME = 'Data Classification'\n  AND ATTRIBUTE_NAME = 'Sensitivity Level'\n  AND ATTRIBUTE_VALUE = 'High'\nORDER BY ASSET_TYPE, ASSET_NAME;"
+      },
+      {
+        "title": "Data Quality Status",
+        "description": "Check data quality across platforms",
+        "query": "-- Anomalo checks status\nSELECT\n  A.ASSET_NAME,\n  D.ANOMALO_CHECK_TYPE,\n  D.ANOMALO_CHECK_STATUS,\n  D.ANOMALO_CHECK_PRIORITY_LEVEL\nFROM ASSETS A\nJOIN DATA_QUALITY_DETAILS D ON A.GUID = D.GUID\nWHERE D.ANOMALO_CHECK_STATUS IS NOT NULL\nORDER BY D.ANOMALO_CHECK_PRIORITY_LEVEL;\n\n-- Monte Carlo monitors\nSELECT\n  A.ASSET_NAME,\n  D.MC_MONITOR_TYPE,\n  D.MC_MONITOR_STATUS,\n  D.MC_MONITOR_PRIORITY\nFROM ASSETS A\nJOIN DATA_QUALITY_DETAILS D ON A.GUID = D.GUID\nWHERE D.MC_MONITOR_STATUS IS NOT NULL;"
+      },
+      {
+        "title": "Data Mesh Inventory",
+        "description": "Explore data domains and products",
+        "query": "-- List data domains with product counts\nSELECT\n  A.ASSET_NAME AS domain_name,\n  ARRAY_SIZE(D.DATA_PRODUCTS) AS product_count,\n  ARRAY_SIZE(D.SUBDOMAINS) AS subdomain_count,\n  ARRAY_SIZE(D.STAKEHOLDERS) AS stakeholder_count\nFROM ASSETS A\nJOIN DATA_MESH_DETAILS D ON A.GUID = D.GUID\nWHERE A.ASSET_TYPE = 'DataDomain'\nORDER BY product_count DESC;\n\n-- Data products by status\nSELECT\n  A.ASSET_NAME AS product_name,\n  D.DATA_PRODUCT_STATUS,\n  D.CRITICALITY,\n  D.SENSITIVITY,\n  D.VISIBILITY\nFROM ASSETS A\nJOIN DATA_MESH_DETAILS D ON A.GUID = D.GUID\nWHERE A.ASSET_TYPE = 'DataProduct'\nORDER BY D.CRITICALITY DESC;"
+      },
+      {
+        "title": "Pipeline Assets",
+        "description": "View orchestration pipelines and their dependencies",
+        "query": "SELECT\n  A.ASSET_NAME,\n  A.ASSET_TYPE,\n  A.CONNECTOR_NAME,\n  P.INPUT_GUIDS_TO_PROCESSES,\n  P.OUTPUT_GUIDS_TO_PROCESSES\nFROM ASSETS A\nJOIN PIPELINE_DETAILS P ON A.GUID = P.GUID\nWHERE A.ASSET_TYPE IN ('AirflowDag', 'DbtModel', 'MatillionJob')\nORDER BY A.CONNECTOR_NAME, A.ASSET_NAME;"
+      },
+      {
+        "title": "Documentation Coverage",
+        "description": "Find assets with README documentation",
+        "query": "-- Assets with documentation\nSELECT\n  R.ASSET_NAME,\n  R.ASSET_TYPE,\n  R.DESCRIPTION,\n  R.UPDATED_BY,\n  TO_TIMESTAMP(R.UPDATED_AT/1000) AS last_updated\nFROM README R\nWHERE R.DESCRIPTION IS NOT NULL\n  AND LENGTH(R.DESCRIPTION) > 0\nORDER BY R.UPDATED_AT DESC\nLIMIT 50;\n\n-- Documentation gap analysis\nSELECT\n  A.ASSET_TYPE,\n  COUNT(*) AS total_assets,\n  COUNT(R.GUID) AS with_readme,\n  COUNT(*) - COUNT(R.GUID) AS missing_readme\nFROM ASSETS A\nLEFT JOIN README R ON A.GUID = R.ASSET_GUID\nGROUP BY A.ASSET_TYPE\nORDER BY missing_readme DESC;"
+      },
+      {
+        "title": "Active Assets by Type and Connector",
+        "description": "Inventory of active assets by type and connector for adoption dashboards",
+        "query": "SELECT\n  a.ASSET_TYPE,\n  a.CONNECTOR_NAME,\n  COUNT(*) AS ASSET_COUNT\nFROM ASSETS a\nWHERE a.STATUS = 'ACTIVE'\nGROUP BY a.ASSET_TYPE, a.CONNECTOR_NAME\nORDER BY ASSET_COUNT DESC;"
+      },
+      {
+        "title": "Top Popular Tables by Connector",
+        "description": "Most popular tables per connector based on POPULARITY_SCORE",
+        "query": "SELECT\n  a.CONNECTOR_NAME,\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  a.POPULARITY_SCORE\nFROM ASSETS a\nWHERE a.STATUS = 'ACTIVE'\n  AND a.ASSET_TYPE = 'Table'\n  AND a.POPULARITY_SCORE IS NOT NULL\nORDER BY a.POPULARITY_SCORE DESC\nLIMIT 100;"
+      },
+      {
+        "title": "Owner Coverage by Asset Type",
+        "description": "Percentage of active assets with at least one owner, by asset type",
+        "query": "WITH per_type AS (\n  SELECT\n    a.ASSET_TYPE,\n    COUNT(*) AS TOTAL_ASSETS,\n    SUM(CASE WHEN ARRAY_SIZE(a.OWNER_USERS) > 0 THEN 1 ELSE 0 END) AS ASSETS_WITH_OWNER\n  FROM ASSETS a\n  WHERE a.STATUS = 'ACTIVE'\n  GROUP BY a.ASSET_TYPE\n)\nSELECT\n  ASSET_TYPE,\n  TOTAL_ASSETS,\n  ASSETS_WITH_OWNER,\n  ROUND(ASSETS_WITH_OWNER * 100.0 / NULLIF(TOTAL_ASSETS, 0), 2) AS OWNER_COVERAGE_PCT\nFROM per_type\nORDER BY OWNER_COVERAGE_PCT ASC;"
+      },
+      {
+        "title": "Assets Missing Owners or Tags",
+        "description": "Find active assets with no owners or tags for governance remediation",
+        "query": "SELECT\n  a.ASSET_TYPE,\n  a.CONNECTOR_NAME,\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  ARRAY_SIZE(a.OWNER_USERS) AS OWNER_COUNT,\n  ARRAY_SIZE(a.TAGS) AS TAG_COUNT\nFROM ASSETS a\nWHERE a.STATUS = 'ACTIVE'\n  AND (ARRAY_SIZE(a.OWNER_USERS) = 0 OR ARRAY_SIZE(a.TAGS) = 0)\nORDER BY a.CONNECTOR_NAME, a.ASSET_TYPE, a.ASSET_NAME;"
+      },
+      {
+        "title": "Asset Metadata Completeness Summary",
+        "description": "Summary of assets with descriptions, READMEs, and glossary terms",
+        "query": "WITH asset_flags AS (\n  SELECT\n    a.GUID,\n    a.ASSET_TYPE,\n    a.CONNECTOR_NAME,\n    CASE WHEN a.DESCRIPTION IS NOT NULL AND LENGTH(TRIM(a.DESCRIPTION)) > 0 THEN 1 ELSE 0 END AS HAS_DESCRIPTION,\n    CASE WHEN a.README_GUID IS NOT NULL THEN 1 ELSE 0 END AS HAS_README,\n    CASE WHEN a.TERM_GUIDS IS NOT NULL AND ARRAY_SIZE(a.TERM_GUIDS) > 0 THEN 1 ELSE 0 END AS HAS_TERMS\n  FROM ASSETS a\n  WHERE a.STATUS = 'ACTIVE'\n)\nSELECT\n  ASSET_TYPE,\n  CONNECTOR_NAME,\n  COUNT(*) AS TOTAL_ASSETS,\n  SUM(HAS_DESCRIPTION) AS WITH_DESCRIPTION,\n  ROUND(SUM(HAS_DESCRIPTION) * 100.0 / NULLIF(COUNT(*), 0), 2) AS DESCRIPTION_COVERAGE_PCT,\n  SUM(HAS_README) AS WITH_README,\n  ROUND(SUM(HAS_README) * 100.0 / NULLIF(COUNT(*), 0), 2) AS README_COVERAGE_PCT,\n  SUM(HAS_TERMS) AS WITH_TERMS,\n  ROUND(SUM(HAS_TERMS) * 100.0 / NULLIF(COUNT(*), 0), 2) AS TERM_COVERAGE_PCT\nFROM asset_flags\nGROUP BY ASSET_TYPE, CONNECTOR_NAME\nORDER BY DESCRIPTION_COVERAGE_PCT ASC;"
+      },
+      {
+        "title": "Metadata Completeness by Domain",
+        "description": "Roll up metadata completeness by data domain for domain-level scorecards",
+        "query": "WITH domains AS (\n  SELECT\n    a.GUID AS DOMAIN_GUID,\n    a.ASSET_NAME AS DOMAIN_NAME\n  FROM ASSETS a\n  WHERE a.ASSET_TYPE = 'DataDomain'\n),\nasset_flags AS (\n  SELECT\n    a.GUID,\n    a.ASSET_TYPE,\n    d.DOMAIN_NAME,\n    CASE WHEN a.DESCRIPTION IS NOT NULL AND LENGTH(TRIM(a.DESCRIPTION)) > 0 THEN 1 ELSE 0 END AS HAS_DESCRIPTION,\n    CASE WHEN a.README_GUID IS NOT NULL THEN 1 ELSE 0 END AS HAS_README,\n    CASE WHEN a.TERM_GUIDS IS NOT NULL AND ARRAY_SIZE(a.TERM_GUIDS) > 0 THEN 1 ELSE 0 END AS HAS_TERMS\n  FROM ASSETS a\n  LEFT JOIN DATA_MESH_DETAILS dmd ON a.GUID = dmd.GUID\n  LEFT JOIN domains d ON dmd.DATA_DOMAIN = d.DOMAIN_GUID\n  WHERE a.STATUS = 'ACTIVE'\n)\nSELECT\n  COALESCE(DOMAIN_NAME, 'Unassigned') AS DOMAIN_NAME,\n  COUNT(*) AS TOTAL_ASSETS,\n  SUM(HAS_DESCRIPTION) AS WITH_DESCRIPTION,\n  ROUND(SUM(HAS_DESCRIPTION) * 100.0 / NULLIF(COUNT(*), 0), 2) AS DESCRIPTION_COVERAGE_PCT,\n  SUM(HAS_README) AS WITH_README,\n  ROUND(SUM(HAS_README) * 100.0 / NULLIF(COUNT(*), 0), 2) AS README_COVERAGE_PCT,\n  SUM(HAS_TERMS) AS WITH_TERMS,\n  ROUND(SUM(HAS_TERMS) * 100.0 / NULLIF(COUNT(*), 0), 2) AS TERM_COVERAGE_PCT\nFROM asset_flags\nGROUP BY COALESCE(DOMAIN_NAME, 'Unassigned')\nORDER BY DESCRIPTION_COVERAGE_PCT ASC;"
+      },
+      {
+        "title": "Glossary Metadata Completeness",
+        "description": "Evaluate how well glossary terms are documented and adopted",
+        "query": "WITH term_flags AS (\n  SELECT\n    g.GUID,\n    g.NAME,\n    g.ANCHOR_GUID,\n    CASE WHEN g.DESCRIPTION IS NOT NULL AND LENGTH(TRIM(g.DESCRIPTION)) > 0 THEN 1 ELSE 0 END AS HAS_DESCRIPTION,\n    CASE WHEN g.README_GUID IS NOT NULL THEN 1 ELSE 0 END AS HAS_README,\n    CASE WHEN g.ASSIGNED_ENTITIES IS NOT NULL AND ARRAY_SIZE(g.ASSIGNED_ENTITIES) > 0 THEN 1 ELSE 0 END AS HAS_ASSIGNED_ASSETS\n  FROM GLOSSARY_DETAILS g\n  WHERE g.ASSET_TYPE = 'GlossaryTerm'\n)\nSELECT\n  ANCHOR_GUID AS GLOSSARY_GUID,\n  COUNT(*) AS TOTAL_TERMS,\n  SUM(HAS_DESCRIPTION) AS TERMS_WITH_DESCRIPTION,\n  ROUND(SUM(HAS_DESCRIPTION) * 100.0 / NULLIF(COUNT(*), 0), 2) AS DESCRIPTION_COVERAGE_PCT,\n  SUM(HAS_README) AS TERMS_WITH_README,\n  ROUND(SUM(HAS_README) * 100.0 / NULLIF(COUNT(*), 0), 2) AS README_COVERAGE_PCT,\n  SUM(HAS_ASSIGNED_ASSETS) AS TERMS_WITH_ASSIGNED_ASSETS,\n  ROUND(SUM(HAS_ASSIGNED_ASSETS) * 100.0 / NULLIF(COUNT(*), 0), 2) AS ADOPTION_COVERAGE_PCT\nFROM term_flags\nGROUP BY ANCHOR_GUID\nORDER BY ADOPTION_COVERAGE_PCT ASC;"
+      },
+      {
+        "title": "Terms Without Assigned Assets",
+        "description": "Identify business terms not yet linked to any assets",
+        "query": "SELECT\n  g.GUID,\n  g.NAME AS TERM_NAME,\n  g.DESCRIPTION,\n  g.ANCHOR_GUID AS GLOSSARY_GUID\nFROM GLOSSARY_DETAILS g\nWHERE g.ASSET_TYPE = 'GlossaryTerm'\n  AND (g.ASSIGNED_ENTITIES IS NULL OR ARRAY_SIZE(g.ASSIGNED_ENTITIES) = 0)\nORDER BY g.NAME;"
+      },
+      {
+        "title": "Term Adoption Summary",
+        "description": "Summarize how many assets are assigned to each term",
+        "query": "SELECT\n  g.GUID AS TERM_GUID,\n  g.NAME AS TERM_NAME,\n  ARRAY_SIZE(COALESCE(g.ASSIGNED_ENTITIES, ARRAY_CONSTRUCT())) AS ASSIGNED_ASSET_COUNT\nFROM GLOSSARY_DETAILS g\nWHERE g.ASSET_TYPE = 'GlossaryTerm'\nORDER BY ASSIGNED_ASSET_COUNT DESC, TERM_NAME;"
+      },
+      {
+        "title": "Glossary Terms by Glossary",
+        "description": "Count terms and categories in each glossary",
+        "query": "WITH anchors AS (\n  SELECT\n    GUID AS GLOSSARY_GUID,\n    NAME AS GLOSSARY_NAME\n  FROM GLOSSARY_DETAILS\n  WHERE ASSET_TYPE = 'Glossary'\n)\nSELECT\n  a.GLOSSARY_GUID,\n  a.GLOSSARY_NAME,\n  SUM(CASE WHEN g.ASSET_TYPE = 'GlossaryTerm' THEN 1 ELSE 0 END) AS TERM_COUNT,\n  SUM(CASE WHEN g.ASSET_TYPE = 'GlossaryCategory' THEN 1 ELSE 0 END) AS CATEGORY_COUNT\nFROM anchors a\nLEFT JOIN GLOSSARY_DETAILS g ON g.ANCHOR_GUID = a.GLOSSARY_GUID\nGROUP BY a.GLOSSARY_GUID, a.GLOSSARY_NAME\nORDER BY TERM_COUNT DESC;"
+      },
+      {
+        "title": "Assets Without READMEs",
+        "description": "Find active assets that do not have README documentation",
+        "query": "SELECT\n  a.ASSET_TYPE,\n  a.CONNECTOR_NAME,\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME\nFROM ASSETS a\nWHERE a.STATUS = 'ACTIVE'\n  AND a.README_GUID IS NULL\nORDER BY a.CONNECTOR_NAME, a.ASSET_TYPE, a.ASSET_NAME;"
+      },
+      {
+        "title": "Assets with README Text",
+        "description": "Export assets with their README content for knowledge base indexing",
+        "query": "SELECT\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  a.ASSET_TYPE,\n  r.DESCRIPTION AS README_TEXT\nFROM ASSETS a\nJOIN README r ON a.README_GUID = r.GUID\nWHERE a.STATUS = 'ACTIVE';"
+      },
+      {
+        "title": "Export Assets with Tags and Custom Metadata",
+        "description": "Flattened export of assets with all tags and custom metadata",
+        "query": "SELECT\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  a.ASSET_TYPE,\n  a.CONNECTOR_NAME,\n  t.TAG_NAME,\n  t.TAG_VALUE,\n  cm.CUSTOM_METADATA_NAME,\n  cm.ATTRIBUTE_NAME,\n  cm.ATTRIBUTE_VALUE\nFROM ASSETS a\nLEFT JOIN TAGS t ON a.GUID = t.ASSET_GUID\nLEFT JOIN CUSTOM_METADATA cm ON a.GUID = cm.ASSET_GUID\nWHERE a.STATUS = 'ACTIVE';"
+      },
+      {
+        "title": "Active Data Products by Status",
+        "description": "List data products with status, criticality, sensitivity, and visibility",
+        "query": "SELECT\n  d.GUID,\n  a.ASSET_NAME AS DATA_PRODUCT_NAME,\n  d.DATA_PRODUCT_STATUS,\n  d.CRITICALITY,\n  d.SENSITIVITY,\n  d.VISIBILITY,\n  d.DATA_DOMAIN\nFROM DATA_MESH_DETAILS d\nJOIN ASSETS a ON d.GUID = a.GUID\nWHERE d.ASSET_TYPE = 'DataProduct'\n  AND a.STATUS = 'ACTIVE';"
+      },
+      {
+        "title": "Data Domains Without Stakeholders",
+        "description": "Find data domains missing stakeholder assignments",
+        "query": "SELECT\n  d.GUID,\n  a.ASSET_NAME AS DOMAIN_NAME,\n  d.PARENT_DOMAIN,\n  ARRAY_SIZE(COALESCE(d.SUBDOMAINS, ARRAY_CONSTRUCT())) AS SUBDOMAIN_COUNT\nFROM DATA_MESH_DETAILS d\nJOIN ASSETS a ON d.GUID = a.GUID\nWHERE d.ASSET_TYPE = 'DataDomain'\n  AND (d.STAKEHOLDERS IS NULL OR ARRAY_SIZE(d.STAKEHOLDERS) = 0);"
+      },
+      {
+        "title": "Lineage Coverage by Connector",
+        "description": "Percentage of active assets with lineage for each connector",
+        "query": "SELECT\n  a.CONNECTOR_NAME,\n  COUNT(*) AS TOTAL_ASSETS,\n  SUM(CASE WHEN a.HAS_LINEAGE THEN 1 ELSE 0 END) AS ASSETS_WITH_LINEAGE,\n  ROUND(SUM(CASE WHEN a.HAS_LINEAGE THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS LINEAGE_COVERAGE_PCT\nFROM ASSETS a\nWHERE a.STATUS = 'ACTIVE'\nGROUP BY a.CONNECTOR_NAME\nORDER BY LINEAGE_COVERAGE_PCT ASC;"
+      },
+      {
+        "title": "Assets Without Lineage",
+        "description": "List active assets missing lineage for prioritization",
+        "query": "SELECT\n  a.ASSET_TYPE,\n  a.CONNECTOR_NAME,\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME\nFROM ASSETS a\nWHERE a.STATUS = 'ACTIVE'\n  AND a.HAS_LINEAGE = FALSE\nORDER BY a.CONNECTOR_NAME, a.ASSET_TYPE, a.ASSET_NAME;"
+      },
+      {
+        "title": "Downstream Impact Analysis",
+        "description": "Find all downstream assets from a starting asset for impact analysis",
+        "query": "SELECT\n  l.START_GUID,\n  s.ASSET_QUALIFIED_NAME AS START_QUALIFIED_NAME,\n  s.ASSET_NAME AS START_NAME,\n  l.RELATED_GUID,\n  r.ASSET_QUALIFIED_NAME AS RELATED_QUALIFIED_NAME,\n  r.ASSET_NAME AS RELATED_NAME,\n  r.ASSET_TYPE AS RELATED_TYPE,\n  l.LEVEL\nFROM LINEAGE l\nJOIN ASSETS s ON l.START_GUID = s.GUID\nJOIN ASSETS r ON l.RELATED_GUID = r.GUID\nWHERE l.DIRECTION = 'DOWNSTREAM'\n  AND s.ASSET_QUALIFIED_NAME = '<START_ASSET_QUALIFIED_NAME>'\n  AND l.LEVEL BETWEEN 1 AND 5\nORDER BY l.LEVEL, RELATED_TYPE, RELATED_NAME;"
+      },
+      {
+        "title": "Upstream Root-Cause Analysis",
+        "description": "Traverse upstream lineage to find source systems feeding an asset",
+        "query": "SELECT\n  l.START_GUID,\n  s.ASSET_QUALIFIED_NAME AS START_QUALIFIED_NAME,\n  s.ASSET_NAME AS START_NAME,\n  l.RELATED_GUID,\n  r.ASSET_QUALIFIED_NAME AS RELATED_QUALIFIED_NAME,\n  r.ASSET_NAME AS RELATED_NAME,\n  r.ASSET_TYPE AS RELATED_TYPE,\n  l.LEVEL\nFROM LINEAGE l\nJOIN ASSETS s ON l.START_GUID = s.GUID\nJOIN ASSETS r ON l.RELATED_GUID = r.GUID\nWHERE l.DIRECTION = 'UPSTREAM'\n  AND s.ASSET_QUALIFIED_NAME = '<START_ASSET_QUALIFIED_NAME>'\n  AND l.LEVEL BETWEEN 1 AND 5\nORDER BY l.LEVEL, RELATED_TYPE, RELATED_NAME;"
+      },
+      {
+        "title": "Full Lineage Export",
+        "description": "Export all lineage relationships with asset details for external tools",
+        "query": "SELECT\n  l.DIRECTION,\n  l.LEVEL,\n  l.START_GUID,\n  s.ASSET_QUALIFIED_NAME AS START_QUALIFIED_NAME,\n  s.ASSET_NAME AS START_NAME,\n  s.ASSET_TYPE AS START_TYPE,\n  l.RELATED_GUID,\n  r.ASSET_QUALIFIED_NAME AS RELATED_QUALIFIED_NAME,\n  r.ASSET_NAME AS RELATED_NAME,\n  r.ASSET_TYPE AS RELATED_TYPE,\n  l.CONNECTING_GUID\nFROM LINEAGE l\nJOIN ASSETS s ON l.START_GUID = s.GUID\nJOIN ASSETS r ON l.RELATED_GUID = r.GUID\nWHERE s.STATUS = 'ACTIVE'\n  AND r.STATUS = 'ACTIVE';"
+      },
+      {
+        "title": "Downstream Impacted BI Dashboards",
+        "description": "Find BI dashboards impacted by changes to a table",
+        "query": "SELECT DISTINCT\n  r.ASSET_QUALIFIED_NAME AS DASHBOARD_QUALIFIED_NAME,\n  r.ASSET_NAME AS DASHBOARD_NAME,\n  r.CONNECTOR_NAME,\n  l.LEVEL\nFROM LINEAGE l\nJOIN ASSETS s ON l.START_GUID = s.GUID\nJOIN ASSETS r ON l.RELATED_GUID = r.GUID\nWHERE l.DIRECTION = 'DOWNSTREAM'\n  AND s.ASSET_QUALIFIED_NAME = '<SOURCE_TABLE_QUALIFIED_NAME>'\n  AND r.ASSET_TYPE IN ('BIDashboard', 'PowerBIReport', 'TableauDashboard')\n  AND l.LEVEL BETWEEN 1 AND 5\nORDER BY l.LEVEL, r.CONNECTOR_NAME, DASHBOARD_NAME;"
+      },
+      {
+        "title": "Tag Coverage by Connector",
+        "description": "Percentage of active assets per connector with at least one tag",
+        "query": "SELECT\n  a.CONNECTOR_NAME,\n  COUNT(*) AS TOTAL_ASSETS,\n  SUM(CASE WHEN ARRAY_SIZE(a.TAGS) > 0 THEN 1 ELSE 0 END) AS ASSETS_WITH_TAGS,\n  ROUND(SUM(CASE WHEN ARRAY_SIZE(a.TAGS) > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS TAG_COVERAGE_PCT\nFROM ASSETS a\nWHERE a.STATUS = 'ACTIVE'\nGROUP BY a.CONNECTOR_NAME\nORDER BY TAG_COVERAGE_PCT ASC;"
+      },
+      {
+        "title": "DQ Checks by Status and Tool",
+        "description": "Summarize data quality checks by tool and status",
+        "query": "SELECT\n  CASE\n    WHEN dq.ASSET_TYPE = 'AnomaloCheck' THEN 'Anomalo'\n    WHEN dq.ASSET_TYPE = 'SodaCheck' THEN 'Soda'\n    WHEN dq.ASSET_TYPE = 'MCMonitor' THEN 'MonteCarlo'\n    ELSE dq.ASSET_TYPE\n  END AS TOOL,\n  COALESCE(dq.ANOMALO_CHECK_STATUS, dq.SODA_CHECK_EVALUATION_STATUS, dq.MC_MONITOR_STATUS) AS CHECK_STATUS,\n  COUNT(*) AS CHECK_COUNT\nFROM DATA_QUALITY_DETAILS dq\nGROUP BY TOOL, COALESCE(dq.ANOMALO_CHECK_STATUS, dq.SODA_CHECK_EVALUATION_STATUS, dq.MC_MONITOR_STATUS)\nORDER BY TOOL, CHECK_COUNT DESC;"
+      },
+      {
+        "title": "Stale DQ Checks by Last Run",
+        "description": "Find checks that haven't run in the last N days",
+        "query": "SELECT\n  dq.GUID,\n  dq.ASSET_TYPE,\n  dq.SOURCE_URL,\n  COALESCE(dq.ANOMALO_CHECK_LAST_RUN_COMPLETED_AT,\n           dq.SODA_CHECK_LAST_SCAN_AT,\n           dq.MC_MONITOR_RULE_LAST_EXECUTION_TIME) AS LAST_RUN_TS\nFROM DATA_QUALITY_DETAILS dq\nWHERE COALESCE(dq.ANOMALO_CHECK_LAST_RUN_COMPLETED_AT,\n               dq.SODA_CHECK_LAST_SCAN_AT,\n               dq.MC_MONITOR_RULE_LAST_EXECUTION_TIME) < DATEADD('day', -7, CURRENT_TIMESTAMP())\nORDER BY LAST_RUN_TS ASC;"
+      },
+      {
+        "title": "Top Tables by Read Count",
+        "description": "Most-read tables indicating analytical workload concentration",
+        "query": "SELECT\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  r.TABLE_ROW_COUNT,\n  r.TABLE_TOTAL_READ_COUNT,\n  r.TABLE_SIZE_BYTES\nFROM RELATIONAL_ASSET_DETAILS r\nJOIN ASSETS a ON r.GUID = a.GUID\nWHERE r.ASSET_TYPE = 'Table'\n  AND a.STATUS = 'ACTIVE'\nORDER BY r.TABLE_TOTAL_READ_COUNT DESC\nLIMIT 100;"
+      },
+      {
+        "title": "Unused Tables (Cleanup Candidates)",
+        "description": "Tables with zero or very low read counts for cost optimization",
+        "query": "SELECT\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  r.TABLE_ROW_COUNT,\n  r.TABLE_TOTAL_READ_COUNT,\n  r.TABLE_SIZE_BYTES\nFROM RELATIONAL_ASSET_DETAILS r\nJOIN ASSETS a ON r.GUID = a.GUID\nWHERE r.ASSET_TYPE = 'Table'\n  AND a.STATUS = 'ACTIVE'\n  AND COALESCE(r.TABLE_TOTAL_READ_COUNT, 0) <= 1\nORDER BY r.TABLE_SIZE_BYTES DESC;"
+      },
+      {
+        "title": "Recent Users by Table",
+        "description": "Expand recent users array to show who accessed each table",
+        "query": "SELECT\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  u.VALUE::STRING AS RECENT_USER\nFROM RELATIONAL_ASSET_DETAILS r\nJOIN ASSETS a ON r.GUID = a.GUID,\nLATERAL FLATTEN(input => r.TABLE_RECENT_USERS) u\nWHERE r.ASSET_TYPE = 'Table'\n  AND a.STATUS = 'ACTIVE';"
+      },
+      {
+        "title": "Pipeline Inputs and Outputs",
+        "description": "List all input and output assets for a pipeline process",
+        "query": "WITH pipeline AS (\n  SELECT\n    p.GUID,\n    a.ASSET_NAME AS PIPELINE_NAME\n  FROM PIPELINE_DETAILS p\n  JOIN ASSETS a ON p.GUID = a.GUID\n  WHERE a.ASSET_QUALIFIED_NAME = '<PIPELINE_QUALIFIED_NAME>'\n)\nSELECT\n  'INPUT' AS IO_TYPE,\n  s.ASSET_QUALIFIED_NAME,\n  s.ASSET_NAME,\n  s.ASSET_TYPE\nFROM pipeline pl\nJOIN PIPELINE_DETAILS pd ON pl.GUID = pd.GUID,\nLATERAL FLATTEN(input => pd.INPUT_GUIDS_TO_PROCESSES) ig\nJOIN ASSETS s ON ig.VALUE::STRING = s.GUID\nUNION ALL\nSELECT\n  'OUTPUT' AS IO_TYPE,\n  o.ASSET_QUALIFIED_NAME,\n  o.ASSET_NAME,\n  o.ASSET_TYPE\nFROM pipeline pl\nJOIN PIPELINE_DETAILS pd ON pl.GUID = pd.GUID,\nLATERAL FLATTEN(input => pd.OUTPUT_GUIDS_TO_PROCESSES) og\nJOIN ASSETS o ON og.VALUE::STRING = o.GUID\nORDER BY IO_TYPE, ASSET_NAME;"
+      },
+      {
+        "title": "Pipelines Producing a Given Asset",
+        "description": "Find all pipelines that output a particular asset",
+        "query": "WITH target AS (\n  SELECT GUID\n  FROM ASSETS\n  WHERE ASSET_QUALIFIED_NAME = '<TARGET_ASSET_QUALIFIED_NAME>'\n)\nSELECT DISTINCT\n  a.ASSET_QUALIFIED_NAME AS PIPELINE_QUALIFIED_NAME,\n  a.ASSET_NAME AS PIPELINE_NAME,\n  a.ASSET_TYPE AS PIPELINE_TYPE\nFROM PIPELINE_DETAILS pd\nJOIN ASSETS a ON pd.GUID = a.GUID,\nLATERAL FLATTEN(input => pd.OUTPUT_GUIDS_TO_PROCESSES) og\nJOIN target t ON og.VALUE::STRING = t.GUID;"
+      },
+      {
+        "title": "Domain-wise Asset Inventory",
+        "description": "Count active assets belonging to each data domain",
+        "query": "WITH domains AS (\n  SELECT\n    a.GUID AS DOMAIN_GUID,\n    a.ASSET_NAME AS DOMAIN_NAME\n  FROM ASSETS a\n  WHERE a.ASSET_TYPE = 'DataDomain'\n)\nSELECT\n  COALESCE(d.DOMAIN_NAME, 'Unassigned') AS DOMAIN_NAME,\n  COUNT(a.GUID) AS TOTAL_ASSETS\nFROM ASSETS a\nLEFT JOIN DATA_MESH_DETAILS dmd ON a.GUID = dmd.GUID\nLEFT JOIN domains d ON dmd.DATA_DOMAIN = d.DOMAIN_GUID\nWHERE a.STATUS = 'ACTIVE'\nGROUP BY COALESCE(d.DOMAIN_NAME, 'Unassigned')\nORDER BY TOTAL_ASSETS DESC;"
+      },
+      {
+        "title": "Search Assets with README and Tags",
+        "description": "Search over asset names, descriptions, and README text",
+        "query": "SELECT\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  a.ASSET_TYPE,\n  a.CONNECTOR_NAME,\n  COALESCE(r.DESCRIPTION, a.DESCRIPTION) AS SEARCHABLE_TEXT,\n  ARRAY_TO_STRING(a.TAGS, ',') AS TAGS\nFROM ASSETS a\nLEFT JOIN README r ON a.README_GUID = r.GUID\nWHERE a.STATUS = 'ACTIVE'\n  AND (\n    LOWER(a.ASSET_NAME) LIKE '%' || LOWER('<SEARCH_TEXT>') || '%'\n    OR LOWER(a.DESCRIPTION) LIKE '%' || LOWER('<SEARCH_TEXT>') || '%'\n    OR LOWER(COALESCE(r.DESCRIPTION, '')) LIKE '%' || LOWER('<SEARCH_TEXT>') || '%'\n  );"
+      },
+      {
+        "title": "Assets with a Specific Tag",
+        "description": "Find all assets assigned a specific tag using TAGS view",
+        "query": "SELECT\n  a.ASSET_QUALIFIED_NAME,\n  a.ASSET_NAME,\n  a.ASSET_TYPE,\n  a.CONNECTOR_NAME,\n  t.TAG_NAME,\n  t.TAG_VALUE\nFROM ASSETS a\nJOIN TAGS t ON a.GUID = t.ASSET_GUID\nWHERE t.TAG_NAME = '<TAG_NAME>';"
+      }
+    ]
+  },
+  "columns": {
+    "core": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "notes"
+    ],
+    "glossary": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "qualifiedNamePattern",
+      "exampleQuery"
+    ],
+    "datamesh": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "qualifiedNamePattern",
+      "exampleQuery"
+    ],
+    "relational": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "qualifiedNamePattern",
+      "hierarchy"
+    ],
+    "queries": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "hierarchy",
+      "notes"
+    ],
+    "bi": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "connector",
+      "hierarchy"
+    ],
+    "dbt": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "qualifiedNamePattern",
+      "notes"
+    ],
+    "storage": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "connector",
+      "hierarchy"
+    ],
+    "orchestration": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "connector",
+      "hierarchy"
+    ],
+    "governance": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "notes"
+    ],
+    "ai": [
+      "entity",
+      "table",
+      "description",
+      "keyAttributes",
+      "relationships",
+      "notes"
+    ],
+    "goldLayer": [
+      "view",
+      "description",
+      "keyColumns",
+      "allColumns",
+      "purpose",
+      "notes"
+    ]
+  },
+  "colHeaders": {
+    "entity": "Entity Type",
+    "table": "MDLH Table",
+    "description": "Description",
+    "keyAttributes": "Key Attributes",
+    "relationships": "Relationships",
+    "qualifiedNamePattern": "qualifiedName Pattern",
+    "hierarchy": "Hierarchy",
+    "connector": "Connector",
+    "notes": "Notes",
+    "exampleQuery": "Example Query",
+    "view": "View Name",
+    "keyColumns": "Key Columns",
+    "allColumns": "All Columns",
+    "purpose": "Purpose"
+  }
+}
