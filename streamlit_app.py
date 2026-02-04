@@ -17,66 +17,93 @@ def generate_gold_layer_erd():
     digraph GoldLayerERD {
         rankdir=TB;
         splines=ortho;
-        nodesep=0.8;
-        ranksep=1.2;
+        nodesep=0.6;
+        ranksep=1.0;
         bgcolor="transparent";
-        node [shape=none, fontname="Helvetica", fontsize=10];
-        edge [fontname="Helvetica", fontsize=9, color="#666666"];
+        node [shape=none, fontname="Helvetica", fontsize=9];
+        edge [fontname="Helvetica", fontsize=8, color="#666666"];
 
         ASSETS [label=<
-            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" BGCOLOR="#3366ff">
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" BGCOLOR="#3366ff">
                 <TR><TD COLSPAN="2" BGCOLOR="#3366ff"><FONT COLOR="white"><B>ASSETS</B></FONT></TD></TR>
                 <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">PK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">Table, Column, etc.</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_NAME</TD><TD BGCOLOR="white">Display name</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">STATUS</TD><TD BGCOLOR="white">ACTIVE, archived</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">CONNECTOR_NAME</TD><TD BGCOLOR="white">Snowflake, etc.</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_TYPE</TD><TD BGCOLOR="white">Type</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_NAME</TD><TD BGCOLOR="white">Name</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">STATUS</TD><TD BGCOLOR="white">ACTIVE</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">CONNECTOR_NAME</TD><TD BGCOLOR="white">Source</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">README_GUID</TD><TD BGCOLOR="white">FK</TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">TERM_GUIDS</TD><TD BGCOLOR="white">FK[]</TD></TR>
             </TABLE>
         >];
 
         RELATIONAL [label=<
-            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" BGCOLOR="#4CAF50">
-                <TR><TD COLSPAN="2" BGCOLOR="#4CAF50"><FONT COLOR="white"><B>RELATIONAL_ASSET_DETAILS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">FK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">TABLE_ROW_COUNT</TD><TD BGCOLOR="white">Row count</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">COLUMN_DATATYPE</TD><TD BGCOLOR="white">Data type</TD></TR>
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#4CAF50">
+                <TR><TD BGCOLOR="#4CAF50"><FONT COLOR="white"><B>RELATIONAL_ASSET_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), TABLE_ROW_COUNT, COLUMN_DATATYPE</TD></TR>
             </TABLE>
         >];
 
         GLOSSARY [label=<
-            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" BGCOLOR="#9C27B0">
-                <TR><TD COLSPAN="2" BGCOLOR="#9C27B0"><FONT COLOR="white"><B>GLOSSARY_DETAILS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>GUID</B></TD><TD BGCOLOR="white">FK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">ANCHOR_GUID</TD><TD BGCOLOR="white">Parent</TD></TR>
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#9C27B0">
+                <TR><TD BGCOLOR="#9C27B0"><FONT COLOR="white"><B>GLOSSARY_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), ANCHOR_GUID, ASSIGNED_ENTITIES</TD></TR>
             </TABLE>
         >];
 
         LINEAGE [label=<
-            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" BGCOLOR="#FF9800">
-                <TR><TD COLSPAN="2" BGCOLOR="#FF9800"><FONT COLOR="white"><B>LINEAGE</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">START_GUID</TD><TD BGCOLOR="white">FK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">RELATED_GUID</TD><TD BGCOLOR="white">FK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">LEVEL</TD><TD BGCOLOR="white">Hop count</TD></TR>
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#FF9800">
+                <TR><TD BGCOLOR="#FF9800"><FONT COLOR="white"><B>LINEAGE</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">START_GUID, RELATED_GUID, DIRECTION, LEVEL</TD></TR>
             </TABLE>
         >];
 
         TAGS [label=<
-            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" BGCOLOR="#F44336">
-                <TR><TD COLSPAN="2" BGCOLOR="#F44336"><FONT COLOR="white"><B>TAGS</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>ASSET_GUID</B></TD><TD BGCOLOR="white">FK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">TAG_NAME</TD><TD BGCOLOR="white">Name</TD></TR>
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#F44336">
+                <TR><TD BGCOLOR="#F44336"><FONT COLOR="white"><B>TAGS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_GUID (FK), TAG_NAME, TAG_VALUE</TD></TR>
             </TABLE>
         >];
 
         CUSTOM_METADATA [label=<
-            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4" BGCOLOR="#E91E63">
-                <TR><TD COLSPAN="2" BGCOLOR="#E91E63"><FONT COLOR="white"><B>CUSTOM_METADATA</B></FONT></TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT"><B>ASSET_GUID</B></TD><TD BGCOLOR="white">FK</TD></TR>
-                <TR><TD BGCOLOR="white" ALIGN="LEFT">ATTRIBUTE_NAME</TD><TD BGCOLOR="white">Key</TD></TR>
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#E91E63">
+                <TR><TD BGCOLOR="#E91E63"><FONT COLOR="white"><B>CUSTOM_METADATA</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">ASSET_GUID (FK), ATTRIBUTE_NAME, ATTRIBUTE_VALUE</TD></TR>
+            </TABLE>
+        >];
+
+        README [label=<
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#607D8B">
+                <TR><TD BGCOLOR="#607D8B"><FONT COLOR="white"><B>README</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (PK), ASSET_GUID, DESCRIPTION</TD></TR>
+            </TABLE>
+        >];
+
+        PIPELINE [label=<
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#00BCD4">
+                <TR><TD BGCOLOR="#00BCD4"><FONT COLOR="white"><B>PIPELINE_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), INPUT_GUIDS, OUTPUT_GUIDS</TD></TR>
+            </TABLE>
+        >];
+
+        DATA_QUALITY [label=<
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#795548">
+                <TR><TD BGCOLOR="#795548"><FONT COLOR="white"><B>DATA_QUALITY_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), ANOMALO_STATUS, SODA_STATUS, MC_STATUS</TD></TR>
+            </TABLE>
+        >];
+
+        DATA_MESH [label=<
+            <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#FFC107">
+                <TR><TD BGCOLOR="#FFC107"><FONT COLOR="black"><B>DATA_MESH_DETAILS</B></FONT></TD></TR>
+                <TR><TD BGCOLOR="white" ALIGN="LEFT">GUID (FK), DATA_DOMAIN, DATA_PRODUCTS, STAKEHOLDERS</TD></TR>
             </TABLE>
         >];
 
         ASSETS -> RELATIONAL [label="1:1"];
+        ASSETS -> PIPELINE [label="1:1"];
+        ASSETS -> DATA_QUALITY [label="1:1"];
+        ASSETS -> DATA_MESH [label="1:1"];
+        ASSETS -> README [label="1:1"];
         ASSETS -> GLOSSARY [label="1:M"];
         ASSETS -> LINEAGE [label="1:M"];
         ASSETS -> TAGS [label="1:M"];
@@ -99,6 +126,8 @@ def get_erd_schema_details():
                 ("ASSET_NAME", "VARCHAR", "Human-readable asset name"),
                 ("STATUS", "VARCHAR", "ACTIVE, archived, deleted"),
                 ("CONNECTOR_NAME", "VARCHAR", "Snowflake, Redshift, Tableau, etc."),
+                ("README_GUID", "VARCHAR", "FK → README.GUID"),
+                ("TERM_GUIDS", "ARRAY", "FK → GLOSSARY_DETAILS"),
             ]
         },
         "RELATIONAL_ASSET_DETAILS": {
@@ -111,6 +140,7 @@ def get_erd_schema_details():
                 ("TABLE_ROW_COUNT", "NUMBER", "Row count for tables"),
                 ("TABLE_SIZE_BYTES", "NUMBER", "Storage size"),
                 ("COLUMN_DATATYPE", "VARCHAR", "Column data type"),
+                ("VIEW_DEFINITION", "VARCHAR", "SQL DDL for views"),
             ]
         },
         "GLOSSARY_DETAILS": {
@@ -122,11 +152,12 @@ def get_erd_schema_details():
                 ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
                 ("ANCHOR_GUID", "VARCHAR", "Parent glossary GUID"),
                 ("ASSIGNED_ENTITIES", "ARRAY", "Assets linked to this term"),
+                ("CATEGORIES", "ARRAY", "Category assignments"),
             ]
         },
         "LINEAGE": {
             "color": "#FF9800",
-            "description": "Pre-computed lineage paths",
+            "description": "Pre-computed lineage paths (upstream and downstream)",
             "join_key": "START_GUID, RELATED_GUID → ASSETS.GUID",
             "cardinality": "M:M",
             "columns": [
@@ -134,6 +165,7 @@ def get_erd_schema_details():
                 ("START_GUID", "VARCHAR", "Starting asset GUID"),
                 ("RELATED_GUID", "VARCHAR", "Connected asset GUID"),
                 ("LEVEL", "NUMBER", "Hop count / distance"),
+                ("CONNECTING_GUID", "VARCHAR", "Process linking the assets"),
             ]
         },
         "TAGS": {
@@ -143,8 +175,9 @@ def get_erd_schema_details():
             "cardinality": "1:M",
             "columns": [
                 ("ASSET_GUID", "VARCHAR", "FK → ASSETS.GUID"),
-                ("TAG_NAME", "VARCHAR", "Classification name"),
+                ("TAG_NAME", "VARCHAR", "Classification name (e.g., PII)"),
                 ("TAG_VALUE", "VARCHAR", "Tag value"),
+                ("PROPAGATES", "BOOLEAN", "Whether tag propagates"),
             ]
         },
         "CUSTOM_METADATA": {
@@ -154,8 +187,57 @@ def get_erd_schema_details():
             "cardinality": "1:M",
             "columns": [
                 ("ASSET_GUID", "VARCHAR", "FK → ASSETS.GUID"),
+                ("CUSTOM_METADATA_NAME", "VARCHAR", "CM set name"),
                 ("ATTRIBUTE_NAME", "VARCHAR", "Attribute key"),
                 ("ATTRIBUTE_VALUE", "VARCHAR", "Attribute value"),
+            ]
+        },
+        "README": {
+            "color": "#607D8B",
+            "description": "README documentation for assets",
+            "join_key": "GUID ← ASSETS.README_GUID",
+            "cardinality": "1:1 with ASSETS",
+            "columns": [
+                ("GUID", "VARCHAR", "Primary key"),
+                ("ASSET_GUID", "VARCHAR", "Linked asset GUID"),
+                ("DESCRIPTION", "VARCHAR", "README content"),
+                ("CREATED_BY", "VARCHAR", "Author"),
+            ]
+        },
+        "PIPELINE_DETAILS": {
+            "color": "#00BCD4",
+            "description": "Orchestration and pipeline assets (Airflow, dbt, Matillion)",
+            "join_key": "GUID → ASSETS.GUID",
+            "cardinality": "1:1 with ASSETS",
+            "columns": [
+                ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
+                ("INPUT_GUIDS_TO_PROCESSES", "ARRAY", "Upstream input assets"),
+                ("OUTPUT_GUIDS_TO_PROCESSES", "ARRAY", "Downstream output assets"),
+            ]
+        },
+        "DATA_QUALITY_DETAILS": {
+            "color": "#795548",
+            "description": "Data quality checks (Anomalo, Soda, Monte Carlo)",
+            "join_key": "GUID → ASSETS.GUID",
+            "cardinality": "1:1 with ASSETS",
+            "columns": [
+                ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
+                ("ANOMALO_CHECK_STATUS", "VARCHAR", "Anomalo status"),
+                ("SODA_CHECK_EVALUATION_STATUS", "VARCHAR", "Soda status"),
+                ("MC_MONITOR_STATUS", "VARCHAR", "Monte Carlo status"),
+            ]
+        },
+        "DATA_MESH_DETAILS": {
+            "color": "#FFC107",
+            "description": "Data mesh: domains, products, stakeholders",
+            "join_key": "GUID → ASSETS.GUID",
+            "cardinality": "1:1 with ASSETS",
+            "columns": [
+                ("GUID", "VARCHAR", "FK → ASSETS.GUID"),
+                ("DATA_DOMAIN", "VARCHAR", "Domain GUID"),
+                ("DATA_PRODUCTS", "ARRAY", "Product GUIDs"),
+                ("STAKEHOLDERS", "ARRAY", "Stakeholder user GUIDs"),
+                ("CRITICALITY", "VARCHAR", "Criticality level"),
             ]
         },
     }
