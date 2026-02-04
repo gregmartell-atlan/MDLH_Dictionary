@@ -733,7 +733,7 @@ if tab_id == "goldLayer":
                     "Type": col_type,
                     "Description": col_desc
                 })
-            st.dataframe(col_data, use_container_width=True, hide_index=True)
+            st.dataframe(col_data, use_container_width=True)
 
             # Show example join
             if selected_view != "ASSETS":
@@ -783,7 +783,7 @@ with col1:
 
 display_rows = build_display_rows(filtered_rows, columns[tab_id], col_headers)
 if display_rows:
-    st.dataframe(display_rows, use_container_width=True, hide_index=True)
+    st.dataframe(display_rows, use_container_width=True)
 else:
     st.info("No results found. Try adjusting your search terms.")
 
