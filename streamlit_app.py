@@ -567,18 +567,18 @@ columns = data_bundle["columns"]
 col_headers = data_bundle["colHeaders"]
 
 TABS = [
-    {"id": "goldLayer", "label": "Gold Layer", "icon": "star"},
-    {"id": "core", "label": "Core", "icon": "database"},
-    {"id": "glossary", "label": "Glossary", "icon": "book_2"},
-    {"id": "datamesh", "label": "Data Mesh", "icon": "hub"},
-    {"id": "relational", "label": "Relational DB", "icon": "table_chart"},
-    {"id": "queries", "label": "Query Org", "icon": "folder"},
-    {"id": "bi", "label": "BI Tools", "icon": "bar_chart"},
-    {"id": "dbt", "label": "dbt", "icon": "code"},
-    {"id": "storage", "label": "Object Storage", "icon": "inventory_2"},
-    {"id": "orchestration", "label": "Orchestration", "icon": "sync"},
-    {"id": "governance", "label": "Governance", "icon": "shield"},
-    {"id": "ai", "label": "AI/ML", "icon": "smart_toy"},
+    {"id": "goldLayer", "label": "Gold Layer", "icon": "★"},
+    {"id": "core", "label": "Core", "icon": "◉"},
+    {"id": "glossary", "label": "Glossary", "icon": "◈"},
+    {"id": "datamesh", "label": "Data Mesh", "icon": "⬡"},
+    {"id": "relational", "label": "Relational DB", "icon": "▤"},
+    {"id": "queries", "label": "Query Org", "icon": "▷"},
+    {"id": "bi", "label": "BI Tools", "icon": "▥"},
+    {"id": "dbt", "label": "dbt", "icon": "⟨⟩"},
+    {"id": "storage", "label": "Object Storage", "icon": "▣"},
+    {"id": "orchestration", "label": "Orchestration", "icon": "⟳"},
+    {"id": "governance", "label": "Governance", "icon": "◇"},
+    {"id": "ai", "label": "AI/ML", "icon": "◎"},
 ]
 
 # Initialize session state for selected tab
@@ -587,15 +587,15 @@ if "selected_tab" not in st.session_state:
 
 # Sidebar
 with st.sidebar:
-    st.markdown(":material/database: **MDLH Dictionary**")
+    st.markdown("◉ **MDLH Dictionary**")
     st.markdown("---")
 
-    # Category selection with Material Symbols
+    # Category selection with unicode icons
     for tab in TABS:
         is_active = st.session_state.selected_tab == tab["id"]
         btn_type = "primary" if is_active else "secondary"
         if st.button(
-            f":material/{tab['icon']}: {tab['label']}",
+            f"{tab['icon']} {tab['label']}",
             key=f"nav_{tab['id']}",
             use_container_width=True,
             type=btn_type,
