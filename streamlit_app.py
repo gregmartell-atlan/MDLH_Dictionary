@@ -15,10 +15,10 @@ def generate_gold_layer_erd():
     """Generate Gold Layer ERD using Graphviz DOT notation."""
     return """
     digraph GoldLayerERD {
-        rankdir=LR;
+        rankdir=TB;
         splines=ortho;
-        nodesep=0.4;
-        ranksep=1.5;
+        nodesep=0.5;
+        ranksep=0.8;
         bgcolor="transparent";
         node [shape=none, fontname="Helvetica", fontsize=8];
         edge [fontname="Helvetica", fontsize=7, color="#666666"];
@@ -382,6 +382,7 @@ def get_erd_schema_details():
 st.set_page_config(
     page_title="MDLH Entity Dictionary",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown("""
@@ -392,20 +393,39 @@ st.markdown("""
     --bg-subtle: #f8f9fa;
     --text-muted: #666;
 }
+/* Sidebar always visible */
+[data-testid="stSidebar"] {
+    min-width: 220px;
+    max-width: 220px;
+}
+[data-testid="stSidebar"] [data-testid="stSidebarCollapsedControl"] {
+    display: none;
+}
+[data-testid="stSidebar"] > div:first-child {
+    padding-top: 1rem;
+}
+/* Radio buttons clean styling */
+[data-testid="stSidebar"] .stRadio > div {
+    gap: 0.25rem;
+}
+[data-testid="stSidebar"] .stRadio label {
+    padding: 0.4rem 0;
+    font-size: 0.9rem;
+}
 .metric-card {
     background: var(--bg-subtle);
     border-radius: 6px;
-    padding: 1rem;
+    padding: 0.75rem;
     text-align: center;
     border: 1px solid #e8e8e8;
 }
 .metric-value {
-    font-size: 1.5rem;
+    font-size: 1.25rem;
     font-weight: 600;
     color: var(--atlan-blue);
 }
 .metric-label {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
     text-transform: uppercase;
 }
