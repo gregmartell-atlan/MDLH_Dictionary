@@ -283,39 +283,37 @@ columns = data_bundle["columns"]
 col_headers = data_bundle["colHeaders"]
 
 TABS = [
-    {"id": "goldLayer", "label": "Gold Layer", "icon": "★"},
-    {"id": "core", "label": "Core", "icon": "◉"},
-    {"id": "glossary", "label": "Glossary", "icon": "◈"},
-    {"id": "datamesh", "label": "Data Mesh", "icon": "⬡"},
-    {"id": "relational", "label": "Relational DB", "icon": "▤"},
-    {"id": "queries", "label": "Query Org", "icon": "▷"},
-    {"id": "bi", "label": "BI Tools", "icon": "▥"},
-    {"id": "dbt", "label": "dbt", "icon": "◇"},
-    {"id": "storage", "label": "Object Storage", "icon": "▣"},
-    {"id": "orchestration", "label": "Orchestration", "icon": "⟳"},
-    {"id": "governance", "label": "Governance", "icon": "△"},
-    {"id": "ai", "label": "AI/ML", "icon": "◎"},
+    ("goldLayer", "★ Gold Layer"),
+    ("core", "◉ Core"),
+    ("glossary", "◈ Glossary"),
+    ("datamesh", "⬡ Data Mesh"),
+    ("relational", "▤ Relational DB"),
+    ("queries", "▷ Query Org"),
+    ("bi", "▥ BI Tools"),
+    ("dbt", "◇ dbt"),
+    ("storage", "▣ Object Storage"),
+    ("orchestration", "⟳ Orchestration"),
+    ("governance", "△ Governance"),
+    ("ai", "◎ AI/ML"),
 ]
 
-# Initialize session state
-if "selected_tab" not in st.session_state:
-    st.session_state.selected_tab = "goldLayer"
+TAB_IDS = [t[0] for t in TABS]
+TAB_LABELS = [t[1] for t in TABS]
 
 # Sidebar
 with st.sidebar:
-    st.markdown("◉ **MDLH Dictionary**")
-    st.markdown("---")
+    st.markdown("### ◉ MDLH Dictionary")
 
-    for tab in TABS:
-        is_active = st.session_state.selected_tab == tab["id"]
-        btn_type = "primary" if is_active else "secondary"
-        if st.button(f"{tab['icon']} {tab['label']}", key=f"nav_{tab['id']}", use_container_width=True, type=btn_type):
-            st.session_state.selected_tab = tab["id"]
-            st.experimental_rerun()
+    selected_label = st.radio(
+        "Category",
+        TAB_LABELS,
+        label_visibility="collapsed"
+    )
 
-    selected_tab = st.session_state.selected_tab
+    selected_tab = TAB_IDS[TAB_LABELS.index(selected_label)]
+
     st.markdown("---")
-    st.caption("v1.1 · Gold Layer")
+    st.caption("v1.1")
 
 # Main content
 st.title("Metadata Lakehouse Entity Dictionary")
@@ -332,9 +330,8 @@ with header_cols[2]:
 st.markdown("---")
 
 # Get selected tab info
-tab = next(t for t in TABS if t["id"] == selected_tab)
-tab_id = tab["id"]
-tab_label = tab["label"]
+tab_id = selected_tab
+tab_label = selected_label.split(" ", 1)[1] if " " in selected_label else selected_label
 rows = entity_data.get(tab_id, [])
 queries = example_queries.get(tab_id, [])
 
