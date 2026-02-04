@@ -311,7 +311,7 @@ with st.sidebar:
         btn_type = "primary" if is_active else "secondary"
         if st.button(f"{tab['icon']} {tab['label']}", key=f"nav_{tab['id']}", use_container_width=True, type=btn_type):
             st.session_state.selected_tab = tab["id"]
-            st.rerun()
+            st.experimental_rerun()
 
     selected_tab = st.session_state.selected_tab
     st.markdown("---")
