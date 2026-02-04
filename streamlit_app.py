@@ -164,7 +164,6 @@ def get_erd_schema_details():
 st.set_page_config(
     page_title="MDLH Entity Dictionary",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
 st.markdown("""
@@ -282,38 +281,25 @@ example_queries = data_bundle["exampleQueries"]
 columns = data_bundle["columns"]
 col_headers = data_bundle["colHeaders"]
 
-TABS = [
-    ("goldLayer", "★ Gold Layer"),
-    ("core", "◉ Core"),
-    ("glossary", "◈ Glossary"),
-    ("datamesh", "⬡ Data Mesh"),
-    ("relational", "▤ Relational DB"),
-    ("queries", "▷ Query Org"),
-    ("bi", "▥ BI Tools"),
-    ("dbt", "◇ dbt"),
-    ("storage", "▣ Object Storage"),
-    ("orchestration", "⟳ Orchestration"),
-    ("governance", "△ Governance"),
-    ("ai", "◎ AI/ML"),
-]
-
-TAB_IDS = [t[0] for t in TABS]
-TAB_LABELS = [t[1] for t in TABS]
+TABS = {
+    "goldLayer": "Gold Layer",
+    "core": "Core",
+    "glossary": "Glossary",
+    "datamesh": "Data Mesh",
+    "relational": "Relational DB",
+    "queries": "Query Org",
+    "bi": "BI Tools",
+    "dbt": "dbt",
+    "storage": "Object Storage",
+    "orchestration": "Orchestration",
+    "governance": "Governance",
+    "ai": "AI/ML",
+}
 
 # Sidebar
 with st.sidebar:
-    st.markdown("### ◉ MDLH Dictionary")
-
-    selected_label = st.radio(
-        "Category",
-        TAB_LABELS,
-        label_visibility="collapsed"
-    )
-
-    selected_tab = TAB_IDS[TAB_LABELS.index(selected_label)]
-
-    st.markdown("---")
-    st.caption("v1.1")
+    st.markdown("**MDLH Dictionary**")
+    selected_tab = st.radio("", list(TABS.keys()), format_func=lambda x: TABS[x])
 
 # Main content
 st.title("Metadata Lakehouse Entity Dictionary")
@@ -331,7 +317,7 @@ st.markdown("---")
 
 # Get selected tab info
 tab_id = selected_tab
-tab_label = selected_label.split(" ", 1)[1] if " " in selected_label else selected_label
+tab_label = TABS[selected_tab]
 rows = entity_data.get(tab_id, [])
 queries = example_queries.get(tab_id, [])
 
